@@ -298,6 +298,19 @@ tasks.withType(ProcessResources).configureEach {
         expand replaceProperties
     }
 }
+
+// ModDevGradle only takes resources from src/main/resources, so the metadata
+// template under src/main/templates has to be expanded into the build directory
+// and added as a resource root. Without this the jar ships with no
+// neoforge.mods.toml and the loader silently ignores the mod.
+def generateModMetadata = tasks.register('generateModMetadata', ProcessResources) {
+    inputs.properties replaceProperties
+    expand replaceProperties
+    from "src/main/templates"
+    into "build/generated/sources/modMetadata"
+}
+sourceSets.main.resources.srcDir generateModMetadata
+neoForge.ideSyncTask generateModMetadata
 `
     case 'forge-1.20.2':
     case 'fg-6.x':
@@ -604,6 +617,37 @@ function loaderLabel(cfg: ProjectConfig): string {
   return cfg.loader === 'neoforge' ? 'NeoForge' : cfg.loader === 'forge' ? 'Forge' : 'Fabric'
 }
 
+/**
+ * The `pack_format` the game expects for a version. Only the boundaries that
+ * actually changed are listed; a version between two rows uses the row below it,
+ * which is what the game itself would accept.
+ */
+export function packFormatFor(mc: string): number {
+  const rows: [string, number][] = [
+    ['1.21.4', 46],
+    ['1.21.2', 42],
+    ['1.21', 34],
+    ['1.20.5', 32],
+    ['1.20.3', 26],
+    ['1.20.2', 18],
+    ['1.20', 15],
+    ['1.19.4', 13],
+    ['1.19', 12],
+    ['1.18', 9],
+    ['1.17', 8],
+    ['1.16.2', 6],
+    ['1.15', 5],
+    ['1.13', 4],
+    ['1.12', 3],
+    ['1.9', 2],
+    ['1.6.1', 1]
+  ]
+  for (const [since, format] of rows) {
+    if (compareMcVersions(mc, since) >= 0) return format
+  }
+  return 1
+}
+
 /** "21.1.265" -> "21.1"; used for the NeoForge version range. */
 function neoMajor(v: string): string {
   const m = v.match(/^(\d+)\.(\d+)/)
@@ -862,7 +906,9 @@ side="BOTH"
       },
       {
         path: 'src/main/resources/pack.mcmeta',
-        content: JSON.stringify({ pack: { description: cfg.modId, pack_format: 34 } }, null, 2) + '\n'
+        // pack_format changes every few releases; a wrong value shows as a
+        // "made for a newer/older version" warning in the resource pack list.
+        content: JSON.stringify({ pack: { description: cfg.modId, pack_format: packFormatFor(cfg.mcVersion) } }, null, 2) + '\n'
       }
     ]
   }
@@ -918,7 +964,7 @@ description='''\${mod_description}'''
       },
       {
         path: 'src/main/resources/pack.mcmeta',
-        content: JSON.stringify({ pack: { description: cfg.modId, pack_format: 3, _comment: 'MC Forge Agent' } }, null, 2) + '\n'
+        content: JSON.stringify({ pack: { description: cfg.modId, pack_format: packFormatFor(cfg.mcVersion) } }, null, 2) + '\n'
       }
     ]
   }

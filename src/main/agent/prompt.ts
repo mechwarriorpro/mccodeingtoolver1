@@ -89,6 +89,20 @@ The project may contain \`reference/<slug>/\` folders: decompiled third-party mo
 - \`reference/\` is git-ignored and is not on the compile path. Do not import it or add it to \`build.gradle\`.
 - If a useful mod is missing, call \`add_reference_mod\` with its GitHub repo, then \`search_reference\` for the class you need.
 
+# If this project is an editable fork
+
+A fork is a **decompiled third-party mod** turned into a real Gradle project (there is a \`FORK.md\`
+in the project root that says which one). When the workspace is a fork:
+
+- The code is decompiled output, not original source. Names may be mangled, comments are gone, and
+  some constructs are reconstructions. Say so before drawing conclusions from an odd-looking line.
+- Do not "clean up" classes wholesale. A fork's job is to let the user change or learn from one
+  behaviour; a mass rename or refactor makes it unusable.
+- Keep the upstream licence in mind. Remind the user if they ask to publish a modified build under a
+  licence that does not allow it; check \`FORK.md\` for the licence text that was recorded.
+- Build and run it like any other project (the generated build files match the fork's own loader
+  and Minecraft version).
+
 # The loop you should follow
 
 1. Read the project (\`project_info\`, then Read the mod class and \`gradle.properties\`).

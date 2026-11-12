@@ -3,6 +3,8 @@ import { api, type ForkInfo, type Loader } from '../lib/api'
 
 interface Props {
   onToast: (text: string, kind?: 'ok' | 'err') => void
+  /** Switch the active project to this fork so the agent works on it. */
+  onEditProject: (dir: string) => void
 }
 
 /**
@@ -13,7 +15,7 @@ interface Props {
  * do X?" can end as working code without the user rebuilding a project from
  * scratch — and without the decompiled code ever landing in their own mod.
  */
-export default function ForkPanel({ onToast }: Props): JSX.Element {
+export default function ForkPanel({ onToast, onEditProject }: Props): JSX.Element {
   const [forks, setForks] = useState<ForkInfo[]>([])
   const [open, setOpen] = useState<ForkInfo | null>(null)
   const [files, setFiles] = useState<{ path: string; dir: boolean }[]>([])
@@ -171,6 +173,9 @@ export default function ForkPanel({ onToast }: Props): JSX.Element {
             </div>
           </div>
           <div className="row">
+            <button className="small primary" onClick={() => onEditProject(f.dir)} title="Make this fork the project the agent edits and builds">
+              Edit with the agent
+            </button>
             <button className="small" onClick={() => void openFork(f)}>
               Browse sources
             </button>

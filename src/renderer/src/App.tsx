@@ -364,7 +364,7 @@ export default function App(): JSX.Element {
                 </div>
                 <div className="card">
                   <h4>Editable forks</h4>
-                  <ForkPanel onToast={toast} />
+                  <ForkPanel onToast={toast} onEditProject={(dir) => void afterProjectChange(dir)} />
                 </div>
               </>
             )}
