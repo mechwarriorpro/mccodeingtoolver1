@@ -1,14 +1,16 @@
 # MC Forge Agent
 
-A desktop AI coding tool for **Minecraft 1.21.1 / NeoForge** mods. It is an external app (not a mod)
-that can:
+A desktop AI coding tool for **Fabric, Forge and NeoForge** mods, for **Minecraft 1.2.5 through
+the latest release**. It is an external app (not a mod) that can:
 
 - **see the game** — captures the Minecraft window and feeds the screenshot to a vision model
+- **record and analyse gameplay** — a clip of up to 30 seconds, then a vision model explains what happened on screen
 - **write and edit mod code** — a Claude agent with file tools, scoped to your mod project
-- **build the jar locally** — `./gradlew build` with your JDK 21
+- **build the jar locally** — `./gradlew build` with the JDK your version needs
 - **build the jar on GitHub** — commits, pushes, runs Actions, downloads the artifact
 - **install into an instance** — Technic pack, Prism/MultiMC folder, or any game dir
-- **relaunch and test** — dev client or a real NeoForge client, log watching, crash reports, screenshots
+- **relaunch and test** — dev client or a real client, log watching, crash reports, screenshots
+- **learn from its mistakes** — every build error is fingerprinted, and repeats come back with the fix that worked
 
 Built on the **Claude Agent SDK** (`@anthropic-ai/claude-agent-sdk`), so it uses your Claude Code
 setup and API key.
@@ -19,7 +21,12 @@ setup and API key.
 
 | Capability | How |
 |---|---|
-| New mod project | Vendors the official **NeoForge 1.21.1 ModDevGradle MDK**; rewrites mod id, package, author, version and generates a compiling mod class, config and lang file |
+| New mod project | Pick **Fabric / Forge / NeoForge** and any Minecraft version from **1.2.5 up**. Uses the vendored official NeoForge 1.21.1 MDK when it matches; otherwise generates the build files for that version's toolchain (Loom, ModDevGradle, ForgeGradle 6/5/3/2) with the right Java level, metadata file and starter source |
+| Version catalog | Live from Mojang, Fabric, NeoForge and Forge, cached for 24 h. New Minecraft versions appear without an app update. Refresh from the New Project dialog |
+| Auto-update | The installed app checks this repo's GitHub releases, downloads in the background and installs on restart. Settings → Updates |
+| Edit a reference mod | Turn a decompiled reference into a real buildable Gradle project ("Make editable copy"), edit it in-app, and let the agent build/run it. Forks live outside your project and never compile into your jar |
+| Gameplay clips | Record up to 30 s of gameplay as frames, then a vision model reports what happened, what looks broken (pink textures, missing lang keys, bad models, crashes) and which resource/code to fix. The agent can record and analyse clips itself |
+| Lessons | Build errors and crashes are fingerprinted (file names, line numbers and paths are stripped, so the same mistake in another class matches). Repeats are recalled before the agent guesses, and the best are injected into its prompt. Editable and deletable in the Lessons tab |
 | Code changes | Claude Code file tools (`Read/Write/Edit/Grep/Glob`) with a ModForge-specific system prompt |
 | Multi-agent | Coordinator delegates to `package-dev`, `build-smith`, and `qa-pilot` subagents |
 | Vision | `screenshot` tool grabs the Minecraft window (PowerShell/`user32` on Windows) and returns a PNG to the model |
@@ -36,7 +43,8 @@ setup and API key.
 
 ## Requirements (on the Windows machine)
 
-1. **JDK 21** — Temurin or Microsoft OpenJDK (`java -version` must say 21). Also runs the decompiler.
+1. **A JDK** — Temurin or Microsoft OpenJDK. **21** for Minecraft 1.20.5+, **17** for 1.18–1.20.4, **8** for older
+   versions. The app probes the version and picks the right one; the decompiler needs 17+.
 2. **Git** — <https://git-scm.com>. The app pushes with a stored token; Git itself must be installed.
 3. An **Anthropic API key** (`sk-ant-…`)
 4. **Node.js 20+** — only if you build from source; the installer bundles the runtime.
@@ -94,8 +102,9 @@ release, and verifies the asset exists before finishing.
 
 1. **Settings → Model** — paste your API key. It stays in the main process; the renderer only ever
    sees a masked value.
-2. **New mod** — pick a folder, name, mod id (e.g. `rubytools`), package (e.g. `com.you.rubytools`).
-   That generates a real, buildable 1.21.1 project.
+2. **New project** — pick a loader (Fabric, Forge or NeoForge), a Minecraft version (1.2.5 → latest;
+   the list is refreshed from Mojang, Fabric and Forge), then a folder, name, mod id (e.g. `rubytools`)
+   and package (e.g. `com.you.rubytools`). That generates a real, buildable project for that version.
 3. **Settings → Game** — `Scan Technic` finds your packs under `%APPDATA%\.technic\modpacks`, or
    `Add folder` for Prism/MultiMC/vanilla.
 4. **Settings → GitHub** — **Sign in with GitHub** (a code appears; type it at
@@ -162,21 +171,29 @@ src/main/
   agent/
     engine.ts        Claude Agent SDK session, permissions, streaming
     orchestrator.ts  coordinator + package-dev / build-smith / qa-pilot subagents
-    prompt.ts        ModForge system prompt (NeoForge 1.21.1 rules)
-    tools.ts         in-process MCP tools: project_info, build, install, launch, screenshot, ...
+    prompt.ts        system prompt, with per-loader/per-version rules and the learned lessons
+    tools.ts         in-process MCP tools: project_info, build, install, launch, screenshot, clip, lessons, ...
   build/
     gradle.ts        local gradlew build, javac error extraction
     actions.ts       GitHub commit/push/workflow/artifact pipeline
   game/
     neoforge.ts      official installer (--install-client), loader status
     client.ts        direct NeoForge launch (version json, assets, libraries)
-    mojang.ts        vanilla 1.21.1 metadata, asset and library downloads
+    mojang.ts        vanilla metadata, asset and library downloads
     launcher.ts      gradle runClient, log watching, title-screen detection
     capture.ts       window screenshots (PowerShell/user32, screencapture, ImageMagick)
+    clip.ts          30 s gameplay frame recorder + vision analysis
     technic.ts       Technic instance discovery and pack export
   mod/
-    scaffold.ts      NeoForge 1.21.1 project generator
+    generate.ts      project generator for any loader/version (delegates per era)
+    scaffold.ts      vendored-template helpers, mod id/package validation
+    fork.ts          turns a decompiled reference mod into an editable project
     jar.ts           jar metadata (neoforge.mods.toml) and mods-folder install
+  versions/
+    catalog.ts       live Minecraft/loader version catalog (24 h cache, offline fallbacks)
+    eras.ts          per-era build files, metadata, Java level and starter source
+  update.ts          electron-updater wiring for GitHub releases
+  learn.ts           mistake fingerprints, lessons and the error index
 template/neoforge-1.21.1/   vendored official MDK
 tests/                      offline tests for scaffold, build parsing, jar install
 ```
@@ -184,17 +201,27 @@ tests/                      offline tests for scaffold, build parsing, jar insta
 ## Tests
 
 ```bash
-npm test          # scaffold + build parsing + jar install (no JDK needed)
+npm test          # version catalog, project generation, clips, lessons, scaffold, build parsing (no JDK needed)
 npm run typecheck # main + renderer
 ```
 
-The generated Java is also parsed with a Java grammar in CI-style checks; the generated project uses
-the unmodified official MDK build script, so it compiles with `./gradlew build`.
+New projects for 1.21.1 NeoForge use the unmodified official MDK build script. Every other
+combination gets a generated build file for its era, which the tests check for the right plugin,
+Java level, loader version property and metadata file.
 
 ## Notes & limits
 
 - The app needs the Electron binary to run; if `npm install` cannot download it (offline / blocked
   CDN), building the installer fails even though the code is fine.
+- **Direct client launch is 1.21.1 NeoForge only.** Other versions build and install fine (the jar
+  works in a normal launcher), but the built-in launcher and loader installer still target 1.21.1.
+  Use `runClient` from the Build tab, or your own launcher, for other versions.
+- **1.7 and older have no Gradle build.** The New Project dialog still generates the project (with
+  the right `mcmod.info`/FML layout) so you can write and read code, but it is marked *reference
+  only* and the app will not promise a build for it.
+- A generated project is only as good as the era table: a brand-new Minecraft version that changes
+  the build toolchain again will be generated with the closest known era until the app updates.
+  Both the version list and the app itself update without a reinstall.
 - Direct client launch expects a legitimate Minecraft 1.21.1 install (it downloads the official
   client jar and assets on first run, ~400 MB).
 - Screenshots on Windows use `PrintWindow` via PowerShell; if Minecraft is fullscreen-exclusive,
