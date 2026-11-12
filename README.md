@@ -39,18 +39,42 @@ setup and API key.
 3. **GitHub CLI** — install from <https://cli.github.com>, then `gh auth login`
 4. An **Anthropic API key** (`sk-ant-…`)
 
-## Build the .exe
+## Get the .exe
+
+### Easiest: download the built installer
+
+**[MC.Forge.Agent-Setup-0.1.0.exe](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/download/v0.1.0/MC.Forge.Agent-Setup-0.1.0.exe)** (101 MB, unsigned)
+
+The `Build Windows installer` workflow compiles it on a `windows-latest` runner, because
+`electron-builder` must download the Electron binary (~115 MB) — from Electron's GitHub
+release CDN, which some networks block. Every push also attaches a
+`MC-Forge-Agent-windows` artifact to the Actions run.
+
+### Build it yourself
 
 ```powershell
-git clone <this repo>
+git clone https://github.com/mechwarriorpro/mccodeingtoolver1.git
 cd mccodeingtoolver1
 npm install
-npm run dist:win
+npm run dist:win          # compiles the app, then packages the NSIS installer
 ```
 
 Output: `release/MC Forge Agent-Setup-0.1.0.exe`
 
-`npm run dev` runs it without packaging (needs the Electron binary, which `npm install` fetches).
+`npm run dev` runs it without packaging. `npm run pack:win` is the same as `dist:win`.
+
+If packaging fails with `Application entry file out\main\index.js is missing`, the app was not
+compiled first — run `npm run build` (both scripts above already do).
+
+### Cutting a new release
+
+```powershell
+git tag v0.1.1
+git push origin v0.1.1
+```
+
+The workflow builds on the tag, attaches the `.exe` to the GitHub release, and verifies the
+asset exists before finishing.
 
 ## First run
 
