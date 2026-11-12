@@ -1,7 +1,7 @@
 {
   "name": "mc-forge-agent",
   "productName": "MC Forge Agent",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Vision-capable AI coding agent for Minecraft 1.21.1 NeoForge mods: generates, edits, builds via GitHub Actions, installs and play-tests.",
   "main": "out/main/index.js",
   "author": "ShadowClanGaming",
