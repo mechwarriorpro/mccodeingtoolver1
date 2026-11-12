@@ -53,10 +53,9 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.1.1 or newer.** v0.1.0 crashes on launch with
-> `Error [ERR_REQUIRE_ESM]: require() of ES Module ...claude-agent-sdk\sdk.mjs not supported`,
-> because the main process was built as CommonJS while the Claude Agent SDK is ESM-only.
-> v0.1.1+ bundles the SDK into the main bundle instead.
+> **Use v0.2.0 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
+> v0.2.0 adds in-app GitHub sign-in and the reference-mod decompiler.
 
 The `Build Windows installer` workflow compiles it on a `windows-latest` runner, because
 `electron-builder` must download the Electron binary (~115 MB) — from Electron's GitHub
