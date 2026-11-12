@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { app } from 'electron'
-import { findJava, run } from '../util/exec'
+import { resolveJava, run } from '../util/exec'
 import { ensureAssets, ensureClientJar, ensureVersionJson, libraryAllowed, libraryTarget, mcDir, download, type VersionJson } from './mojang'
 import { logsDir } from '../config'
 import { currentStatus, emitGameLog, emitGameStatus, setStatusProvider } from './events'
@@ -98,8 +98,10 @@ function rulesAllow(rules: { action: string; os?: { name?: string } }[]): boolea
 
 export async function prepareLaunch(spec: LaunchSpec): Promise<{ ok: boolean; command?: string[]; error?: string }> {
   const log = spec.onLine
-  const java = findJava(spec.javaPath)
-  if (!java) return { ok: false, error: 'Java 21 not found. Install a JDK 21 and select it in Settings.' }
+  const javaPick = resolveJava(spec.javaPath)
+  if (!javaPick.path) return { ok: false, error: javaPick.error ?? 'Java 21 not found. Install a JDK 21 and select it in Settings.' }
+  const java = javaPick.path
+  log(`[launch] using Java ${javaPick.version} at ${java}`)
 
   const versionId = `neoforge-${spec.neoVersion}`
   const neoJsonPath = path.join(spec.minecraftDir, 'versions', versionId, `${versionId}.json`)

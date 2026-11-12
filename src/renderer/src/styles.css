@@ -359,3 +359,8 @@ textarea { resize: none; }
   max-height: 60vh; overflow: auto; margin: 0; padding: 12px; border-radius: 8px; background: #0b0e12;
   border: 1px solid var(--line); font-family: var(--mono); font-size: 11.5px; line-height: 1.55; white-space: pre;
 }
+
+.hint.warn { color: var(--amber); }
+.warn { color: var(--amber); }
+.hint code, .dim code { font-family: var(--mono); font-size: 11px; background: var(--bg-3); padding: 1px 4px; border-radius: 4px; }
+.refs-log .ref-failure { color: var(--red); margin-top: 6px; white-space: pre-wrap; }

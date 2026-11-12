@@ -134,6 +134,67 @@ check('login is kept', redacted.login === 'octocat')
 check('connected flag set', redacted.connected === true)
 check('null auth is not connected', oauth.redactAuth(null).connected === false)
 
+section('java for the decompiler is version-checked, not just "found"')
+// The reported crash: PATH/JAVA_HOME held a Java 8, Vineflower needs 17+, and
+// java died with UnsupportedClassVersionError (class file 61 vs 52).
+const exec = await import('../out-test/main/util/exec.js')
+const stubDir = path.join(tmp, 'javas')
+const makeJava = (name, versionLine) => {
+  const dir = path.join(stubDir, name, 'bin')
+  fs.mkdirSync(dir, { recursive: true })
+  const exe = path.join(dir, 'java')
+  fs.writeFileSync(exe, `#!/bin/sh\nif [ "$1" = "-version" ]; then echo 'openjdk version "${versionLine}" 2024-01-01' >&2; fi\nexit 0\n`)
+  fs.chmodSync(exe, 0o755)
+  return exe
+}
+const j8 = makeJava('jdk8', '1.8.0_412')
+const j17 = makeJava('jdk17', '17.0.11')
+const j21 = makeJava('jdk21', '21.0.4')
+const jBad = path.join(stubDir, 'not-java', 'bin', 'java')
+fs.mkdirSync(path.dirname(jBad), { recursive: true })
+fs.writeFileSync(jBad, 'this is not an executable java\n')
+
+const probe8 = exec.probeJava(j8)
+check('probe reads Java 8 as major 8', probe8?.major === 8, JSON.stringify(probe8))
+check('probe reads Java 17 as major 17', exec.probeJava(j17)?.major === 17, JSON.stringify(exec.probeJava(j17)))
+check('probe reads Java 21 as major 21', exec.probeJava(j21)?.major === 21, JSON.stringify(exec.probeJava(j21)))
+check('probe returns null for a broken java', exec.probeJava(jBad) === null)
+check('probe returns null for a missing path', exec.probeJava(path.join(stubDir, 'nope', 'java')) === null)
+
+check('tool java accepts 17', exec.resolveToolJava(j17).path === j17, JSON.stringify(exec.resolveToolJava(j17)))
+check('tool java accepts 21', exec.resolveToolJava(j21).path === j21)
+check('tool java rejects Java 8 with an explanation', exec.resolveToolJava(j8).path === null, JSON.stringify(exec.resolveToolJava(j8)))
+check('the rejection names the requirement', /Java 17\+/.test(exec.resolveToolJava(j8).error ?? ''), exec.resolveToolJava(j8).error)
+check('the rejection lists what was tried', /Tried:/.test(exec.resolveToolJava(j8).error ?? ''))
+check('game java rejects 17 (1.21.1 needs 21)', exec.resolveJava(j17).path === null, JSON.stringify(exec.resolveJava(j17)))
+check('game java accepts 21', exec.resolveJava(j21).path === j21)
+check('javaw is recognised', exec.isJavaw('C:\\Java\\bin\\javaw.exe') && !exec.isJavaw('C:\\Java\\bin\\java.exe'))
+
+section('decompile refuses to run a jar it cannot load')
+// With a Java 8 the decompiler must stop before spawning, not print a JVM stack trace.
+const j8Run = await refs.decompileJar(jarPath, path.join(tmp, 'out-j8'), { javaPath: j8 })
+check('Java 8 is refused with a clear error', j8Run.ok === false && /Java 17\+/.test(j8Run.error ?? ''), j8Run.error)
+check('no JVM crash text leaks through', !/UnsupportedClassVersionError/.test(j8Run.error ?? ''), j8Run.error)
+
+section('an UnsupportedClassVersionError becomes advice, not a stack trace')
+// If a stale java slips through, translate the JVM message instead of printing
+// the 14-line stack trace the user saw.
+const slowDir = path.join(tmp, 'javas', 'old', 'bin')
+fs.mkdirSync(slowDir, { recursive: true })
+const oldJava = path.join(slowDir, 'java')
+fs.writeFileSync(oldJava, [
+  '#!/bin/sh',
+  'if [ "$1" = "-version" ]; then echo \'openjdk version "21.0.1" 2024-01-01\' >&2; exit 0; fi',
+  "echo 'Exception in thread \"main\" java.lang.UnsupportedClassVersionError: org/jetbrains/java/decompiler/main/decompiler/ConsoleDecompiler has been compiled by a more recent version of the Java Runtime (class file version 61.0), this version of the Java Runtime only recognizes class file versions up to 52.0' >&2",
+  'exit 1',
+  ''
+].join('\n'))
+fs.chmodSync(oldJava, 0o755)
+const oldRun = await refs.decompileJar(jarPath, path.join(tmp, 'out-old'), { javaPath: oldJava, customJar: '/tmp/does-not-matter.jar' })
+check('class-file error is translated', /needs a newer Java/.test(oldRun.error ?? ''), oldRun.error)
+check('the translated error names both versions', /61/.test(oldRun.error ?? '') && /17\+/.test(oldRun.error ?? ''), oldRun.error)
+check('no raw stack trace in the error', !/UnsupportedClassVersionError/.test(oldRun.error ?? ''), oldRun.error)
+
 section('store lookup is tolerant of a missing index')
 // The module keeps its index under userData; with the electron stub pointing at
 // .test-tmp there is nothing there yet, and that must be an empty library, not a crash.

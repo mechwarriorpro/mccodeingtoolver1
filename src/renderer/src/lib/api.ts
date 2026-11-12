@@ -50,6 +50,15 @@ export interface McfApi {
     openHomepage: (url: string) => Promise<void>
   }
   env: { report: () => Promise<EnvReport> }
+  java: {
+    status: () => Promise<{
+      game: { path: string | null; version?: string; error?: string }
+      tools: { path: string | null; version?: string; error?: string }
+      split: boolean
+    }>
+    check: (javaPath: string) => Promise<{ ok: boolean; version?: string; major?: number; suitsGame?: boolean; suitsTools?: boolean; error?: string; cleared?: boolean }>
+    clearCache: () => Promise<{ ok: boolean }>
+  }
   project: {
     scaffold: (opts: {
       parentDir: string

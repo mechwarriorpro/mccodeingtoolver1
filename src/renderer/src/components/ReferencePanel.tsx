@@ -31,6 +31,8 @@ export default function ReferencePanel({ project, onToast }: Props): JSX.Element
   const [lines, setLines] = useState<string[]>([])
   const [query, setQuery] = useState('')
   const [hits, setHits] = useState<{ id: string; file: string; line: number; text: string }[]>([])
+  /** Kept in the log panel as well as the toast, so the text can be copied. */
+  const [failure, setFailure] = useState<string | null>(null)
   const [openFile, setOpenFile] = useState<{ title: string; path: string; text: string } | null>(null)
   const logRef = useRef<HTMLDivElement>(null)
 
@@ -78,11 +80,18 @@ export default function ReferencePanel({ project, onToast }: Props): JSX.Element
     if (!releases || !pickedTag) return
     setBusy('add')
     setLines([])
+    setFailure(null)
     try {
       const res = await api.refs.addGithub({ repo: repo.trim(), tag: pickedTag, assetName: pickedAsset || undefined })
-      if (!res.ok) onToast(res.error ?? 'Could not add that mod', 'err')
-      else if (res.mod?.decompiled) onToast(`Decompiled ${res.mod.title} (${res.mod.version})`)
-      else onToast(`Downloaded, but decompiling failed: ${res.mod?.error ?? 'unknown'}`, 'err')
+      if (!res.ok) {
+        setFailure(res.error ?? 'Could not add that mod')
+        onToast(res.error ?? 'Could not add that mod', 'err')
+      } else if (res.mod?.decompiled) {
+        onToast(`Decompiled ${res.mod.title} (${res.mod.version})`)
+      } else {
+        setFailure(res.mod?.error ?? 'Decompiling failed for an unknown reason.')
+        onToast(`Downloaded, but decompiling failed: ${res.mod?.error ?? 'unknown'}`, 'err')
+      }
       await refresh()
     } finally {
       setBusy('')
@@ -92,12 +101,15 @@ export default function ReferencePanel({ project, onToast }: Props): JSX.Element
   async function addFiles(): Promise<void> {
     setBusy('files')
     setLines([])
+    setFailure(null)
     try {
       const res = await api.refs.addFiles()
       if (!res.ok) {
         if (res.error !== 'cancelled') onToast(res.error ?? 'Could not add that jar', 'err')
       } else {
         const okCount = res.mods?.filter((m) => m.decompiled).length ?? 0
+        const failed = res.mods?.find((m) => !m.decompiled)?.error
+        if (!okCount) setFailure(failed ?? res.error ?? 'Decompiling failed.')
         onToast(okCount ? `Decompiled ${okCount} jar(s)` : `Added, but decompiling failed${res.error ? `: ${res.error}` : ''}`, okCount ? 'ok' : 'err')
       }
       await refresh()
@@ -120,8 +132,11 @@ export default function ReferencePanel({ project, onToast }: Props): JSX.Element
   async function decompile(id: string): Promise<void> {
     setBusy(`dec:${id}`)
     setLines([])
+    setFailure(null)
     try {
       const res = await api.refs.decompile(id)
+      if (!res.ok) setFailure(res.error ?? 'Decompilation failed')
+      else setFailure(res.mod?.error ?? null)
       onToast(res.ok ? 'Decompiled' : res.error ?? 'Decompilation failed', res.ok ? 'ok' : 'err')
       await refresh()
     } finally {
@@ -223,11 +238,12 @@ export default function ReferencePanel({ project, onToast }: Props): JSX.Element
         </div>
       </div>
 
-      {lines.length > 0 && (
+      {(lines.length > 0 || failure) && (
         <div className="refs-log" ref={logRef}>
           {lines.map((l, i) => (
             <div key={i}>{l}</div>
           ))}
+          {failure && <div className="ref-failure">✗ {failure}</div>}
         </div>
       )}
 

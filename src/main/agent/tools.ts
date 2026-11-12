@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { loadConfig, effectiveApiKey } from '../config'
 import { runLocalBuild } from '../build/gradle'
-import { findJava, javaVersion } from '../util/exec'
+import { resolveJava, resolveToolJava } from '../util/exec'
 import { installJar, copyExtraMods, readJarInfo } from '../mod/jar'
 import { buildTechnicPackZip, detectTechnicInstances, launchTechnic } from '../game/technic'
 import { captureGameWindow, listScreenshots } from '../game/capture'
@@ -97,14 +97,20 @@ export function createAgentTools(ctx: ToolContext) {
       {},
       async () => {
         const cfg = loadConfig()
-        const java = findJava(cfg.javaPath)
-        const version = java ? await javaVersion(java) : null
+        const javaPick = resolveJava(cfg.javaPath)
+        const toolPick = resolveToolJava(cfg.javaPath)
         const gh = await ghPreflight(cfg.github, cfg.workspaceDir).catch(() => ({ ghFound: false, authed: false, repoOk: false, messages: ['gh check failed'] }))
         const instance = cfg.game.instances.find((i) => i.id === cfg.game.activeInstanceId)
         return text(
           JSON.stringify(
             {
-              java: { path: java, version, ok: !!version && version.startsWith('21') },
+              java: {
+                path: javaPick.path,
+                version: javaPick.version,
+                ok: !!javaPick.version?.startsWith('21'),
+                error: javaPick.error
+              },
+              decompilerJava: { path: toolPick.path, version: toolPick.version, error: toolPick.error },
               github: gh,
               apiKeyPresent: !!effectiveApiKey(),
               instance: instance ? { name: instance.name, kind: instance.kind, path: instance.path, exists: fs.existsSync(instance.path) } : null,

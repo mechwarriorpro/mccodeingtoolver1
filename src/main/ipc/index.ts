@@ -50,7 +50,7 @@ import { readJarInfo, installJar } from '../mod/jar'
 import { detectTechnicInstances, buildTechnicPackZip, launchTechnic } from '../game/technic'
 import { gameStatus, launchDevClient, onGameLog, onGameStatus, readGameLog, stopGame } from '../game/launcher'
 import { captureGameWindow, listScreenshots } from '../game/capture'
-import { findJava, javaVersion, run } from '../util/exec'
+import { clearJavaCache, probeJava, resolveJava, resolveToolJava, run } from '../util/exec'
 import { installNeoForge, isNeoForgeInstalled } from '../game/neoforge'
 import { launchNeoForge, runningGame, stopNeoForge } from '../game/client'
 import { send } from './windows'
@@ -166,12 +166,51 @@ export function registerIpc(): void {
     return { ...redactConfig(next), apiKeySet: !!effectiveApiKey() }
   })
 
+  /**
+   * Which java the app will actually use, and for what. Settings shows this so a
+   * Java 8 on PATH is visible before it produces a JVM stack trace in a log.
+   */
+  ipcMain.handle('java:status', () => {
+    const cfg = loadConfig()
+    const game = resolveJava(cfg.javaPath)
+    const tool = resolveToolJava(cfg.javaPath)
+    return {
+      game: { path: game.path, version: game.version, error: game.error },
+      tools: { path: tool.path, version: tool.version, error: tool.error },
+      /** True when the two disagree, which usually means a stale JAVA_HOME. */
+      split: !!game.path && !!tool.path && game.path !== tool.path
+    }
+  })
+
+  ipcMain.handle('java:check', (_e, javaPath: string) => {
+    clearJavaCache()
+    if (!javaPath) return { ok: true, cleared: true }
+    const probe = probeJava(javaPath)
+    if (!probe) return { ok: false, error: `${javaPath} did not respond to -version. Is it a real java.exe?` }
+    const suitsGame = probe.major === 21
+    const suitsTools = probe.major >= 17
+    return {
+      ok: suitsGame,
+      version: probe.version,
+      major: probe.major,
+      suitsGame,
+      suitsTools,
+      error: suitsGame ? undefined : `That is Java ${probe.major}. Minecraft 1.21.1 needs Java 21${suitsTools ? ' (it can still run the decompiler)' : ' and the decompiler needs at least 17'}.`
+    }
+  })
+
+  ipcMain.handle('java:clearCache', () => {
+    clearJavaCache()
+    return { ok: true }
+  })
+
   ipcMain.handle('app:version', () => ({ version: app.getVersion(), electron: process.versions.electron, node: process.versions.node }))
 
   ipcMain.handle('env:report', async (): Promise<EnvReport> => {
     const cfg = loadConfig()
-    const java = findJava(cfg.javaPath)
-    const version = java ? await javaVersion(java) : null
+    const javaPick = resolveJava(cfg.javaPath)
+    const java = javaPick.path
+    const version = javaPick.version ?? null
     const gh = await ghPreflight(cfg.github, cfg.workspaceDir).catch(() => ({ ghFound: false, authed: false, repoOk: false, identity: undefined, messages: ['gh check failed'] }))
     const instance = cfg.game.instances.find((i) => i.id === cfg.game.activeInstanceId)
     const items: EnvReport['items'] = [
@@ -185,9 +224,9 @@ export function registerIpc(): void {
       {
         id: 'java',
         label: 'Java 21',
-        ok: !!version?.startsWith('21'),
-        detail: version ? `${version} at ${java}` : 'Not found',
-        fix: 'Install Temurin/Microsoft OpenJDK 21, or set the java.exe path in Settings.'
+        ok: !!java && !!version?.startsWith('21'),
+        detail: java ? `Java ${version} at ${java}` : 'Not found',
+        fix: javaPick.error ?? 'Install Temurin/Microsoft OpenJDK 21, or set the java.exe path in Settings.'
       },
       {
         id: 'gh',
@@ -699,7 +738,7 @@ export function registerIpc(): void {
       minecraftDir: mcDirPath,
       neoVersion,
       installed: !!mcDirPath && isNeoForgeInstalled(mcDirPath, neoVersion),
-      javaFound: !!findJava(cfg.javaPath)
+      javaFound: !!resolveJava(cfg.javaPath).path
     }
   })
 

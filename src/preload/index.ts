@@ -38,6 +38,12 @@ const api = {
   },
   env: { report: () => ipcRenderer.invoke('env:report') },
 
+  java: {
+    status: () => ipcRenderer.invoke('java:status'),
+    check: (javaPath: string) => ipcRenderer.invoke('java:check', javaPath),
+    clearCache: () => ipcRenderer.invoke('java:clearCache')
+  },
+
   project: {
     scaffold: (opts: unknown) => ipcRenderer.invoke('project:scaffold', opts),
     validate: (opts: unknown) => ipcRenderer.invoke('project:validate', opts),

@@ -3,7 +3,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { userDataDir } from '../config'
-import { findJava, run } from '../util/exec'
+import { resolveToolJava, run } from '../util/exec'
 import { githubApi, repoInfo } from './oauth'
 
 /**
@@ -324,10 +324,15 @@ export async function decompileJar(jarPath: string, destDir: string, opts: Decom
     lines.push(line)
     opts.onLine?.(line)
   }
-  const java = findJava(opts.javaPath)
-  if (!java) {
-    return { ok: false, log: '', error: 'No Java found. Install JDK 21 (or set the java.exe path in Settings) so the decompiler can run.', durationMs: Date.now() - started }
+  // Vineflower needs Java 17+ (its classes are class file 61). A Java 8 runtime on
+  // PATH loads the jar far enough to fail with UnsupportedClassVersionError, so the
+  // version is checked before the jar is ever handed to java.
+  const javaPick = resolveToolJava(opts.javaPath)
+  if (!javaPick.path) {
+    return { ok: false, log: '', error: javaPick.error ?? 'No Java 17+ found for the decompiler.', durationMs: Date.now() - started }
   }
+  const java = javaPick.path
+  push(`[decompile] using Java ${javaPick.version} at ${java}`)
   fs.rmSync(destDir, { recursive: true, force: true })
   fs.mkdirSync(destDir, { recursive: true })
 
@@ -376,14 +381,23 @@ export async function decompileJar(jarPath: string, destDir: string, opts: Decom
   }
 
   if (lastCode !== 0) {
+    // Translate the JVM's version error instead of showing a stack trace: it means
+    // java chose for the game was too old for the decompiler jar.
+    const unsupported = lastOutput.match(/class file version (\d+).*?up to (\d+)/s)
+    const versionError = unsupported
+      ? `The decompiler needs a newer Java than the one used here (${path.basename(java)} is too old: it supports class file ` +
+        `${unsupported[2]} but the jar is ${unsupported[1]}). Set a JDK 17+ in Settings → Model → Java, or let the app auto-detect one.`
+      : null
     return {
       ok: false,
       sourcesDir: javaFiles ? destDir : undefined,
       javaFiles,
       log: lines.join('\n'),
-      error: javaFiles
-        ? `The decompiler exited with code ${lastCode} but wrote ${javaFiles} file(s); some classes failed.`
-        : `The decompiler exited with code ${lastCode}. ${lastOutput.split(/\r?\n/).slice(-6).join(' ')}`,
+      error: versionError
+        ? versionError
+        : javaFiles
+          ? `The decompiler exited with code ${lastCode} but wrote ${javaFiles} file(s); some classes failed.`
+          : `The decompiler exited with code ${lastCode}. ${lastOutput.split(/\r?\n/).slice(-6).join(' ')}`,
       durationMs: Date.now() - started
     }
   }

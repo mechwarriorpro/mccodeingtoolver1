@@ -199,4 +199,18 @@ the unmodified official MDK build script, so it compiles with `./gradlew build`.
   client jar and assets on first run, ~400 MB).
 - Screenshots on Windows use `PrintWindow` via PowerShell; if Minecraft is fullscreen-exclusive,
   switch to windowed/borderless in the app settings.
-- `gh` must be on `PATH` for GitHub builds.
+- GitHub builds need a Git install; the GitHub CLI is optional (the app signs in itself).
+
+## Troubleshooting
+
+### `UnsupportedClassVersionError … class file version 61.0 … up to 52.0`
+
+A Java 8 is being used for the decompiler. Vineflower needs **Java 17+**, and a
+Java 8 left in `JAVA_HOME` or on `PATH` (Technic's launcher ships one) fails before
+it can decompile anything.
+
+The app now version-checks every candidate by running `java -version` and skips
+anything too old, so in most cases this fixes itself. Settings → Model shows
+exactly which java is used for the game and which for the decompiler. If both say
+"not found", install Temurin 21 (<https://adoptium.net>) and press **Check**.
+`javaw.exe` is never used, because it prints nothing.

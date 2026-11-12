@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
-import { findJava, run } from '../util/exec'
+import { resolveJava, run } from '../util/exec'
 
 /**
  * NeoForge loader installation.
@@ -93,8 +93,12 @@ export async function installNeoForge(opts: {
     opts.onLine(l)
   }
 
-  const java = findJava(opts.javaPath)
-  if (!java) return { ok: false, minecraftDir: opts.minecraftDir, log: log.join('\n'), error: 'Java 21 not found. Set it in Settings.' }
+  const javaPick = resolveJava(opts.javaPath)
+  if (!javaPick.path) {
+    return { ok: false, minecraftDir: opts.minecraftDir, log: log.join('\n'), error: javaPick.error ?? 'Java 21 not found. Set it in Settings.' }
+  }
+  const java = javaPick.path
+  push(`[neoforge] using Java ${javaPick.version} at ${java}`)
 
   const dl = await downloadInstaller(opts.neoVersion, push)
   if (!dl.ok || !dl.path) return { ok: false, minecraftDir: opts.minecraftDir, log: log.join('\n'), error: dl.error }

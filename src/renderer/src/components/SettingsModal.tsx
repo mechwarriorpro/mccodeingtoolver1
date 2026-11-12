@@ -25,10 +25,20 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
   const [apiKey, setApiKey] = useState('')
   const [detected, setDetected] = useState<GameInstance[]>([])
   const [saving, setSaving] = useState(false)
+  const [java, setJava] = useState<{ game: { path: string | null; version?: string; error?: string }; tools: { path: string | null; version?: string; error?: string }; split: boolean } | null>(null)
+  const [javaCheck, setJavaCheck] = useState<{ ok: boolean; version?: string; major?: number; error?: string; cleared?: boolean } | null>(null)
 
   useEffect(() => {
     void api.instance.detect().then(setDetected)
+    void api.java.status().then(setJava)
   }, [])
+
+  async function checkJava(path: string): Promise<void> {
+    setJavaCheck(null)
+    const res = await api.java.check(path)
+    setJavaCheck(res)
+    setJava(await api.java.status())
+  }
 
   function set<K extends keyof AppConfig>(key: K, value: AppConfig[K]): void {
     setDraft((d) => ({ ...d, [key]: value }))
@@ -119,11 +129,46 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
                 <button
                   onClick={async () => {
                     const files = await api.dialog.pickFiles({ title: 'Pick java.exe', filters: [{ name: 'java', extensions: ['exe', ''] }] })
-                    if (files[0]) set('javaPath', files[0])
+                    if (files[0]) {
+                      set('javaPath', files[0])
+                      await checkJava(files[0])
+                    }
                   }}
                 >
                   Browse
                 </button>
+                <button onClick={() => void checkJava(draft.javaPath)}>Check</button>
+              </div>
+              {java && (
+                <div className="hint">
+                  {java.game.path ? (
+                    <>
+                      Game / NeoForge: <b>Java {java.game.version}</b> at <code>{java.game.path}</code>
+                    </>
+                  ) : (
+                    <span className="warn">No Java 21 found. {java.game.error}</span>
+                  )}
+                  {java.tools.path && java.tools.path !== java.game.path && (
+                    <>
+                      <br />
+                      Decompiler: Java {java.tools.version} at <code>{java.tools.path}</code>
+                    </>
+                  )}
+                  {!java.tools.path && <><br /><span className="warn">{java.tools.error}</span></>}
+                </div>
+              )}
+              {javaCheck && (
+                <div className={javaCheck.ok ? 'hint' : 'hint warn'}>
+                  {javaCheck.cleared
+                    ? 'Cleared the cached Java lookup; auto-detection will run again.'
+                    : javaCheck.ok
+                      ? `Java ${javaCheck.version} — good for Minecraft 1.21.1.`
+                      : javaCheck.error}
+                </div>
+              )}
+              <div className="hint">
+                Detected by running <code>java -version</code> and checking the major version — a Java 8 left on PATH or in JAVA_HOME
+                is skipped, because Vineflower needs 17+ and 1.21.1 needs 21.
               </div>
             </div>
           </>
