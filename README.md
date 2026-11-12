@@ -61,7 +61,7 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.4.3 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.4.4 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
 > v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
 > decompiler picking a Java it could not run.
@@ -74,6 +74,8 @@ Settings or from GitHub's settings at any time.
 > VRAM, and picks a context window that fits, with explicit support for AMD cards on Vulkan.
 > **v0.4.3** judges every model against your machine before downloading it: it runs if there is any
 > way to run it, and says plainly when there is not.
+> **v0.4.4** retries transient provider failures instead of losing the turn, and turns SDK stack traces
+> into sentences that say what to do.
 >
 > From 0.3.0 on, the app updates itself: once you have it installed, new versions arrive
 > through GitHub releases without downloading the installer again.
@@ -358,6 +360,32 @@ streams token by token, tool calls and their results appear inline, and the last
 log lines are shown under the reply while a build runs. Nothing needs a refresh, and nothing is lost
 if a stream is interrupted — the app writes each completed block to the stored message, so the final
 transcript is complete even when the live text was cut short.
+
+## Troubleshooting
+
+### `EPERM: operation not permitted, symlink …`
+
+Harmless, and it is not what stopped the run. Windows only allows symbolic links
+when **Developer Mode** is on: Windows Settings → Privacy & security → For
+developers → Developer Mode. The agent SDK creates one per subagent and falls
+back to a normal file when it cannot, so the run continues either way.
+
+To stop the warnings, turn Developer Mode on. This app never creates symlinks
+itself.
+
+### `529 overloaded_error` / `The service may be temporarily overloaded`
+
+The provider is busy — an Anthropic-side condition, not a problem with your
+setup or your key. The app now retries up to three times with a short backoff and
+shows "the provider is busy, retrying" in the chat, so a brief spike no longer
+ends the turn. If it still fails, wait a minute and send again.
+
+### Other failures
+
+Errors are translated rather than dumped. A rejected key, an empty balance, a
+rate limit, an unreachable host and an over-long conversation each get their own
+sentence saying what to do. Anything unrecognised is shown as-is, because
+replacing it with a vague message would hide the only clue available.
 
 ## Notes & limits
 

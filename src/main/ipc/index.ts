@@ -205,13 +205,17 @@ ${text}` : text
         if (last) {
           if (!last.text && payload.text) last.text = payload.text
           last.costUsd = payload.costUsd
-          if (payload.isError) last.error = payload.text || 'The run failed.'
+          // Prefer the classified sentence over the raw SDK text: the chat
+          // should say what to do, not print a stack trace.
+          if (payload.isError) last.error = payload.errorText || payload.text || 'The run failed.'
         }
         conv.sessionId = payload.sessionId ?? conv.sessionId
         persist()
         send('agent:result', payload)
       },
-      onNotice: () => undefined,
+      // System remarks (retries, warnings) belong in the chat, but not as the
+      // model's own words.
+      onNotice: (text) => send('agent:notice', { text }),
       onOutput: (line, source) => send('agent:output', { line, source }),
       onGameStatus: (status) => send('game:status', status)
     },

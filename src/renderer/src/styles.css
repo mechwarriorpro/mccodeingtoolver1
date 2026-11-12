@@ -589,3 +589,15 @@ button.link:hover { color: var(--accent-2); }
 .fit-note .fit-fix { color: var(--muted); }
 .fit-note .fit-math { display: block; margin-top: 3px; color: var(--dim); font-family: var(--mono); font-size: 10.5px; }
 .chip.off { opacity: 0.55; text-decoration: line-through; }
+
+/* system remarks in the chat (retries, warnings) */
+.notice-row {
+  display: flex; align-items: flex-start; gap: 7px;
+  margin: 6px 0 0 46px; padding: 7px 10px; border-radius: 8px;
+  font-size: 11.5px; line-height: 1.5; color: var(--muted);
+  background: rgba(245, 192, 90, 0.06); border: 1px solid rgba(245, 192, 90, 0.2);
+}
+.notice-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--amber);
+  margin-top: 5px; flex: 0 0 6px;
+}

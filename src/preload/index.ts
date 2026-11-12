@@ -177,6 +177,7 @@ const api = {
 
   events: {
     onAgentText: (cb: (p: { text: string }) => void) => on('agent:text', cb),
+    onNotice: (cb: (p: { text: string }) => void) => on('agent:notice', cb),
     onAgentBlock: (cb: (p: { text: string }) => void) => on('agent:block', cb),
     onToolStart: (cb: (p: unknown) => void) => on('agent:tool-start', cb),
     onToolEnd: (cb: (p: unknown) => void) => on('agent:tool-end', cb),

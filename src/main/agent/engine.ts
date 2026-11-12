@@ -20,7 +20,7 @@ export interface EngineEvents {
   onPermissionRequest: (req: PermissionPrompt) => void
   onPermissionResolved: (id: string) => void
   onStatus: (status: 'idle' | 'thinking' | 'waiting-permission' | 'error', detail?: string) => void
-  onResult: (payload: { text: string; costUsd?: number; isError?: boolean; sessionId?: string }) => void
+  onResult: (payload: { text: string; costUsd?: number; isError?: boolean; sessionId?: string; errorText?: string }) => void
   onNotice: (text: string) => void
   onOutput: (line: string, source: 'build' | 'game') => void
   onGameStatus: (status: import('../../shared/types').GameStatus) => void
@@ -124,21 +124,54 @@ export class AgentSession {
       if (this.current) return
 
       // Interrupting closes the backend session, so a new one is started for the next turn.
-      const q = query({ prompt: this.queue as AsyncIterable<any>, options: this.buildOptions() })
-      this.current = q
-      try {
-        for await (const msg of q) this.handleMessage(msg)
-      } finally {
-        this.current = null
-      }
+      await this.runTurn()
     } catch (e) {
-      const message = (e as Error).message
-      this.events.onStatus('error', message)
-      this.events.onResult({ text: '', isError: true })
+      // A real failure: surface a sentence the user can act on, not the SDK's
+      // stack trace. The retry loop has already given up by the time we get here.
+      const info = classifyRunError(e)
+      this.events.onStatus('error', 'Failed')
+      this.events.onResult({ text: '', isError: true, errorText: info.message })
       throw e
     } finally {
       this.busy = false
       if (!this.stopped) this.events.onStatus('idle')
+    }
+  }
+
+  /**
+   * Run one turn, retrying only failures worth retrying.
+   *
+   * An overloaded provider (HTTP 529) or a dropped connection is temporary, and
+   * a couple of retries with backoff turn a dead run into a blip — the log this
+   * came from showed a 529 ending the turn outright. A bad key or a missing
+   * model is not temporary: retrying wastes the user's time and buries the real
+   * message, so those fail immediately and verbatim.
+   */
+  private async runTurn(): Promise<void> {
+    const MAX_ATTEMPTS = 3
+    for (let attempt = 1; ; attempt++) {
+      const q = query({ prompt: this.queue as AsyncIterable<any>, options: this.buildOptions() })
+      this.current = q
+      let failure: unknown = null
+      try {
+        for await (const msg of q) this.handleMessage(msg)
+      } catch (e) {
+        failure = e
+      } finally {
+        this.current = null
+      }
+      if (!failure) return
+      if (this.stopped) throw failure
+
+      const info = classifyRunError(failure)
+      if (!info.retryable || attempt >= MAX_ATTEMPTS) throw failure
+
+      // Say something: a silent pause looks like a hang, and the notice channel
+      // keeps this out of the model's own words.
+      this.events.onNotice(`The provider is busy. Retrying — attempt ${attempt + 1} of ${MAX_ATTEMPTS}…`)
+      this.events.onStatus('thinking')
+      await new Promise((r) => setTimeout(r, 1500 * attempt))
+      if (this.stopped) throw failure
     }
   }
 
@@ -365,6 +398,83 @@ export class AgentSession {
         break
     }
   }
+}
+
+/**
+ * Work out what a failed run actually was.
+ *
+ * The SDK surfaces provider errors as plain strings inside thrown errors, so
+ * this is pattern-based by necessity — but it answers the two questions a user
+ * has: *will waiting help?* and *what do I actually do?*
+ */
+export function classifyRunError(error: unknown): {
+  kind: 'overloaded' | 'rate-limit' | 'auth' | 'network' | 'model' | 'context' | 'symlink' | 'unknown'
+  retryable: boolean
+  message: string
+} {
+  const raw = error instanceof Error ? error.message : String(error ?? '')
+  const text = raw.replace(/\s+/g, ' ').trim()
+  const has = (re: RegExp): boolean => re.test(text)
+
+  // A symlink failure on Windows means Developer Mode is off. It appears in the
+  // log while the SDK spawns a subagent, but the SDK *catches* it and falls back
+  // to a plain file, so a run carrying this message has usually succeeded. Saying
+  // so is the difference between "your app is broken" and "this is cosmetic".
+  if (has(/EPERM.*symlink|symlink.*EPERM/i)) {
+    return {
+      kind: 'symlink',
+      retryable: false,
+      message:
+        'Windows blocked a link the agent tried to create, which needs Developer Mode. The run itself is not ' +
+        'affected. To silence the warnings: Windows Settings → Privacy & security → For developers → Developer Mode.'
+    }
+  }
+  if (has(/\b529\b|overloaded_error|temporarily overloaded/i)) {
+    return {
+      kind: 'overloaded',
+      retryable: true,
+      message: 'The model provider is overloaded right now. Tried several times — wait a moment and send again.'
+    }
+  }
+  if (has(/\b429\b|rate.?limit/i)) {
+    return {
+      kind: 'rate-limit',
+      retryable: true,
+      message: 'Rate limited by the provider. Free tiers are strict — wait a minute, or switch model in Settings.'
+    }
+  }
+  if (has(/\b401\b|invalid x-api-key|authentication_error|api key was rejected/i)) {
+    return { kind: 'auth', retryable: false, message: 'The API key was rejected. Check it in Settings → Model.' }
+  }
+  if (has(/\b402\b|credit balance|insufficient (credit|quota)/i)) {
+    return {
+      kind: 'auth',
+      retryable: false,
+      message: 'This account has no credit. Pick a free model in Settings → Model, or add credit with the provider.'
+    }
+  }
+  if (has(/ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed|socket hang up/i)) {
+    return {
+      kind: 'network',
+      retryable: true,
+      message: 'Could not reach the provider. Check your connection — and if you are on Ollama, that it is running.'
+    }
+  }
+  if (has(/model.*(not found|does not exist)|\b404\b/i)) {
+    return {
+      kind: 'model',
+      retryable: false,
+      message: 'That model is not available from this provider. Use Refresh in Settings → Model for the current list.'
+    }
+  }
+  if (has(/context (window|length)|too many tokens|prompt is too long/i)) {
+    return {
+      kind: 'context',
+      retryable: false,
+      message: 'The conversation is longer than the model can hold. Start a new chat, or use a larger-context model.'
+    }
+  }
+  return { kind: 'unknown', retryable: false, message: text.slice(0, 600) || 'The run failed.' }
 }
 
 /**

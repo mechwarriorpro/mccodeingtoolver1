@@ -14,6 +14,8 @@ interface AttachmentDraft {
 interface Props {
   messages: ChatMessage[]
   streamingText: string
+  /** System remarks from main (retries, warnings), shown inline. */
+  notices?: { id: string; text: string }[]
   /** Last few build/game output lines, shown under the streaming bubble. */
   liveLines?: { line: string; source: 'build' | 'game' }[]
   /** False when no provider key is configured, which unlocks the free-model hint. */
@@ -84,6 +86,7 @@ function summarizeInput(name: string, input: Record<string, unknown>): string {
 export default function ChatPanel({
   messages,
   streamingText,
+  notices = [],
   liveLines,
   hasKey = true,
   status,
@@ -250,6 +253,15 @@ export default function ChatPanel({
               </div>
             )
           })}
+
+          {/* Main's own remarks: a retry, a warning. Kept visually distinct from
+              the model's words so nothing here is mistaken for an answer. */}
+          {notices.map((n) => (
+            <div key={n.id} className="notice-row">
+              <span className="notice-dot" />
+              {n.text}
+            </div>
+          ))}
 
           {/* Live build/game output, inline: a build can take a minute and the
               chat should show it is doing something without a tab switch. */}

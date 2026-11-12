@@ -455,6 +455,7 @@ export interface McfApi {
   }
   events: {
     onAgentText: (cb: (p: { text: string }) => void) => () => void
+    onNotice: (cb: (p: { text: string }) => void) => () => void
     onAgentBlock: (cb: (p: { text: string }) => void) => () => void
     onToolStart: (cb: (p: ToolTrace) => void) => () => void
     onToolEnd: (cb: (p: { id: string; status: ToolTrace['status']; detail?: string }) => void) => () => void

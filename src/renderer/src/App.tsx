@@ -21,6 +21,8 @@ export default function App(): JSX.Element {
   const [activeConv, setActiveConv] = useState<string>('')
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState('')
+  /** System remarks from main (retries, warnings) shown inline in the chat. */
+  const [notices, setNotices] = useState<{ id: string; text: string }[]>([])
   const [status, setStatus] = useState<string>('idle')
   const [statusDetail, setStatusDetail] = useState<string | undefined>()
   const [busy, setBusy] = useState(false)
@@ -83,6 +85,12 @@ export default function App(): JSX.Element {
         setBusy(true)
       }),
       api.events.onAgentText((p) => setStreaming((s) => s + p.text)),
+      // Main's own remarks, e.g. "the provider is busy, retrying". Shown in the
+      // chat so a pause never looks like a hang, but never merged into the
+      // model's answer.
+      api.events.onNotice((p) =>
+        setNotices((n) => [...n.slice(-4), { id: `note-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, text: p.text }])
+      ),
       api.events.onAgentBlock((p) => {
         // Authoritative complete block from the SDK: store it. The streaming
         // buffer is deliberately NOT cleared here — it is the live view of the
@@ -182,6 +190,7 @@ export default function App(): JSX.Element {
   async function send(text: string, attachments: { path: string; name: string; kind: string; mediaType?: string }[]): Promise<void> {
     // Clear here, where the turn genuinely starts, rather than on a stream event.
     setStreaming('')
+    setNotices([])
     setBusy(true)
     setStatus('thinking')
     const res = await api.chat.send({ text, attachments })
@@ -196,6 +205,7 @@ export default function App(): JSX.Element {
     setActiveConv(conv.id)
     setMessages([])
     setStreaming('')
+    setNotices([])
     setConversations(await api.chat.list())
   }
 
@@ -330,6 +340,7 @@ export default function App(): JSX.Element {
         <ChatPanel
           messages={messages}
           streamingText={streaming}
+          notices={notices}
           liveLines={consoleLines.slice(-4)}
           hasKey={config.apiKeySet || config.provider === 'ollama'}
           status={status}
