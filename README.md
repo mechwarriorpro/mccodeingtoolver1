@@ -24,20 +24,27 @@ setup and API key.
 | Multi-agent | Coordinator delegates to `package-dev`, `build-smith`, and `qa-pilot` subagents |
 | Vision | `screenshot` tool grabs the Minecraft window (PowerShell/`user32` on Windows) and returns a PNG to the model |
 | Local build | `gradlew build --console=plain`; javac errors are parsed out and fed back |
-| GitHub build | `gh` CLI: commit → push → `gh workflow run` → `gh run watch` → `gh run download` |
+| GitHub sign-in | In-app OAuth device flow (`ABCD-1234` at github.com/login/device); no GitHub CLI required. A personal access token works too |
+| GitHub build | Token-authenticated REST: commit → push → dispatch `build.yml` → poll the run → download the artifact |
 | Technic install | Writes into `.technic/modpacks/<pack>/mods`; can export a Technic-spec pack zip |
 | Loader install | Official NeoForge installer, headless: `--install-client <dir>` |
 | Launch + test | `runClient` (dev) or direct Java launch of `neoforge-<ver>.json` (real instance) |
+| Reference mods | Download any mod's release jar, decompile it with Vineflower, and let the agent read/grep it under `reference/`. Not compiled into your mod |
 | Autonomy | **Review** (edits auto, shell asks), **Ask** (everything asks, agent asks you when unsure), **Auto** (unattended) |
 
 ---
 
 ## Requirements (on the Windows machine)
 
-1. **Node.js 20+** (build only)
-2. **JDK 21** — Temurin or Microsoft OpenJDK (`java -version` must say 21)
-3. **GitHub CLI** — install from <https://cli.github.com>, then `gh auth login`
-4. An **Anthropic API key** (`sk-ant-…`)
+1. **JDK 21** — Temurin or Microsoft OpenJDK (`java -version` must say 21). Also runs the decompiler.
+2. **Git** — <https://git-scm.com>. The app pushes with a stored token; Git itself must be installed.
+3. An **Anthropic API key** (`sk-ant-…`)
+4. **Node.js 20+** — only if you build from source; the installer bundles the runtime.
+
+The **GitHub CLI is optional**. Sign in from inside the app instead: Settings → GitHub →
+**Sign in with GitHub**, then type the shown code at <https://github.com/login/device>. The token is
+kept in the app's user-data folder (not in the project, not in `.git/config`) and can be revoked from
+Settings or from GitHub's settings at any time.
 
 ## Get the .exe
 
@@ -92,8 +99,28 @@ release, and verifies the asset exists before finishing.
    That generates a real, buildable 1.21.1 project.
 3. **Settings → Game** — `Scan Technic` finds your packs under `%APPDATA%\.technic\modpacks`, or
    `Add folder` for Prism/MultiMC/vanilla.
-4. **Settings → GitHub** — owner/repo/branch, then `Create repo & push`.
+4. **Settings → GitHub** — **Sign in with GitHub** (a code appears; type it at
+   github.com/login/device), then owner/repo/branch and `Create repo & push`.
 5. Ask for a feature.
+
+### Reference mods (read how other mods do it)
+
+The **References** tab in the right rail turns another mod into reading material for the agent:
+
+- **Add from GitHub releases** — paste `owner/repo`, pick a release and jar, press *Add & decompile*.
+  The mod jar is chosen automatically (sources/javadoc/installer jars are skipped).
+- **Add a jar from disk…** — for a mod you already downloaded.
+- **Use as reference** copies the decompiled tree to `<project>/reference/<slug>/`, which is
+  git-ignored and **not** compiled into your mod. The agent then gets `search_reference`,
+  `list_reference_mods` and `reference_status`, and can search it like any other source.
+- The **Search decompiled sources** box finds a symbol across every reference and opens the file.
+
+Vineflower is downloaded once (~1.6 MB) into the app's data folder and verified against a pinned
+SHA-256; Maven Central is used if GitHub's release CDN is blocked. Point Settings → Model → *Decompiler
+jar* at CFR or another decompiler to use that instead.
+
+Decompiled code belongs to whoever wrote it — check the licence shown next to each reference before
+copying more than an API shape.
 
 ---
 

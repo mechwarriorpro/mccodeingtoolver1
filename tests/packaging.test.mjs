@@ -75,6 +75,19 @@ check(
   /externalizeDepsPlugin\(\{[^}]*exclude:[^}]*@anthropic-ai\/claude-agent-sdk/s.test(viteConfig)
 )
 
+section('GitHub sign-in and the decompiler survive bundling')
+// Both features spawn/fetch from the main process. If electron-vite externalises
+// a dependency they need, the packaged app dies at startup exactly like the SDK
+// crash, so assert the modules were inlined and nothing new is required.
+check('github sign-in is bundled', bundle.includes('login/device/code') && bundle.includes('login/oauth/access_token'))
+check('reference decompiler is bundled', bundle.includes('vineflower') || bundle.includes('Vineflower'))
+// adm-zip is plain CommonJS, so externalising it is correct: require() works and
+// electron-builder ships it in the asar. What must never happen is requiring an
+// ESM-only package (the SDK crash), which the checks above cover.
+check('adm-zip is resolvable as CommonJS', fs.existsSync(path.join(root, 'node_modules', 'adm-zip', 'adm-zip.js')) || fs.existsSync(path.join(root, 'node_modules', 'adm-zip', 'package.json')))
+check('adm-zip is listed in electron-builder files (production dep)', /dependencies/.test(fs.readFileSync(path.join(root, 'package.json'), 'utf8')))
+check('asar still unpacks the Claude CLI', /claude-agent-sdk/.test(fs.readFileSync(path.join(root, 'electron-builder.yml'), 'utf8')))
+
 section('release workflow stamps the installer version from the tag')
 const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8')
 check(

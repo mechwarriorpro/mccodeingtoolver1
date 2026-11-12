@@ -1,4 +1,17 @@
-import type { AppConfig, Conversation, EnvReport, GameInstance, GameStatus, PermissionPrompt, ScreenshotInfo, ToolTrace } from '../../../shared/types'
+import type {
+  AppConfig,
+  Conversation,
+  DeviceLoginPrompt,
+  EnvReport,
+  GameInstance,
+  GameStatus,
+  GithubStatus,
+  PermissionPrompt,
+  ReferenceModUi,
+  ReleaseOption,
+  ScreenshotInfo,
+  ToolTrace
+} from '../../../shared/types'
 
 export interface ProjectSummary {
   open: boolean
@@ -14,6 +27,28 @@ export interface ProjectSummary {
 export interface McfApi {
   config: { get: () => Promise<AppConfig & { apiKeySet: boolean }>; set: (patch: Partial<AppConfig>) => Promise<AppConfig & { apiKeySet: boolean }> }
   app: { version: () => Promise<{ version: string; electron: string; node: string }> }
+  github: {
+    status: () => Promise<GithubStatus>
+    loginDevice: (opts?: { openBrowser?: boolean }) => Promise<{ ok: boolean; auth?: Omit<GithubStatus, 'connected'>; error?: string }>
+    loginToken: (token: string) => Promise<{ ok: boolean; auth?: unknown; error?: string }>
+    logout: () => Promise<{ ok: boolean }>
+    authPath: () => Promise<string>
+    openDevicePage: () => Promise<void>
+  }
+  refs: {
+    list: () => Promise<ReferenceModUi[]>
+    resolve: (input: string) => Promise<{ ok: boolean; repo?: string; releases?: ReleaseOption[]; error?: string; needsAuth?: boolean }>
+    addGithub: (opts: { repo: string; tag?: string; assetName?: string }) => Promise<{ ok: boolean; mod?: ReferenceModUi; error?: string }>
+    addFiles: (opts?: { title?: string }) => Promise<{ ok: boolean; mods?: ReferenceModUi[]; error?: string }>
+    remove: (id: string) => Promise<{ ok: boolean; mods: ReferenceModUi[] }>
+    link: (id: string) => Promise<{ ok: boolean; dir?: string; files?: number; error?: string }>
+    search: (opts: { query: string; id?: string; regex?: boolean }) => Promise<{ hits: { id: string; file: string; line: number; text: string }[]; error?: string }>
+    tree: (id: string) => Promise<{ path: string; dir: boolean; size?: number }[]>
+    readFile: (opts: { id: string; path: string }) => Promise<{ ok: boolean; text?: string; error?: string }>
+    decompile: (id: string) => Promise<{ ok: boolean; mod?: ReferenceModUi; error?: string }>
+    openFolder: (id: string) => Promise<void>
+    openHomepage: (url: string) => Promise<void>
+  }
   env: { report: () => Promise<EnvReport> }
   project: {
     scaffold: (opts: {
@@ -96,6 +131,10 @@ export interface McfApi {
     onGameLine: (cb: (p: { line: string }) => void) => () => void
     onGameStatus: (cb: (p: GameStatus) => void) => () => void
     onScreenshot: (cb: (p: { path: string; label?: string }) => void) => () => void
+    onGithubDeviceCode: (cb: (p: DeviceLoginPrompt) => void) => () => void
+    onGithubDeviceTick: (cb: (p: { secondsLeft: number }) => void) => () => void
+    onRefLine: (cb: (p: { line: string }) => void) => () => void
+    onRefListChanged: (cb: () => void) => () => void
   }
 }
 

@@ -12,6 +12,9 @@ export function buildSystemPrompt(opts: {
   githubOwner?: string
   githubRepo?: string
   javaVersion?: string | null
+  /** Decompiled reference mods already available in the project. */
+  references?: { title: string; slug: string; version: string; licence?: string }[]
+  githubSignedIn?: boolean
 }): string {
   const autonomyRules =
     opts.autonomy === 'auto'
@@ -28,7 +31,7 @@ The user is a mod developer, not necessarily a Java expert. Be concise and pract
 - Mod id: \`${opts.modId || '(not set yet)'}\`
 - Project folder (your working directory): \`${opts.workspaceDir}\`
 - Test instance: ${opts.instancePath ? `\`${opts.instancePath}\` (${opts.instanceKind})` : '(none configured yet)'}
-- GitHub: ${opts.githubOwner ? `${opts.githubOwner}/${opts.githubRepo}` : '(not configured)'}
+- GitHub: ${opts.githubOwner ? `${opts.githubOwner}/${opts.githubRepo}` : '(not configured)'}${opts.githubSignedIn ? '' : ' — the user signs in from Settings > GitHub (the app has its own token; the GitHub CLI is optional)'}
 - Java 21 detected: ${opts.javaVersion ?? 'unknown'}
 
 # Autonomy
@@ -50,6 +53,21 @@ You have Claude Code's normal file tools (Read/Write/Edit/Glob/Grep/LS) plus app
 - \`mcp__mcfrogeagent__stop_game\` — close the game.
 - \`mcp__mcfrogeagent__export_technic_pack\` — produce a Technic-compatible pack zip from the instance.
 - \`mcp__mcfrogeagent__read_log\` — read the full \`run/logs/latest.log\` or a crash report.
+- \`mcp__mcfrogeagent__add_reference_mod\` — pull another mod from a GitHub release (or a local jar), decompile it with Vineflower, and copy the sources to \`reference/<slug>/\`.
+- \`mcp__mcfrogeagent__list_reference_mods\` / \`search_reference\` / \`reference_status\` — browse and grep those sources.
+
+# Reference mods
+
+The project may contain \`reference/<slug>/\` folders: decompiled third-party mods. They are read-only context.${
+  opts.references?.length
+    ? `\n\nAlready available: ${opts.references.map((r) => `\`${r.slug}\` (${r.title} ${r.version}${r.licence ? `, ${r.licence}` : ''})`).join(', ')}.`
+    : ''
+}
+
+- Use them to answer "how does mod X do Y" and to copy an **API shape** (method signatures, registration order, event names) instead of guessing at 1.21.1 APIs.
+- Never copy a whole class into the user's mod. Decompiled code is someone else's work under their licence; write your own implementation and mention any licence that restricts reuse (the tool reports it).
+- \`reference/\` is git-ignored and is not on the compile path. Do not import it or add it to \`build.gradle\`.
+- If a useful mod is missing, call \`add_reference_mod\` with its GitHub repo, then \`search_reference\` for the class you need.
 
 # The loop you should follow
 

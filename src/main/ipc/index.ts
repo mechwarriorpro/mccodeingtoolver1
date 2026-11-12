@@ -3,7 +3,45 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { AgentSession } from '../agent/engine'
 import { effectiveApiKey, loadConfig, redactConfig, saveConfig, screenshotsDir, attachmentsDir } from '../config'
-import type { AppConfig, ChatMessage, Conversation, EnvReport, GameInstance, GameStatus, PermissionPrompt } from '../../shared/types'
+import type {
+  AppConfig,
+  ChatMessage,
+  Conversation,
+  EnvReport,
+  GameInstance,
+  GameStatus,
+  GithubStatus,
+  PermissionPrompt,
+  ReferenceModUi
+} from '../../shared/types'
+import {
+  authFilePath,
+  authToken,
+  awaitDeviceApproval,
+  beginDeviceFlow,
+  beginWebFlow,
+  fetchUser,
+  loginWithToken,
+  logout as githubLogout,
+  openVerificationPage,
+  readAuth,
+  redactAuth
+} from '../github/oauth'
+import {
+  addFromFile,
+  addFromGithub,
+  ensureReferenceIgnored,
+  getReference,
+  linkToProject,
+  listReferences,
+  listReleases,
+  parseRepoRef,
+  pickModJar,
+  readReferenceFile,
+  referenceTree,
+  removeReference,
+  searchReference
+} from '../github/references'
 import { deleteConversation, listConversations, loadConversation, newConversationId, saveConversation } from '../store'
 import { scaffoldProject, validateModId, validatePackage, templateRoot } from '../mod/scaffold'
 import { isGradleProject, runLocalBuild, buildLogPath, findBuiltJar, gitSummary } from '../build/gradle'
@@ -12,7 +50,7 @@ import { readJarInfo, installJar } from '../mod/jar'
 import { detectTechnicInstances, buildTechnicPackZip, launchTechnic } from '../game/technic'
 import { gameStatus, launchDevClient, onGameLog, onGameStatus, readGameLog, stopGame } from '../game/launcher'
 import { captureGameWindow, listScreenshots } from '../game/capture'
-import { findJava, javaVersion } from '../util/exec'
+import { findJava, javaVersion, run } from '../util/exec'
 import { installNeoForge, isNeoForgeInstalled } from '../game/neoforge'
 import { launchNeoForge, runningGame, stopNeoForge } from '../game/client'
 import { send } from './windows'
@@ -134,7 +172,7 @@ export function registerIpc(): void {
     const cfg = loadConfig()
     const java = findJava(cfg.javaPath)
     const version = java ? await javaVersion(java) : null
-    const gh = await ghPreflight(cfg.github, cfg.workspaceDir).catch(() => ({ ghFound: false, authed: false, repoOk: false, messages: ['gh check failed'] }))
+    const gh = await ghPreflight(cfg.github, cfg.workspaceDir).catch(() => ({ ghFound: false, authed: false, repoOk: false, identity: undefined, messages: ['gh check failed'] }))
     const instance = cfg.game.instances.find((i) => i.id === cfg.game.activeInstanceId)
     const items: EnvReport['items'] = [
       {
@@ -153,10 +191,10 @@ export function registerIpc(): void {
       },
       {
         id: 'gh',
-        label: 'GitHub CLI login',
-        ok: gh.ghFound && gh.authed,
-        detail: gh.ghFound ? (gh.authed ? 'Signed in' : 'Not signed in') : 'gh not installed',
-        fix: 'Install GitHub CLI, then run: gh auth login'
+        label: 'GitHub account',
+        ok: gh.authed,
+        detail: gh.authed ? `Signed in${gh.identity ? ` as ${gh.identity.login}` : ''}` : gh.ghFound ? 'Not signed in' : 'Not signed in',
+        fix: 'Sign in from Settings > GitHub. No GitHub CLI needed.'
       },
       {
         id: 'repo',
@@ -181,6 +219,245 @@ export function registerIpc(): void {
       }
     ]
     return { ok: items.every((i) => i.ok), items }
+  })
+
+  // ---------------- GitHub sign-in ----------------
+  /**
+   * One place that answers "am I signed in, and can I actually push?".
+   * Called by Settings on open, by the pre-build check and by env_report.
+   */
+  ipcMain.handle('github:status', async (): Promise<GithubStatus> => {
+    const cfg = loadConfig()
+    const auth = readAuth()
+    const cliVer = await run('gh', ['--version'], { timeoutMs: 15000 }).catch(() => null)
+    const ghCliFound = !!cliVer && cliVer.code === 0
+    if (!auth) {
+      return { connected: false, login: '', scopes: [], method: 'pat', savedAt: 0, ghCliFound, repoOk: false, repoMessage: 'Not signed in to GitHub.' }
+    }
+    try {
+      const user = await fetchUser(auth.token)
+      // The name can change; keep the stored copy in step with the account.
+      const pre = await ghPreflight(cfg.github, cfg.workspaceDir).catch(() => null)
+      return {
+        connected: true,
+        login: user.login,
+        name: user.name,
+        avatarUrl: user.avatarUrl,
+        scopes: user.scopes.length ? user.scopes : auth.scopes,
+        method: auth.method,
+        savedAt: auth.savedAt,
+        ghCliFound,
+        repoOk: !!pre?.repoOk,
+        repoMessage: pre?.messages.join(' · ')
+      }
+    } catch (e) {
+      return {
+        connected: false,
+        login: auth.login,
+        scopes: auth.scopes,
+        method: auth.method,
+        savedAt: auth.savedAt,
+        ghCliFound,
+        repoOk: false,
+        repoMessage: 'The stored GitHub token is no longer valid.',
+        error: (e as Error).message
+      }
+    }
+  })
+
+  /**
+   * Device flow: returns a code for the UI, then resolves once the user approves.
+   * The renderer shows the code and the "open github.com" button; this handler
+   * stays pending so one round trip covers the whole sign-in.
+   */
+  ipcMain.handle('github:loginDevice', async (_e, opts: { openBrowser?: boolean } = {}) => {
+    let grant
+    try {
+      grant = await beginDeviceFlow()
+    } catch (e) {
+      // Device flow refused (client id revoked / blocked). Fall back to the
+      // loopback web flow, which needs no code entry.
+      const err = e as Error
+      if ((err as { code?: string }).code === 'device_unavailable') {
+        try {
+          const auth = await beginWebFlow()
+          resetSession()
+          return { ok: true, auth: redactAuth(auth) }
+        } catch (inner) {
+          return { ok: false, error: (inner as Error).message }
+        }
+      }
+      return { ok: false, error: err.message }
+    }
+    send('github:device-code', {
+      userCode: grant.userCode,
+      verificationUri: grant.verificationUri,
+      verificationUriComplete: grant.verificationUriComplete,
+      expiresInSec: grant.expiresInSec
+    })
+    if (opts.openBrowser !== false) await openVerificationPage(grant)
+    try {
+      const auth = await awaitDeviceApproval(grant, undefined, (secondsLeft) => send('github:device-tick', { secondsLeft }))
+      resetSession()
+      return { ok: true, auth: redactAuth(auth) }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  })
+
+  ipcMain.handle('github:loginToken', async (_e, token: string) => {
+    try {
+      const auth = await loginWithToken(token)
+      resetSession()
+      return { ok: true, auth: redactAuth(auth) }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  })
+
+  ipcMain.handle('github:logout', () => {
+    githubLogout()
+    return { ok: true }
+  })
+
+  ipcMain.handle('github:authPath', () => authFilePath())
+
+  ipcMain.handle('github:openDevicePage', () => shell.openExternal('https://github.com/login/device'))
+
+  // ---------------- reference mods (decompiled) ----------------
+  ipcMain.handle('ref:list', (): ReferenceModUi[] => listReferences().map(toRefUi))
+
+  ipcMain.handle('ref:resolve', async (_e, input: string) => {
+    const parsed = parseRepoRef(input)
+    if (!parsed) return { ok: false, error: 'Enter a GitHub repo like owner/name or a github.com URL.' }
+    if (!authToken()) return { ok: false, error: 'Sign in to GitHub first — release listings use the API.', needsAuth: true }
+    try {
+      const releases = await listReleases(parsed.owner, parsed.repo)
+      return {
+        ok: true,
+        repo: `${parsed.owner}/${parsed.repo}`,
+        releases: releases.map((r) => ({
+          tag: r.tag,
+          name: r.name,
+          publishedAt: r.publishedAt,
+          prerelease: r.prerelease,
+          jars: r.assets.filter((a) => /\.jar$/i.test(a.name)).map((a) => ({ name: a.name, size: a.size, downloads: a.downloads })),
+          recommended: pickModJar(r.assets)?.name
+        }))
+      }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  })
+
+  ipcMain.handle('ref:addGithub', async (_e, opts: { repo: string; tag?: string; assetName?: string }) => {
+    const parsed = parseRepoRef(opts.repo)
+    if (!parsed) return { ok: false, error: 'Enter a GitHub repo like owner/name.' }
+    const cfg = loadConfig()
+    try {
+      const res = await addFromGithub({
+        owner: parsed.owner,
+        repo: parsed.repo,
+        releaseTag: opts.tag,
+        assetName: opts.assetName,
+        javaPath: cfg.javaPath,
+        customJar: cfg.decompilerJar || undefined,
+        onLine: (line) => send('ref:line', { line })
+      })
+      if (res.mod && cfg.workspaceDir) {
+        ensureReferenceIgnored(cfg.workspaceDir)
+        send('ref:list-changed')
+      }
+      return res.ok ? { ok: true, mod: toRefUi(res.mod!) } : { ok: false, error: res.error }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  })
+
+  ipcMain.handle('ref:addFiles', async (_e, opts: { title?: string } = {}) => {
+    const cfg = loadConfig()
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+    const picked = await dialog.showOpenDialog(win, {
+      title: 'Pick a mod jar to decompile',
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Mod jars', extensions: ['jar'] }]
+    })
+    if (picked.canceled || !picked.filePaths.length) return { ok: false, error: 'cancelled' }
+    const added: ReferenceModUi[] = []
+    const errors: string[] = []
+    for (const file of picked.filePaths) {
+      const res = await addFromFile({
+        jarPath: file,
+        title: opts.title,
+        javaPath: cfg.javaPath,
+        customJar: cfg.decompilerJar || undefined,
+        onLine: (line) => send('ref:line', { line })
+      })
+      if (res.ok && res.mod) added.push(toRefUi(res.mod))
+      else errors.push(`${path.basename(file)}: ${res.error ?? 'failed'}`)
+    }
+    if (added.length && cfg.workspaceDir) ensureReferenceIgnored(cfg.workspaceDir)
+    return { ok: added.length > 0, mods: added, error: errors.join(' · ') || undefined }
+  })
+
+  ipcMain.handle('ref:remove', (_e, id: string) => {
+    const mods = removeReference(id)
+    return { ok: true, mods: mods.map(toRefUi) }
+  })
+
+  /** Copy decompiled sources into <project>/reference/<slug> so the agent can read them. */
+  ipcMain.handle('ref:link', (_e, id: string) => {
+    const cfg = loadConfig()
+    if (!cfg.workspaceDir) return { ok: false, error: 'Open a mod project first.' }
+    ensureReferenceIgnored(cfg.workspaceDir)
+    const res = linkToProject(id, cfg.workspaceDir)
+    if (res.ok) resetSession()
+    return res
+  })
+
+  ipcMain.handle('ref:search', (_e, opts: { query: string; id?: string; regex?: boolean }) => {
+    if (!opts.query?.trim()) return { hits: [] }
+    try {
+      return { hits: searchReference(opts.query, { id: opts.id, regex: opts.regex }) }
+    } catch (e) {
+      return { hits: [], error: (e as Error).message }
+    }
+  })
+
+  ipcMain.handle('ref:tree', (_e, id: string) => referenceTree(id))
+
+  ipcMain.handle('ref:readFile', (_e, opts: { id: string; path: string }) => readReferenceFile(opts.id, opts.path))
+
+  ipcMain.handle('ref:decompile', async (_e, id: string) => {
+    const cfg = loadConfig()
+    const mod = getReference(id)
+    if (!mod) return { ok: false, error: 'Unknown reference mod.' }
+    try {
+      const { decompileJar } = await import('../github/references')
+      if (!mod.jarPath || !fs.existsSync(mod.jarPath)) return { ok: false, error: 'The cached jar is missing; add the mod again.' }
+      const dest = path.join(path.dirname(mod.jarPath), 'sources')
+      const job = await decompileJar(mod.jarPath, dest, { javaPath: cfg.javaPath, decompilerJar: cfg.decompilerJar || undefined, onLine: (line) => send('ref:line', { line }) })
+      // Re-register through the public adders so the index stays consistent.
+      if (mod.source === 'github-release' && mod.repo) {
+        const [owner, repo] = mod.repo.split('/')
+        await addFromGithub({ owner, repo, releaseTag: mod.version, assetName: mod.jarName, javaPath: cfg.javaPath, customJar: cfg.decompilerJar || undefined, onLine: (line) => send('ref:line', { line }) })
+      } else {
+        await addFromFile({ jarPath: mod.jarPath, title: mod.title, licence: mod.license, javaPath: cfg.javaPath, customJar: cfg.decompilerJar || undefined, onLine: (line) => send('ref:line', { line }) })
+      }
+      const updated = getReference(id)
+      return job.ok ? { ok: true, mod: updated ? toRefUi(updated) : undefined } : { ok: false, error: job.error, mod: updated ? toRefUi(updated) : undefined }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  })
+
+  ipcMain.handle('ref:openFolder', async (_e, id: string) => {
+    const mod = getReference(id)
+    if (mod?.sourcesDir) await shell.openPath(mod.sourcesDir)
+  })
+
+  ipcMain.handle('ref:openHomepage', async (_e, url: string) => {
+    if (/^https?:\/\//i.test(url)) await shell.openExternal(url)
   })
 
   // ---------------- project ----------------
@@ -597,4 +874,30 @@ function listTree(root: string, limit: number): { path: string; dir: boolean }[]
   }
   walk(root, 0)
   return out
+}
+
+/** Trim the stored record down to what the renderer needs. */
+function toRefUi(mod: import('../github/references').ReferenceMod | ReferenceModUi): ReferenceModUi {
+  const m = mod as import('../github/references').ReferenceMod
+  return {
+    id: m.id,
+    slug: m.slug,
+    title: m.title,
+    version: m.version,
+    source: m.source,
+    repo: m.repo,
+    homepage: m.homepage,
+    license: m.license,
+    jarName: m.jarName,
+    jarSize: m.jarSize,
+    modId: m.modId,
+    loader: m.loader,
+    mcVersion: m.mcVersion,
+    decompiled: m.decompiled,
+    decompiler: m.decompiler,
+    sourcesDir: m.sourcesDir,
+    linked: m.linked,
+    createdAt: m.createdAt,
+    error: m.error
+  }
 }

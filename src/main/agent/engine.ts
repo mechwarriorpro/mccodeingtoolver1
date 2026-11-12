@@ -8,6 +8,7 @@ import { AsyncQueue } from '../util/async'
 import { buildAgents, coordinatorPrompt } from './orchestrator'
 import { buildSystemPrompt } from './prompt'
 import { createAgentTools, readProps } from './tools'
+import { listReferences } from '../github/references'
 
 export interface EngineEvents {
   onAssistantText: (text: string) => void
@@ -47,7 +48,10 @@ const SAFE_TOOLS = new Set([
   'mcp__mcfrogeagent__game_status',
   'mcp__mcfrogeagent__read_log',
   'mcp__mcfrogeagent__list_screenshots',
-  'mcp__mcfrogeagent__screenshot'
+  'mcp__mcfrogeagent__screenshot',
+  'mcp__mcfrogeagent__list_reference_mods',
+  'mcp__mcfrogeagent__search_reference',
+  'mcp__mcfrogeagent__reference_status'
 ])
 
 const SAFE_SHELL = [
@@ -195,6 +199,10 @@ export class AgentSession {
         type: 'preset',
         preset: 'claude_code',
         append: `${buildSystemPrompt({
+          references: listReferences()
+            .filter((m) => m.decompiled)
+            .map((m) => ({ title: m.title, slug: m.slug, version: m.version, licence: m.license })),
+          githubSignedIn: !!(cfg.github.owner && cfg.github.repo),
           modId: props.mod_id ?? '',
           workspaceDir: workspace,
           autonomy: this.permissionMode,

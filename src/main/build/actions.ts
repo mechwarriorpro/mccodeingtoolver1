@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
 import { run } from '../util/exec'
+import { authToken, fetchUser, readAuth } from '../github/oauth'
 import type { BuildResult } from './gradle'
 
 export interface GhConfig {
@@ -11,10 +12,101 @@ export interface GhConfig {
 }
 
 export interface GhPreflight {
+  /** The CLI is installed (optional: the app has its own token). */
   ghFound: boolean
+  /** Signed in either through the app or through `gh`. */
   authed: boolean
   repoOk: boolean
+  /** What is doing the authenticating, for the UI status line. */
+  identity?: { login: string; via: 'app' | 'cli' }
   messages: string[]
+}
+
+/**
+ * Credentials for git and the GitHub API.
+ *
+ * The app signs in with GitHub itself (device flow) and stores a token; the CLI
+ * is only used when no token is stored, so a machine without `gh` still works.
+ * A personal access token in GITHUB_TOKEN/GH_TOKEN is the last resort, which
+ * keeps CI and power users working.
+ */
+export interface GithubContext {
+  token: string
+  login?: string
+  ghCli: boolean
+}
+
+export async function githubContext(): Promise<GithubContext> {
+  // Order matters. A token the user just signed in with must win over anything
+  // ambient, and an explicit `gh auth login` must win over GITHUB_TOKEN, which
+  // is often a stale CI variable that cannot push.
+  const stored = readAuth()
+  if (stored?.token) return { token: stored.token, login: stored.login, ghCli: false }
+
+  const ver = await run('gh', ['--version'], { timeoutMs: 15000 }).catch(() => null)
+  const ghCli = !!ver && ver.code === 0
+  if (ghCli) {
+    const auth = await run('gh', ['auth', 'token'], {
+      timeoutMs: 20000,
+      // gh prints the env token instead of the stored one when these are set;
+      // hide them so we get the account the user actually signed in with.
+      env: { ...process.env, GITHUB_TOKEN: '', GH_TOKEN: '' }
+    }).catch(() => null)
+    const cliToken = auth && auth.code === 0 ? auth.stdout.trim() : ''
+    if (cliToken) {
+      const login = await fetchUser(cliToken).then((u) => u.login).catch(() => undefined)
+      if (login) return { token: cliToken, login, ghCli: true }
+    }
+  }
+
+  const envToken = (process.env.GITHUB_TOKEN || process.env.GH_TOKEN || '').trim()
+  if (envToken) {
+    const login = await fetchUser(envToken).then((u) => u.login).catch(() => undefined)
+    return { token: envToken, login, ghCli: false }
+  }
+  return { token: '', ghCli }
+}
+
+/** Environment for git: an askpass helper keeps the token off the command line. */
+function gitEnv(ctx: GithubContext): NodeJS.ProcessEnv | undefined {
+  if (!ctx.ghCli || !ctx.token) return undefined
+  return { ...process.env }
+}
+
+async function ghApi(
+  ctx: GithubContext,
+  pathOrUrl: string,
+  init: RequestInit = {}
+): Promise<{ ok: boolean; status: number; data: any; text: string }> {
+  const url = pathOrUrl.startsWith('http') ? pathOrUrl : `https://api.github.com${pathOrUrl}`
+  const res = await fetch(url, {
+    ...init,
+    headers: {
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': 'MC-Forge-Agent',
+      ...(ctx.token ? { Authorization: `Bearer ${ctx.token}` } : {}),
+      ...(init.headers as Record<string, string> | undefined)
+    }
+  })
+  const text = await res.text()
+  let data: any = null
+  try {
+    data = text ? JSON.parse(text) : null
+  } catch {
+    /* non-JSON error page */
+  }
+  return { ok: res.ok, status: res.status, data, text }
+}
+
+/** True when the token may push to the repo (admin/push permission). */
+async function canPush(ctx: GithubContext, owner: string, repo: string): Promise<boolean> {
+  const res = await ghApi(ctx, `/repos/${owner}/${repo}`)
+  if (res.status === 404) return false
+  if (!res.ok) return false
+  const perms = res.data?.permissions
+  if (perms) return !!(perms.push || perms.admin || perms.maintain)
+  return true
 }
 
 export function ensureWorkflow(dir: string, modId: string): string {
@@ -69,31 +161,59 @@ export async function ghPreflight(cfg: GhConfig, dir: string): Promise<GhPreflig
   const messages: string[] = []
   const ver = await run('gh', ['--version'], { timeoutMs: 20000 }).catch(() => null)
   const ghFound = !!ver && ver.code === 0
-  if (!ghFound) {
-    messages.push('GitHub CLI (gh) not found. Install it from https://cli.github.com and sign in with `gh auth login`.')
-    return { ghFound, authed: false, repoOk: false, messages }
+  const ctx = await githubContext()
+  const authed = !!ctx.token
+  if (!authed) {
+    messages.push(
+      ghFound
+        ? 'Not signed in. Use "Sign in with GitHub" in Settings, or run `gh auth login`.'
+        : 'Not signed in. Use "Sign in with GitHub" in Settings — no GitHub CLI needed.'
+    )
+    return { ghFound, authed, repoOk: false, messages }
   }
-  const auth = await run('gh', ['auth', 'status'], { cwd: dir, timeoutMs: 30000 }).catch(() => null)
-  const authed = !!auth && auth.code === 0
-  if (!authed) messages.push('gh is installed but not signed in. Run `gh auth login` in a terminal.')
+  const identity = ctx.login ? { login: ctx.login, via: ctx.ghCli ? ('cli' as const) : ('app' as const) } : undefined
 
   let repoOk = false
-  if (authed && cfg.owner && cfg.repo) {
-    const repo = await run('gh', ['repo', 'view', `${cfg.owner}/${cfg.repo}`, '--json', 'nameWithOwner,defaultBranchRef'], {
-      cwd: dir,
-      timeoutMs: 40000
-    }).catch(() => null)
-    repoOk = !!repo && repo.code === 0
-    if (!repoOk) messages.push(`Cannot access ${cfg.owner}/${cfg.repo} with the signed-in account.`)
-  } else if (authed) {
+  if (cfg.owner && cfg.repo) {
+    repoOk = await canPush(ctx, cfg.owner, cfg.repo)
+    if (!repoOk) messages.push(`Cannot push to ${cfg.owner}/${cfg.repo}${identity ? ` as ${identity.login}` : ''}. Check the repo name and the token's repo scope.`)
+  } else {
     messages.push('Set the GitHub owner and repo in Settings.')
   }
-  return { ghFound, authed, repoOk, messages }
+  return { ghFound, authed, repoOk, identity, messages }
 }
 
-async function git(args: string[], cwd: string): Promise<{ code: number | null; out: string; err: string }> {
-  const res = await run('git', args, { cwd, timeoutMs: 180000 })
+async function git(args: string[], cwd: string, env?: NodeJS.ProcessEnv): Promise<{ code: number | null; out: string; err: string }> {
+  const res = await run('git', args, { cwd, timeoutMs: 180000, env })
   return { code: res.code, out: res.stdout.trim(), err: res.stderr.trim() }
+}
+
+/**
+ * Push with the stored token in an HTTP header, so the credential is never
+ * written to .git/config (where it would show up in `git remote -v` and in any
+ * copy of the project). `-c http.extraheader` applies to this one command only.
+ */
+async function gitPush(ctx: GithubContext, cwd: string, args: string[]): Promise<{ code: number | null; out: string; err: string }> {
+  const basic = Buffer.from(`x-access-token:${ctx.token}`).toString('base64')
+  return git(['-c', `http.https://github.com/.extraheader=Authorization: Basic ${basic}`, ...args], cwd, gitEnv(ctx))
+}
+
+/** Fetch a URL to disk, following redirects (Actions artifact blobs redirect to storage). */
+async function downloadFile(ctx: GithubContext, url: string, target: string, onLine: (l: string) => void): Promise<{ ok: boolean; error?: string }> {
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  try {
+    const res = await fetch(url, {
+      redirect: 'follow',
+      headers: { Authorization: `Bearer ${ctx.token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'MC-Forge-Agent' }
+    })
+    if (!res.ok) return { ok: false, error: `HTTP ${res.status} downloading ${url}` }
+    const buf = Buffer.from(await res.arrayBuffer())
+    fs.writeFileSync(target, buf)
+    onLine(`downloaded ${(buf.length / 1024 / 1024).toFixed(1)} MB -> ${path.basename(target)}`)
+    return { ok: true }
+  } catch (e) {
+    return { ok: false, error: `download failed: ${(e as Error).message}` }
+  }
 }
 
 /**
@@ -154,82 +274,103 @@ export async function runActionsBuild(
   const branchRes = await git(['rev-parse', '--abbrev-ref', 'HEAD'], dir)
   const branch = cfg.branch || branchRes.out || 'main'
   push(`[actions] pushing ${branch}`)
-  const pushRes = await git(['push', '-u', 'origin', `HEAD:${branch}`], dir)
-  if (pushRes.code !== 0) return fail(`git push failed: ${pushRes.err || pushRes.out}`)
+  const ctx = await githubContext()
+  if (!ctx.token) return fail('Not signed in to GitHub. Sign in from Settings > GitHub.')
+  const pushRes = await gitPush(ctx, dir, ['push', '-u', 'origin', `HEAD:${branch}`])
+  if (pushRes.code !== 0) return fail(`git push failed: ${simplifyGitError(pushRes.err || pushRes.out, ctx)}`)
 
   const head = await git(['rev-parse', 'HEAD'], dir)
   const sha = head.out
 
   // 4. Trigger the workflow and find the run for this commit
   push('[actions] dispatching workflow')
-  await git(['-c', 'core.quotepath=false', 'rev-parse', '--verify', 'HEAD'], dir) // noop keeps log readable
-  const dispatch = await run('gh', ['workflow', 'run', 'build.yml', '--ref', branch], { cwd: dir, timeoutMs: 60000 })
-  if (dispatch.code !== 0) {
-    push(`[actions] workflow run failed to start: ${dispatch.stderr.trim()}`)
+  const dispatch = await ghApi(ctx, `/repos/${cfg.owner}/${cfg.repo}/actions/workflows/build.yml/dispatches`, {
+    method: 'POST',
+    body: JSON.stringify({ ref: branch })
+  })
+  if (!dispatch.ok) {
+    push(`[actions] dispatch failed (${dispatch.status}); the push may already have started a run: ${dispatch.text.slice(0, 200)}`)
   }
 
   let runId: number | null = null
-  for (let attempt = 0; attempt < 14 && !runId; attempt++) {
+  let runUrl = ''
+  for (let attempt = 0; attempt < 20 && !runId; attempt++) {
     await sleep(4000)
     if (signal?.aborted) return fail('cancelled')
-    const list = await run(
-      'gh',
-      ['run', 'list', '--workflow', 'build.yml', '--branch', branch, '--limit', '10', '--json', 'databaseId,headSha,status,conclusion,url,displayTitle'],
-      { cwd: dir, timeoutMs: 60000 }
-    )
-    if (list.code !== 0) {
-      push(`[actions] run list failed: ${list.stderr.trim()}`)
+    const list = await ghApi(ctx, `/repos/${cfg.owner}/${cfg.repo}/actions/workflows/build.yml/runs?branch=${encodeURIComponent(branch)}&per_page=10`)
+    if (!list.ok) {
+      push(`[actions] listing runs failed: ${list.status} ${list.text.slice(0, 160)}`)
       continue
     }
-    try {
-      const runs = JSON.parse(list.stdout) as { databaseId: number; headSha: string; url: string }[]
-      const match = runs.find((r) => r.headSha === sha) ?? runs[0]
-      if (match) {
-        runId = match.databaseId
-        push(`[actions] run ${runId} ${match.url}`)
-      }
-    } catch {
-      push('[actions] could not parse gh run list output')
+    const runs = (list.data?.workflow_runs ?? []) as { id: number; head_sha: string; html_url: string }[]
+    const match = runs.find((r) => r.head_sha === sha) ?? runs[0]
+    if (match) {
+      runId = match.id
+      runUrl = match.html_url ?? ''
+      push(`[actions] run ${runId} ${runUrl}`)
     }
   }
-  if (!runId) return fail('Could not find a workflow run for this commit.')
-
-  // 5. Wait for completion
-  const watch = await run('gh', ['run', 'watch', String(runId), '--exit-status', '--interval', '8'], {
-    cwd: dir,
-    timeoutMs: 45 * 60 * 1000,
-    onLine: (line) => push(`[gh] ${line}`),
-    signal
-  })
-  const view = await run('gh', ['run', 'view', String(runId), '--json', 'conclusion,url'], { cwd: dir, timeoutMs: 60000 })
-  let runUrl = ''
-  let conclusion = ''
-  try {
-    const parsed = JSON.parse(view.stdout) as { conclusion: string; url: string }
-    runUrl = parsed.url
-    conclusion = parsed.conclusion
-  } catch {
-    /* ignore */
+  if (!runId) {
+    return fail(
+      `Could not find a workflow run for this commit. Check that .github/workflows/build.yml exists on ${branch} and that the token has the "workflow" scope.`,
+      runUrl
+    )
   }
+
+  // 5. Wait for completion (poll; no gh needed)
+  let conclusion = ''
+  const deadline = Date.now() + 45 * 60 * 1000
+  while (Date.now() < deadline) {
+    if (signal?.aborted) return fail('cancelled', runUrl)
+    await sleep(8000)
+    const view = await ghApi(ctx, `/repos/${cfg.owner}/${cfg.repo}/actions/runs/${runId}`)
+    if (!view.ok) {
+      push(`[actions] polling run failed: ${view.status}`)
+      continue
+    }
+    runUrl = view.data?.html_url ?? runUrl
+    const status = String(view.data?.status ?? '')
+    push(`[actions] run ${runId}: ${status}${view.data?.conclusion ? ` (${view.data.conclusion})` : ''}`)
+    if (status === 'completed') {
+      conclusion = String(view.data?.conclusion ?? 'unknown')
+      break
+    }
+  }
+  if (!conclusion) return fail('Timed out waiting for the workflow to finish.', runUrl)
+
   if (conclusion !== 'success') {
-    const logDump = await run('gh', ['run', 'view', String(runId), '--log-failed'], { cwd: dir, timeoutMs: 120000 })
-    const tail = logDump.stdout.split(/\r?\n/).slice(-120).join('\n')
-    push(tail)
+    const jobs = await ghApi(ctx, `/repos/${cfg.owner}/${cfg.repo}/actions/runs/${runId}/jobs`)
+    const failed = ((jobs.data?.jobs ?? []) as { id: number; name: string; conclusion: string; steps?: { name: string; conclusion: string }[] }[]).filter(
+      (j) => j.conclusion && j.conclusion !== 'success'
+    )
+    for (const job of failed) {
+      const badSteps = (job.steps ?? []).filter((st) => st.conclusion && !['success', 'skipped'].includes(st.conclusion))
+      push(`[actions] job "${job.name}" ${job.conclusion}; failing steps: ${badSteps.map((st) => st.name).join(', ') || '(none reported)'}`)
+    }
+    const tail = await fetchFailedLogTail(ctx, cfg.owner, cfg.repo, runId, failed.map((j) => j.id), push)
     return {
       ok: false,
-      code: watch.code,
+      code: 1,
       logPath,
-      errors: [`Workflow finished with "${conclusion || 'failure'}". See ${runUrl || 'the Actions tab'}.`, ...extractGradleErrors(tail)],
+      errors: [`Workflow finished with "${conclusion}". See ${runUrl || 'the Actions tab'}.`, ...failed.map((j) => `job ${j.name}: ${j.conclusion}`), ...extractGradleErrors(tail)],
       durationMs: Date.now() - started
     }
   }
   push(`[actions] workflow succeeded ${runUrl}`)
 
-  // 6. Download the jar artifact
+  // 6. Download the jar artifact through the REST API
   const dlDir = path.join(dir, '.agent', 'artifacts', String(runId))
   fs.mkdirSync(dlDir, { recursive: true })
-  const dl = await run('gh', ['run', 'download', String(runId), '--dir', dlDir], { cwd: dir, timeoutMs: 300000, onLine: (l) => push(`[gh] ${l}`) })
-  if (dl.code !== 0) return fail(`artifact download failed: ${dl.stderr.trim()}`, runUrl)
+  const artifacts = await ghApi(ctx, `/repos/${cfg.owner}/${cfg.repo}/actions/runs/${runId}/artifacts`)
+  if (!artifacts.ok) return fail(`listing artifacts failed: ${artifacts.status}`, runUrl)
+  const list = (artifacts.data?.artifacts ?? []) as { id: number; name: string; archive_download_url: string; expired: boolean }[]
+  const artifact = list.find((a) => /jar/i.test(a.name)) ?? list[0]
+  if (!artifact) return fail('Workflow succeeded but published no artifact.', runUrl)
+  if (artifact.expired) return fail('The workflow artifact has already expired.', runUrl)
+  const zipPath = path.join(dlDir, `${artifact.name}.zip`)
+  const dl = await downloadFile(ctx, artifact.archive_download_url, zipPath, push)
+  if (!dl.ok) return fail(`artifact download failed: ${dl.error}`, runUrl)
+  extractZip(zipPath, dlDir)
 
   const jar = findJar(dlDir)
   if (!jar) return fail('Workflow succeeded but no jar was found in the artifact.', runUrl)
@@ -272,16 +413,31 @@ function sleep(ms: number): Promise<void> {
 export async function initGithubRepo(cfg: GhConfig, dir: string, isPrivate: boolean, onLine: (l: string) => void): Promise<{ ok: boolean; url?: string; error?: string }> {
   const push = onLine
   if (!cfg.owner || !cfg.repo) return { ok: false, error: 'Owner and repo are required.' }
-  const exists = await run('gh', ['repo', 'view', `${cfg.owner}/${cfg.repo}`], { cwd: dir, timeoutMs: 40000 })
-  if (exists.code !== 0) {
-    push(`[gh] creating ${cfg.owner}/${cfg.repo}`)
-    const create = await run(
-      'gh',
-      ['repo', 'create', `${cfg.owner}/${cfg.repo}`, isPrivate ? '--private' : '--public', '--description', 'Minecraft 1.21.1 NeoForge mod (MC Forge Agent)'],
-      { cwd: dir, timeoutMs: 120000, onLine: push }
-    )
-    if (create.code !== 0) return { ok: false, error: create.stderr.trim() || create.stdout.trim() }
+  const ctx = await githubContext()
+  if (!ctx.token) return { ok: false, error: 'Sign in to GitHub first (Settings > GitHub).' }
+
+  const exists = await ghApi(ctx, `/repos/${cfg.owner}/${cfg.repo}`)
+  if (!exists.ok && exists.status !== 404) {
+    return { ok: false, error: `Cannot check ${cfg.owner}/${cfg.repo}: ${exists.status} ${exists.text.slice(0, 160)}` }
   }
+  if (exists.status === 404) {
+    push(`[github] creating ${cfg.owner}/${cfg.repo}`)
+    // `gh repo create owner/name` targets the signed-in user; the API takes the
+    // name and lets the account decide, which matches this behaviour.
+    const create = await ghApi(ctx, '/user/repos', {
+      method: 'POST',
+      body: JSON.stringify({
+        name: cfg.repo,
+        private: isPrivate,
+        description: 'Minecraft 1.21.1 NeoForge mod (MC Forge Agent)',
+        has_issues: true,
+        has_wiki: false
+      })
+    })
+    if (!create.ok) return { ok: false, error: `repo create failed: ${create.status} ${create.data?.message ?? create.text.slice(0, 200)}` }
+    push(`[github] created ${create.data?.full_name ?? `${cfg.owner}/${cfg.repo}`}`)
+  }
+
   if (!fs.existsSync(path.join(dir, '.git'))) {
     const init = await run('git', ['init', '-b', cfg.branch || 'main'], { cwd: dir, timeoutMs: 60000 })
     if (init.code !== 0) return { ok: false, error: init.stderr.trim() }
@@ -293,7 +449,63 @@ export async function initGithubRepo(cfg: GhConfig, dir: string, isPrivate: bool
   await run('git', ['add', '-A'], { cwd: dir })
   await run('git', ['-c', 'user.name=MC Forge Agent', '-c', 'user.email=agent@localhost', 'commit', '-m', 'Initial mod project (MC Forge Agent)'], { cwd: dir })
   const branch = cfg.branch || 'main'
-  const pushed = await run('git', ['push', '-u', 'origin', `HEAD:${branch}`], { cwd: dir, timeoutMs: 300000, onLine: push })
-  if (pushed.code !== 0) return { ok: false, error: pushed.stderr.trim() }
+  const pushed = await gitPush(ctx, dir, ['push', '-u', 'origin', `HEAD:${branch}`])
+  if (pushed.code !== 0) return { ok: false, error: simplifyGitError(pushed.err || pushed.out, ctx) }
   return { ok: true, url: `https://github.com/${cfg.owner}/${cfg.repo}` }
+}
+
+/** Turn git's auth failures into something a user can act on. */
+function simplifyGitError(text: string, ctx: GithubContext): string {
+  const raw = text.trim()
+  if (/Authentication failed|could not read Username|terminal prompts disabled|Invalid username or password/i.test(raw)) {
+    return `GitHub refused the stored credentials${ctx.login ? ` for ${ctx.login}` : ''}. Sign out and in again from Settings > GitHub, and make sure the account has push access. (git said: ${raw.slice(0, 200)})`
+  }
+  if (/protected branch|GH006|refusing to allow/i.test(raw)) {
+    return `The ${ctx.login ? '' : ''}branch is protected and rejected the push. (git said: ${raw.slice(0, 300)})`
+  }
+  return raw
+}
+
+/**
+ * Download the log zip for failed jobs and return the tail. The logs endpoint
+ * redirects to storage; if that host is unreachable (corporate proxy), the job
+ * and step names from the API are still enough to say what broke.
+ */
+async function fetchFailedLogTail(ctx: GithubContext, owner: string, repo: string, runId: number, jobIds: number[], push: (l: string) => void): Promise<string> {
+  const chunks: string[] = []
+  for (const jobId of jobIds.slice(0, 3)) {
+    try {
+      const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/actions/jobs/${jobId}/logs`, {
+        redirect: 'follow',
+        headers: { Authorization: `Bearer ${ctx.token}`, Accept: 'application/vnd.github+json', 'User-Agent': 'MC-Forge-Agent' }
+      })
+      if (!res.ok) {
+        push(`[actions] log download for job ${jobId} failed: HTTP ${res.status}`)
+        continue
+      }
+      const buf = Buffer.from(await res.arrayBuffer())
+      const zipPath = path.join(app.getPath('temp'), `mcf-logs-${runId}-${jobId}.zip`)
+      fs.writeFileSync(zipPath, buf)
+      const outDir = path.join(app.getPath('temp'), `mcf-logs-${runId}-${jobId}`)
+      extractZip(zipPath, outDir)
+      for (const file of fs.readdirSync(outDir)) {
+        const full = path.join(outDir, file)
+        if (fs.statSync(full).isFile()) chunks.push(fs.readFileSync(full, 'utf8'))
+      }
+      fs.rmSync(outDir, { recursive: true, force: true })
+      fs.rmSync(zipPath, { force: true })
+    } catch (e) {
+      push(`[actions] log download failed: ${(e as Error).message}`)
+    }
+  }
+  const tail = chunks.join('\n').split(/\r?\n/).slice(-200).join('\n')
+  if (tail) push(tail)
+  return tail
+}
+
+/** Actions artifacts are zip files; both the jar and the logs need unpacking. */
+function extractZip(zipPath: string, destDir: string): void {
+  const AdmZip = require('adm-zip') as typeof import('adm-zip')
+  const zip = new AdmZip(zipPath)
+  zip.extractAllTo(destDir, true)
 }

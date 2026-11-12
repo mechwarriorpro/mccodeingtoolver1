@@ -12,6 +12,30 @@ const api = {
     set: (patch: unknown) => ipcRenderer.invoke('config:set', patch)
   },
   app: { version: () => ipcRenderer.invoke('app:version') },
+
+  github: {
+    status: () => ipcRenderer.invoke('github:status'),
+    loginDevice: (opts?: { openBrowser?: boolean }) => ipcRenderer.invoke('github:loginDevice', opts),
+    loginToken: (token: string) => ipcRenderer.invoke('github:loginToken', token),
+    logout: () => ipcRenderer.invoke('github:logout'),
+    authPath: () => ipcRenderer.invoke('github:authPath'),
+    openDevicePage: () => ipcRenderer.invoke('github:openDevicePage')
+  },
+
+  refs: {
+    list: () => ipcRenderer.invoke('ref:list'),
+    resolve: (input: string) => ipcRenderer.invoke('ref:resolve', input),
+    addGithub: (opts: { repo: string; tag?: string; assetName?: string }) => ipcRenderer.invoke('ref:addGithub', opts),
+    addFiles: (opts?: { title?: string }) => ipcRenderer.invoke('ref:addFiles', opts),
+    remove: (id: string) => ipcRenderer.invoke('ref:remove', id),
+    link: (id: string) => ipcRenderer.invoke('ref:link', id),
+    search: (opts: { query: string; id?: string; regex?: boolean }) => ipcRenderer.invoke('ref:search', opts),
+    tree: (id: string) => ipcRenderer.invoke('ref:tree', id),
+    readFile: (opts: { id: string; path: string }) => ipcRenderer.invoke('ref:readFile', opts),
+    decompile: (id: string) => ipcRenderer.invoke('ref:decompile', id),
+    openFolder: (id: string) => ipcRenderer.invoke('ref:openFolder', id),
+    openHomepage: (url: string) => ipcRenderer.invoke('ref:openHomepage', url)
+  },
   env: { report: () => ipcRenderer.invoke('env:report') },
 
   project: {
@@ -92,7 +116,11 @@ const api = {
     onBuildDone: (cb: (p: unknown) => void) => on('build:done', cb),
     onGameLine: (cb: (p: unknown) => void) => on('game:line', cb),
     onGameStatus: (cb: (p: unknown) => void) => on('game:status', cb),
-    onScreenshot: (cb: (p: unknown) => void) => on('screenshot:new', cb)
+    onScreenshot: (cb: (p: unknown) => void) => on('screenshot:new', cb),
+    onGithubDeviceCode: (cb: (p: unknown) => void) => on('github:device-code', cb),
+    onGithubDeviceTick: (cb: (p: unknown) => void) => on('github:device-tick', cb),
+    onRefLine: (cb: (p: unknown) => void) => on('ref:line', cb),
+    onRefListChanged: (cb: () => void) => on('ref:list-changed', cb)
   },
 
   shell: {

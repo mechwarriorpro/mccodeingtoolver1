@@ -7,8 +7,9 @@ import GamePanel from './components/GamePanel'
 import BuildPanel from './components/BuildPanel'
 import SetupModal from './components/SetupModal'
 import SettingsModal from './components/SettingsModal'
+import ReferencePanel from './components/ReferencePanel'
 
-type RailTab = 'game' | 'project' | 'files'
+type RailTab = 'game' | 'project' | 'files' | 'refs'
 
 export default function App(): JSX.Element {
   const [config, setConfig] = useState<(AppConfig & { apiKeySet: boolean }) | null>(null)
@@ -319,14 +320,17 @@ export default function App(): JSX.Element {
 
         <div className="rail">
           <div className="rail-tabs">
-            <button className={railTab === 'game' ? 'on' : ''} onClick={() => setRailTab('game')}>
-              Game & Vision
+            <button className={railTab === 'game' ? 'on' : ''} onClick={() => setRailTab('game')} title="Game window, launch, vision">
+              Game
             </button>
             <button className={railTab === 'project' ? 'on' : ''} onClick={() => setRailTab('project')}>
               Build
             </button>
             <button className={railTab === 'files' ? 'on' : ''} onClick={() => setRailTab('files')}>
               Screenshots
+            </button>
+            <button className={railTab === 'refs' ? 'on' : ''} onClick={() => setRailTab('refs')}>
+              References
             </button>
           </div>
           <div className="rail-body">
@@ -342,6 +346,12 @@ export default function App(): JSX.Element {
             )}
             {railTab === 'project' && (
               <BuildPanel project={project} config={config} onRefreshProject={() => void refreshProject()} onOpenImage={setLightbox} onToast={toast} />
+            )}
+            {railTab === 'refs' && (
+              <div className="card">
+                <h4>Reference mods</h4>
+                <ReferencePanel project={project} onToast={toast} />
+              </div>
             )}
             {railTab === 'files' && (
               <div className="card">
@@ -369,6 +379,10 @@ export default function App(): JSX.Element {
           onSaved={(cfg) => {
             setConfig(cfg)
             void refreshProject()
+          }}
+          onOpenReferences={() => {
+            setShowSettings(false)
+            setRailTab('refs')
           }}
           onToast={toast}
         />

@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react'
 import type { AppConfig, GameInstance } from '../../../shared/types'
 import { api } from '../lib/api'
+import GithubLogin from './GithubLogin'
 
 interface Props {
   config: AppConfig & { apiKeySet: boolean }
   onClose: () => void
   onSaved: (cfg: AppConfig & { apiKeySet: boolean }) => void
   onToast: (text: string, kind?: 'ok' | 'err') => void
+  /** Opens the reference-mod panel (decompiler) from the GitHub tab. */
+  onOpenReferences?: () => void
 }
 
 const MODELS = [
@@ -16,7 +19,7 @@ const MODELS = [
   'claude-3-7-sonnet-latest'
 ]
 
-export default function SettingsModal({ config, onClose, onSaved, onToast }: Props): JSX.Element {
+export default function SettingsModal({ config, onClose, onSaved, onToast, onOpenReferences }: Props): JSX.Element {
   const [tab, setTab] = useState<'model' | 'github' | 'game'>('model')
   const [draft, setDraft] = useState(config)
   const [apiKey, setApiKey] = useState('')
@@ -95,6 +98,21 @@ export default function SettingsModal({ config, onClose, onSaved, onToast }: Pro
               </div>
             </div>
             <div className="field">
+              <label>Decompiler jar (empty = download Vineflower automatically)</label>
+              <div className="row">
+                <input value={draft.decompilerJar} onChange={(e) => set('decompilerJar', e.target.value)} placeholder="C:\\Tools\\cfr-0.152.jar" />
+                <button
+                  onClick={async () => {
+                    const files = await api.dialog.pickFiles({ title: 'Pick a decompiler jar', filters: [{ name: 'Jar', extensions: ['jar'] }] })
+                    if (files[0]) set('decompilerJar', files[0])
+                  }}
+                >
+                  Browse
+                </button>
+              </div>
+              <div className="hint">Used for reference mods. Vineflower, CFR or another jar with a command-line interface all work.</div>
+            </div>
+            <div className="field">
               <label>Java 21 executable (empty = auto-detect)</label>
               <div className="row">
                 <input value={draft.javaPath} onChange={(e) => set('javaPath', e.target.value)} placeholder="C:\\Program Files\\Eclipse Adoptium\\jdk-21\\bin\\java.exe" />
@@ -113,6 +131,7 @@ export default function SettingsModal({ config, onClose, onSaved, onToast }: Pro
 
         {tab === 'github' && (
           <>
+            <GithubLogin onToast={onToast} />
             <div className="two-col">
               <div className="field">
                 <label>Owner</label>
@@ -128,7 +147,8 @@ export default function SettingsModal({ config, onClose, onSaved, onToast }: Pro
               <input value={draft.github.branch} onChange={(e) => set('github', { ...draft.github, branch: e.target.value })} placeholder="main" />
             </div>
             <div className="hint" style={{ marginBottom: 12 }}>
-              Requires the GitHub CLI installed and signed in (<code>gh auth login</code>). The app commits your source, pushes, runs the build workflow and downloads the jar.
+              The app commits your source, pushes, runs the build workflow and downloads the jar with the account above.
+              Git itself still needs to be installed; the GitHub CLI does not.
             </div>
             <div style={{ display: 'flex', gap: 6 }}>
               <button
@@ -147,6 +167,14 @@ export default function SettingsModal({ config, onClose, onSaved, onToast }: Pro
               >
                 Create repo & push
               </button>
+              {onOpenReferences && (
+                <button className="small ghost" onClick={onOpenReferences}>
+                  Reference mods (decompiler)…
+                </button>
+              )}
+            </div>
+            <div className="hint" style={{ marginTop: 10 }}>
+              Reference mods: download another mod's release jar, decompile it and let the agent read it for API examples.
             </div>
           </>
         )}

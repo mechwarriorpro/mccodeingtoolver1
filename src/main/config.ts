@@ -12,6 +12,7 @@ const defaultConfig: AppConfig = {
   workspaceDir: '',
   github: { owner: '', repo: '', branch: '' },
   javaPath: '',
+  decompilerJar: '',
   preferWrapper: true,
   game: {
     instances: [],

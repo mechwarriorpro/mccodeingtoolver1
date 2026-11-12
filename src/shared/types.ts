@@ -24,6 +24,8 @@ export interface AppConfig {
 
   /** Local builds need a JDK 21. Empty = auto-detect. */
   javaPath: string
+  /** Optional decompiler jar to use instead of downloading Vineflower. */
+  decompilerJar: string
   /** gradlew vs gradle. */
   preferWrapper: boolean
 
@@ -153,6 +155,61 @@ export interface GameStatus {
 export interface EnvReport {
   ok: boolean
   items: { id: string; label: string; ok: boolean; detail: string; fix?: string }[]
+}
+
+export interface GithubStatus {
+  /** Signed in and the token still works. */
+  connected: boolean
+  login: string
+  name?: string
+  avatarUrl?: string
+  scopes: string[]
+  method: 'device' | 'web' | 'pat'
+  savedAt: number
+  /** The GitHub CLI is also present; the app does not need it. */
+  ghCliFound: boolean
+  repoOk: boolean
+  repoMessage?: string
+  /** Set when the token was rejected and the user must sign in again. */
+  error?: string
+}
+
+export interface DeviceLoginPrompt {
+  userCode: string
+  verificationUri: string
+  verificationUriComplete?: string
+  expiresInSec: number
+}
+
+export interface ReferenceModUi {
+  id: string
+  /** Folder name under <project>/reference/. */
+  slug: string
+  title: string
+  version: string
+  source: 'github-release' | 'modrinth' | 'local-file'
+  repo?: string
+  homepage?: string
+  license?: string
+  jarName: string
+  jarSize: number
+  modId?: string
+  loader?: string
+  mcVersion?: string
+  decompiled: boolean
+  decompiler?: string
+  sourcesDir?: string
+  linked?: boolean
+  createdAt: number
+  error?: string
+}
+
+export interface ReleaseOption {
+  tag: string
+  name: string
+  publishedAt?: string
+  prerelease: boolean
+  jars: { name: string; size: number; downloads: number }[]
 }
 
 export interface JarInfo {

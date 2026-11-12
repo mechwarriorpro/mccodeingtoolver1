@@ -12,6 +12,8 @@ import { gameStatus, launchDevClient, readGameLog, stopGame } from '../game/laun
 import { installNeoForge, isNeoForgeInstalled } from '../game/neoforge'
 import { launchNeoForge, runningGame, stopNeoForge } from '../game/client'
 import { ghPreflight, runActionsBuild } from '../build/actions'
+import { addFromGithub, ensureReferenceIgnored, getReference, linkToProject, listReferences, parseRepoRef, searchReference, getReference as getRef } from '../github/references'
+import { authToken } from '../github/oauth'
 import { gitSummary } from '../build/gradle'
 
 type TextResult = { content: { type: 'text'; text: string }[]; isError?: boolean }
@@ -364,6 +366,125 @@ export function createAgentTools(ctx: ToolContext) {
       async () => {
         const shots = listScreenshots().slice(0, 30)
         return text(JSON.stringify(shots, null, 2))
+      }
+    ),
+
+    tool(
+      'add_reference_mod',
+      'Add another mod as read-only reference material: download the jar from a GitHub release (or the user\'s Downloads folder via jarPath), decompile it with Vineflower, and put the sources under <project>/reference/. Use it when the user asks "how does mod X do Y" or when you need a working example of an API. Reference sources are never compiled into the project.',
+      {
+        repo: z.string().optional().describe('GitHub repo, e.g. "owner/name" or a github.com URL'),
+        tag: z.string().optional().describe('Release tag; omit for the latest stable release'),
+        assetName: z.string().optional().describe('Exact jar asset name; omit to pick the mod jar automatically'),
+        jarPath: z.string().optional().describe('Absolute path to a local jar, instead of a GitHub release')
+      },
+      async (args) => {
+        const cfg = loadConfig()
+        if (args.jarPath) {
+          const { addFromFile } = await import('../github/references')
+          const res = await addFromFile({ jarPath: args.jarPath, javaPath: cfg.javaPath, onLine: (l) => ctx.onOutput?.(l, 'build') })
+          if (!res.ok || !res.mod) return err(res.error ?? 'could not add that jar')
+          if (cfg.workspaceDir) {
+            ensureReferenceIgnored(cfg.workspaceDir)
+            linkToProject(res.mod.id, cfg.workspaceDir)
+          }
+          return text(`${res.mod.title} ${res.mod.version}: ${res.mod.decompiled ? 'decompiled and linked into reference/' : `downloaded, decompile failed (${res.mod.error})`}`)
+        }
+        const parsed = args.repo ? parseRepoRef(args.repo) : null
+        if (!parsed) return err('Pass repo (owner/name) or jarPath.')
+        if (!authToken()) {
+          // Public release jars still download without a token; only the release
+          // listing needs auth, and addFromGithub handles a missing token for
+          // public repos via the unauthenticated API.
+        }
+        const res = await addFromGithub({
+          owner: parsed.owner,
+          repo: parsed.repo,
+          releaseTag: args.tag,
+          assetName: args.assetName,
+          javaPath: cfg.javaPath,
+          onLine: (l) => ctx.onOutput?.(l, 'build')
+        })
+        if (!res.ok || !res.mod) return err(res.error ?? 'could not add that mod')
+        let linked = ''
+        if (cfg.workspaceDir && res.mod.decompiled) {
+          ensureReferenceIgnored(cfg.workspaceDir)
+          const link = linkToProject(res.mod.id, cfg.workspaceDir)
+          if (link.ok) linked = ` Sources copied to reference/${res.mod.slug} (${link.files} files).`
+        }
+        return text(
+          `${res.mod.title} ${res.mod.version} (${res.mod.jarName}).${
+            res.mod.decompiled ? ` Decompiled.${linked}` : ` Decompilation failed: ${res.mod.error}`
+          }`
+        )
+      }
+    ),
+
+    tool(
+      'list_reference_mods',
+      'List the reference mods added so far: title, version, whether sources are decompiled, and their licence.',
+      {},
+      async () => {
+        const mods = listReferences().map((m) => ({
+          id: m.id,
+          slug: m.slug,
+          title: m.title,
+          version: m.version,
+          licence: m.license,
+          decompiled: m.decompiled,
+          linkedIntoProject: !!m.linked,
+          modId: m.modId,
+          mcVersion: m.mcVersion,
+          repo: m.repo
+        }))
+        return text(mods.length ? JSON.stringify(mods, null, 2) : 'No reference mods yet.')
+      }
+    ),
+
+    tool(
+      'search_reference',
+      'Search the decompiled reference sources for a symbol, class or string, e.g. "RegisterPayloadHandlersEvent". Returns file:line hits you can then Read from <project>/reference/.',
+      {
+        query: z.string().describe('Text to look for (case-insensitive)'),
+        regex: z.boolean().optional().describe('Treat query as a regular expression'),
+        id: z.string().optional().describe('Limit to one reference mod id')
+      },
+      async (args) => {
+        const { hits } = searchReference(args.query, { regex: args.regex, id: args.id })
+        if (!hits.length) return text(`No matches for "${args.query}".`)
+        return text(
+          JSON.stringify(
+            hits.map((h) => ({ ...h, read: `reference/${getRef(h.id)?.slug ?? h.id}/${h.file}` })),
+            null,
+            2
+          )
+        )
+      }
+    ),
+
+    tool(
+      'reference_status',
+      'Check whether a reference mod is available and where its sources live.',
+      { id: z.string().describe('Reference mod id') },
+      async (args) => {
+        const mod = getReference(args.id)
+        if (!mod) return err(`No reference mod with id ${args.id}.`)
+        return text(
+          JSON.stringify(
+            {
+              title: mod.title,
+              version: mod.version,
+              decompiled: mod.decompiled,
+              linked: !!mod.linked,
+              sourcesDir: mod.sourcesDir,
+              projectCopy: mod.linked ? `reference/${mod.slug}` : null,
+              licence: mod.license,
+              error: mod.error
+            },
+            null,
+            2
+          )
+        )
       }
     )
   ]

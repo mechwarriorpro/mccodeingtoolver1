@@ -218,8 +218,8 @@ textarea { resize: none; }
 .rail { border-left: 1px solid var(--line); background: var(--bg-2); display: flex; flex-direction: column; min-height: 0; }
 .rail-tabs { display: flex; border-bottom: 1px solid var(--line); }
 .rail-tabs button {
-  flex: 1; border: none; border-radius: 0; background: transparent; padding: 10px 6px;
-  font-size: 12.5px; color: var(--muted); border-bottom: 2px solid transparent;
+  flex: 1; border: none; border-radius: 0; background: transparent; padding: 10px 5px;
+  font-size: 12px; color: var(--muted); border-bottom: 2px solid transparent; white-space: nowrap;
 }
 .rail-tabs button.on { color: var(--text); border-bottom-color: var(--accent); background: #10151a; }
 .rail-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; }
@@ -278,6 +278,9 @@ textarea { resize: none; }
 .conv-item.on { background: #16241d; color: var(--text); border: 1px solid #24402f; }
 .conv-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 
+.row { display: flex; gap: 8px; align-items: center; }
+.row input { flex: 1; }
+
 .field { margin-bottom: 12px; }
 .field label { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 5px; }
 .field .row { display: flex; gap: 8px; }
@@ -318,3 +321,41 @@ textarea { resize: none; }
 ::-webkit-scrollbar-thumb { background: #232a33; border-radius: 6px; border: 2px solid transparent; background-clip: content-box; }
 ::-webkit-scrollbar-thumb:hover { background: #2f3946; background-clip: content-box; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ---------------- GitHub sign-in ---------------- */
+.gh-signin { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--bg-3); margin-bottom: 14px; }
+.gh-user { display: flex; gap: 10px; align-items: center; }
+.gh-user img { border-radius: 8px; }
+.gh-avatar-fallback { width: 34px; height: 34px; border-radius: 8px; display: grid; place-items: center; background: var(--accent-dim); color: var(--accent); font-weight: 700; }
+.device-code { border: 1px dashed #33503f; border-radius: 10px; padding: 14px; text-align: center; background: #101a15; }
+.device-code .code {
+  font-family: var(--mono); font-size: 30px; letter-spacing: 5px; font-weight: 700;
+  color: var(--accent); margin: 8px 0 4px; user-select: all;
+}
+.device-code .row { justify-content: center; }
+
+/* ---------------- reference mods ---------------- */
+.refs-add { border: 1px solid var(--line); border-radius: 10px; padding: 12px; background: var(--bg-3); }
+.refs-add > label,
+.refs-search > label { display: block; font-size: 11.5px; color: var(--muted); margin-bottom: 6px; }
+.refs-log {
+  max-height: 150px; overflow-y: auto; margin: 10px 0; padding: 8px 10px; border-radius: 8px;
+  background: #0b0e12; border: 1px solid var(--line); font-family: var(--mono); font-size: 11px; color: var(--dim);
+}
+.refs-list { margin-top: 12px; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.ref-row { display: flex; gap: 10px; align-items: flex-start; padding: 9px 11px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.ref-row:last-child { border-bottom: none; }
+.ref-title { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; font-weight: 600; }
+.linklike { background: none; border: none; padding: 0; color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; }
+.linklike:hover { text-decoration: underline; }
+.refs-search { margin-top: 14px; }
+.hits { margin-top: 8px; max-height: 260px; overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; }
+.hit { display: block; width: 100%; text-align: left; background: none; border: none; border-bottom: 1px solid var(--line); padding: 6px 10px; cursor: pointer; }
+.hit:last-child { border-bottom: none; }
+.hit:hover { background: var(--bg-3); }
+.hit .code-line { display: block; font-family: var(--mono); font-size: 11.5px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.modal .box.wide { width: min(1040px, calc(100vw - 40px)); }
+.code-view {
+  max-height: 60vh; overflow: auto; margin: 0; padding: 12px; border-radius: 8px; background: #0b0e12;
+  border: 1px solid var(--line); font-family: var(--mono); font-size: 11.5px; line-height: 1.55; white-space: pre;
+}

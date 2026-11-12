@@ -22,3 +22,4 @@ Thumbs.db
 # the vendored mod template has its own rules
 !template/**/.gitignore
 test-failures.json
+test-failures.txt

@@ -65,7 +65,17 @@ try {
 check('all source files are committable', ignored.length === 0, ignored.slice(0, 10).join('\n       '))
 
 console.log('critical modules are tracked')
-const mustTrack = ['src/main/build/gradle.ts', 'src/main/build/actions.ts', 'src/main/agent/engine.ts', 'src/main/game/client.ts']
+const mustTrack = [
+  'src/main/build/gradle.ts',
+  'src/main/build/actions.ts',
+  'src/main/agent/engine.ts',
+  'src/main/game/client.ts',
+  // added with in-app GitHub sign-in and the reference decompiler
+  'src/main/github/oauth.ts',
+  'src/main/github/references.ts',
+  'src/renderer/src/components/GithubLogin.tsx',
+  'src/renderer/src/components/ReferencePanel.tsx'
+]
 const tracked = new Set(lines(git(['ls-files'])))
 const missing = mustTrack.filter((f) => !tracked.has(f) && fs.existsSync(path.join(root, f)))
 check('build/agent/game modules tracked', missing.length === 0, missing.join(', '))
