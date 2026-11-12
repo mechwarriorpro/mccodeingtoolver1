@@ -57,7 +57,14 @@ const neoJson = {
   }
 }
 const args = neoVirtualArgs(neoJson)
-check('expands ${library_directory}', args.jvm.some((a) => a.includes(path.join('libraries', 'cpw', 'mods'))), (args.jvm || []).join(' '))
+// Compare with forward slashes: the expansion embeds a native path, and the JSON
+// adds '/cpw/mods/...' on top of it, so separators are mixed on Windows.
+const slash = (v) => v.split(path.sep).join('/')
+check(
+  'expands ${library_directory}',
+  args.jvm.some((a) => slash(a).includes('libraries/cpw/mods/bootstraplauncher')),
+  (args.jvm || []).join(' ')
+)
 check('keeps plain jvm args', args.jvm.includes('--add-modules') && args.jvm.includes('ALL-MODULE-PATH'))
 check('keeps game args', args.game.includes('--launchTarget') && args.game.includes('forgeclient'))
 const osFiltered = args.jvm.filter((a) => a.startsWith('-Dwin=true') || a.startsWith('-Dlinux=true'))
@@ -79,7 +86,11 @@ check(
   libraryAllowed({ name: 'x', rules: [{ action: 'allow', os: { name: hostOs === 'windows' ? 'linux' : 'windows' } }] }) === false
 )
 check('disallow anywhere in scope wins', libraryAllowed({ name: 'x', rules: [{ action: 'allow', os: { name: hostOs } }, { action: 'disallow', os: { name: hostOs } }] }) === false)
-check('library path is maven layout', libraryTarget('com/example/a/1/a-1.jar').endsWith(path.join('libraries', 'com', 'example', 'a', '1', 'a-1.jar')), libraryTarget('com/example/a/1/a-1.jar'))
+check(
+  'library path is maven layout',
+  slash(libraryTarget('com/example/a/1/a-1.jar')).endsWith('libraries/com/example/a/1/a-1.jar'),
+  libraryTarget('com/example/a/1/a-1.jar')
+)
 
 fs.rmSync(tmp, { recursive: true, force: true })
 console.log(failures ? `\n${failures} check(s) failed` : '\nall neoforge checks passed')

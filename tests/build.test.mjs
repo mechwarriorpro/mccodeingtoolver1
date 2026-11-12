@@ -50,7 +50,9 @@ console.log('gradlew resolution')
 const gw = gradlewPath(tmp, true)
 check('falls back to gradle when no wrapper', gw.cmd === 'gradle')
 fs.writeFileSync(path.join(tmp, 'gradlew'), '#!/bin/sh\n')
-check('uses wrapper when present', gradlewPath(tmp, true).cmd.endsWith('gradlew'))
+// The Windows wrapper is gradlew.bat, so accept both spellings.
+const wrapperCmd = gradlewPath(tmp, true).cmd
+check('uses wrapper when present', /gradlew(\.bat)?$/.test(wrapperCmd), wrapperCmd)
 check('preferWrapper=false skips wrapper', gradlewPath(tmp, false).cmd === 'gradle')
 
 console.log('jar metadata + install')
