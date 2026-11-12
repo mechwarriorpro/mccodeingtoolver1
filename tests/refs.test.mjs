@@ -134,89 +134,95 @@ check('login is kept', redacted.login === 'octocat')
 check('connected flag set', redacted.connected === true)
 check('null auth is not connected', oauth.redactAuth(null).connected === false)
 
-section('java for the decompiler is version-checked, not just "found"')
-// The reported crash: PATH/JAVA_HOME held a Java 8, Vineflower needs 17+, and
-// java died with UnsupportedClassVersionError (class file 61 vs 52).
+section('java version parsing (this is what decides which java is used)')
+// The reported crash: JAVA_HOME/PATH held a Java 8, Vineflower needs 17+, and java
+// died with UnsupportedClassVersionError (class file 61 vs 52). The decision is
+// pure, so it is tested without spawning a JVM on either OS.
 const exec = await import('../out-test/main/util/exec.js')
 const isWin = process.platform === 'win32'
-const stubDir = path.join(tmp, 'javas')
 
-/**
- * A fake java that answers -version. Windows cannot execute a shebang script, so
- * the stub is a .cmd there and a shell script elsewhere; both write the same
- * `openjdk version "..."` line to stderr, which is what the probe parses.
- */
-const makeJava = (name, versionLine) => {
-  const dir = path.join(stubDir, name)
-  fs.mkdirSync(dir, { recursive: true })
-  const line = `openjdk version "${versionLine}" 2024-01-01`
-  if (isWin) {
-    const file = path.join(dir, 'java.cmd')
-    fs.writeFileSync(file, `@echo off\r\nif "%~1"=="-version" ( echo ${line} 1>&2 )\r\nexit /b 0\r\n`)
-    return file
-  }
-  const file = path.join(dir, 'java')
-  fs.writeFileSync(file, `#!/bin/sh\nif [ "$1" = "-version" ]; then echo '${line}' >&2; fi\nexit 0\n`)
-  fs.chmodSync(file, 0o755)
-  return file
+for (const [output, want, major] of [
+  ['openjdk version "1.8.0_412" 2024-07-16', '1.8.0_412', 8],
+  ['openjdk version "17.0.11" 2024-01-16', '17.0.11', 17],
+  ['openjdk version "21.0.4" 2024-07-16 LTS', '21.0.4', 21],
+  ['java version "1.7.0_80"', '1.7.0_80', 7],
+  ['openjdk version "24-ea" 2025-03-18', '24-ea', 24]
+]) {
+  const parsed = exec.parseJavaVersionOutput(output)
+  check(`parses ${want}`, parsed?.version === want && parsed?.major === major, JSON.stringify(parsed))
+}
+check('unparseable output yields null', exec.parseJavaVersionOutput('Error: could not find java.dll') === null)
+check('empty output yields null', exec.parseJavaVersionOutput('') === null)
+
+section('the selection rule rejects old runtimes')
+const fakeMachine = (entries) => entries.map(([p, version], i) => ({ path: p, rank: i, configured: i === 0 }))
+const probeMap = (map) => (path) => {
+  const v = map[path]
+  if (!v) return null
+  if (v === 'broken') return null
+  return { version: v, major: exec.majorOf(v) }
 }
 
-const j8 = makeJava('jdk8', '1.8.0_412')
-const j17 = makeJava('jdk17', '17.0.11')
-const j21 = makeJava('jdk21', '21.0.4')
-const jBadDir = path.join(stubDir, 'not-java')
-fs.mkdirSync(jBadDir, { recursive: true })
-const jBad = path.join(jBadDir, isWin ? 'java.exe' : 'java')
-fs.writeFileSync(jBad, isWin ? 'not a real executable\r\n' : 'this is not a real java\n')
-if (!isWin) fs.chmodSync(jBad, 0o755)
+// The user's machine: a Java 8 wins the naive lookup, a JDK 21 is also present.
+const machine = fakeMachine([
+  ['C:\\Java\\jre1.8.0_51\\bin\\java.exe', '1.8.0_51'],
+  ['C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.4.7-hotspot\\bin\\java.exe', '21.0.4']
+])
+const map = {
+  'C:\\Java\\jre1.8.0_51\\bin\\java.exe': '1.8.0_51',
+  'C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.4.7-hotspot\\bin\\java.exe': '21.0.4'
+}
+const chosen = exec.selectJava(machine, probeMap(map), 17, 'the reference decompiler')
+check('skips the Java 8 and picks the JDK 21', 'path' in chosen && /jdk-21/.test(chosen.path), JSON.stringify(chosen))
 
-const probe8 = exec.probeJava(j8)
-check('probe reads Java 8 as major 8', probe8?.major === 8, JSON.stringify(probe8))
-check('probe reads Java 17 as major 17', exec.probeJava(j17)?.major === 17, JSON.stringify(exec.probeJava(j17)))
-check('probe reads Java 21 as major 21', exec.probeJava(j21)?.major === 21, JSON.stringify(exec.probeJava(j21)))
-check('probe returns null for a broken java', exec.probeJava(jBad) === null, JSON.stringify(exec.probeJava(jBad)))
-check('probe returns null for a missing path', exec.probeJava(path.join(stubDir, 'nope', 'java')) === null)
+const onlyOld = fakeMachine([['C:\\Java\\jre1.8.0_51\\bin\\java.exe', '1.8.0_51']])
+const noGood = exec.selectJava(onlyOld, probeMap(map), 17, 'the reference decompiler')
+check('refuses a Java-8-only machine', 'error' in noGood, JSON.stringify(noGood))
+check('the error names the requirement', /Java 17\+/.test(('error' in noGood && noGood.error) || ''), 'error' in noGood ? noGood.error : '')
+check('the error lists every path tried', /Tried:/.test(('error' in noGood && noGood.error) || ''))
+check('the error marks a configured path', /set in Settings/.test(('error' in noGood && noGood.error) || ''))
 
-check('tool java accepts 17', exec.resolveToolJava(j17).path === j17, JSON.stringify(exec.resolveToolJava(j17)))
-check('tool java accepts 21', exec.resolveToolJava(j21).path === j21)
-check('tool java rejects Java 8 with an explanation', exec.resolveToolJava(j8).path === null, JSON.stringify(exec.resolveToolJava(j8)))
-check('the rejection names the requirement', /Java 17\+/.test(exec.resolveToolJava(j8).error ?? ''), exec.resolveToolJava(j8).error)
-check('the rejection lists what was tried', /Tried:/.test(exec.resolveToolJava(j8).error ?? ''))
-check('game java rejects 17 (1.21.1 needs 21)', exec.resolveJava(j17).path === null, JSON.stringify(exec.resolveJava(j17)))
-check('game java accepts 21', exec.resolveJava(j21).path === j21)
+// 1.21.1 needs exactly 21: a Java 17 is fine for the decompiler, not for the game.
+const j17Only = fakeMachine([['C:\\jdk-17\\bin\\java.exe', '17.0.11']])
+check('17 is enough for the decompiler', 'path' in exec.selectJava(j17Only, probeMap({ 'C:\\jdk-17\\bin\\java.exe': '17.0.11' }), 17, 'tools'))
+check('17 is not enough for the game', 'error' in exec.selectJava(j17Only, probeMap({ 'C:\\jdk-17\\bin\\java.exe': '17.0.11' }), 21, 'Minecraft 1.21.1'))
+
+// A broken executable must not be selected, and must not stop the search.
+const mixed = fakeMachine([
+  ['C:\\broken\\java.exe', 'broken'],
+  ['C:\\jdk-21\\bin\\java.exe', '21.0.1']
+])
+const afterBroken = exec.selectJava(mixed, probeMap({ 'C:\\jdk-21\\bin\\java.exe': '21.0.1' }), 21, 'Minecraft 1.21.1')
+check('a broken java is skipped, not selected', 'path' in afterBroken && afterBroken.path === 'C:\\jdk-21\\bin\\java.exe', JSON.stringify(afterBroken))
+
 check('javaw is recognised', exec.isJavaw('C:\\Java\\bin\\javaw.exe') && !exec.isJavaw('C:\\Java\\bin\\java.exe'))
 
-section('decompile refuses to run a jar it cannot load')
-// With a Java 8 the decompiler must stop before spawning, not print a JVM stack trace.
-const j8Run = await refs.decompileJar(jarPath, path.join(tmp, 'out-j8'), { javaPath: j8 })
-check('Java 8 is refused with a clear error', j8Run.ok === false && /Java 17\+/.test(j8Run.error ?? ''), j8Run.error)
+section('decompile refuses a java that is too old')
+// The real gate: decompileJar must not hand the jar to a Java 8 at all.
+const oldJdkDir = path.join(tmp, 'no-java-here')
+const tooOld = exec.resolveToolJava(path.join(oldJdkDir, 'java'))
+check('a nonexistent java is rejected', tooOld.path === null, JSON.stringify(tooOld))
+const j8Run = await refs.decompileJar(jarPath, path.join(tmp, 'out-j8'), { javaPath: path.join(oldJdkDir, 'java') })
+check('no java means a clear error, not a JVM trace', j8Run.ok === false && /Java 17\+|No Java/.test(j8Run.error ?? ''), j8Run.error)
 check('no JVM crash text leaks through', !/UnsupportedClassVersionError/.test(j8Run.error ?? ''), j8Run.error)
 
 section('an UnsupportedClassVersionError becomes advice, not a stack trace')
-// If a stale java slips through, translate the JVM message instead of printing
-// the 14-line stack trace the user saw. The stub claims to be Java 21 (so the
-// version gate passes) but then throws the class-file error a Java 8 would.
-const oldDir = path.join(tmp, 'javas', 'old')
-fs.mkdirSync(oldDir, { recursive: true })
-const msg =
-  'Exception in thread "main" java.lang.UnsupportedClassVersionError: org/jetbrains/java/decompiler/main/decompiler/ConsoleDecompiler ' +
-  'has been compiled by a more recent version of the Java Runtime (class file version 61.0), this version of the Java Runtime only ' +
-  'recognizes class file versions up to 52.0'
-let oldJava
-if (isWin) {
-  oldJava = path.join(oldDir, 'java.cmd')
-  fs.writeFileSync(oldJava, `@echo off\r\nif "%~1"=="-version" ( echo openjdk version "21.0.1" 2024-01-01 1>&2 & exit /b 0 )\r\necho ${msg.replace(/[&|<>]/g, '')} 1>&2\r\nexit /b 1\r\n`)
-} else {
-  oldJava = path.join(oldDir, 'java')
-  fs.writeFileSync(oldJava, `#!/bin/sh\nif [ "$1" = "-version" ]; then echo 'openjdk version "21.0.1" 2024-01-01' >&2; exit 0; fi\nprintf '%s\\n' '${msg}' >&2\nexit 1\n`)
-  fs.chmodSync(oldJava, 0o755)
-}
-const fakeJar = path.join(tmp, 'decompiler.jar')
-fs.writeFileSync(fakeJar, 'stub')
-const oldRun = await refs.decompileJar(jarPath, path.join(tmp, 'out-old'), { javaPath: oldJava, customJar: fakeJar })
-check('class-file error is translated', /needs a newer Java/.test(oldRun.error ?? ''), oldRun.error)
-check('the translated error names both versions', /61/.test(oldRun.error ?? '') && /17\+/.test(oldRun.error ?? ''), oldRun.error)
-check('no raw stack trace in the error', !/UnsupportedClassVersionError/.test(oldRun.error ?? ''), oldRun.error)
+// The user saw 14 lines of JVM stack trace. This is the exact text, and the
+// translation is pure so no JVM is needed to test it.
+const crashText = [
+  'Exception in thread "main" java.lang.UnsupportedClassVersionError: org/jetbrains/java/decompiler/main/decompiler/ConsoleDecompiler',
+  'has been compiled by a more recent version of the Java Runtime (class file version 61.0), this version of the Java Runtime only',
+  'recognizes class file versions up to 52.0',
+  '\tat java.lang.ClassLoader.defineClass1(Native Method)',
+  '\tat java.security.SecureClassLoader.defineClass(Unknown Source)'
+].join('\n')
+const translated = refs.translateDecompilerError(crashText, 'C:\\Program Files\\Java\\jre1.8.0_51\\bin\\java.exe')
+check('the error is translated', !!translated && /needs a newer Java/.test(translated), translated ?? 'null')
+check('it names the java that was used', /jre1\.8\.0_51|java\.exe/.test(translated ?? ''), translated ?? '')
+check('it names the versions, not just class-file ids', /Java 8/.test(translated ?? '') && /Java 17/.test(translated ?? ''), translated ?? '')
+check('it says what to do', /Settings/.test(translated ?? '') && /JDK 17\+/.test(translated ?? ''), translated ?? '')
+check('no stack trace survives the translation', !/\tat |UnsupportedClassVersionError/.test(translated ?? ''), translated ?? '')
+check('unrelated failures are not translated', refs.translateDecompilerError('error: could not open jar', 'java') === null)
 
 section('store lookup is tolerant of a missing index')
 // The module keeps its index under userData; with the electron stub pointing at

@@ -264,9 +264,61 @@ function scanJavaDirs(): JavaCandidate[] {
 const isWinPath = (p: string): boolean => /^[A-Za-z]:[\\/]/.test(p) || p.includes('\\')
 
 /** "21", "17", "1.8" -> major version. */
-function majorOf(version: string): number {
+export function majorOf(version: string): number {
   if (version.startsWith('1.')) return Number(version.split('.')[1])
   return Number(version.split(/[._-]/)[0])
+}
+
+/**
+ * Pull the version out of `java -version` output. Pure and exported so the
+ * decision logic can be tested on every OS without spawning anything:
+ *
+ *   openjdk version "1.8.0_412" 2024-07-16
+ *   openjdk version "21.0.4" 2024-07-16
+ *   java version "17.0.11" 2024-01-16 LTS
+ */
+export function parseJavaVersionOutput(text: string): { version: string; major: number } | null {
+  const m = text.match(/version "([^"]+)"/)
+  if (!m) return null
+  const major = majorOf(m[1])
+  if (!Number.isFinite(major) || major <= 0) return null
+  return { version: m[1], major }
+}
+
+export interface JavaSelection {
+  path: string
+  probe: VersionProbe
+}
+
+/**
+ * Walk the candidates in order and return the first one whose probed major
+ * version satisfies `minMajor`. Pure apart from the injected probe, so tests can
+ * describe a machine (Java 8 here, JDK 21 there) without creating executables.
+ */
+export function selectJava(
+  candidates: { path: string; rank: number; configured?: boolean }[],
+  probe: (path: string) => VersionProbe | null,
+  minMajor: number,
+  purpose: string
+): JavaSelection | { error: string } {
+  const rejected: string[] = []
+  for (const candidate of [...candidates].sort((a, b) => a.rank - b.rank)) {
+    if (!candidate.path) continue
+    const probed = probe(candidate.path)
+    if (!probed) {
+      rejected.push(`${candidate.path} (not a working java)`)
+      continue
+    }
+    if (probed.major >= minMajor) return { path: candidate.path, probe: probed }
+    rejected.push(`${candidate.path} (Java ${probed.major}${candidate.configured ? ', set in Settings' : ''})`)
+  }
+  const want = minMajor === 21 ? 'Java 21' : `Java ${minMajor}+`
+  return {
+    error:
+      `${want} is required for ${purpose}, but none was found.` +
+      (rejected.length ? ` Tried: ${rejected.slice(0, 6).join('; ')}${rejected.length > 6 ? `; and ${rejected.length - 6} more` : ''}.` : '') +
+      ' Install Temurin OpenJDK 21 (https://adoptium.net) and set java.exe in Settings → Model.'
+  }
 }
 
 interface VersionProbe {
@@ -302,13 +354,9 @@ export function probeJava(path: string): VersionProbe | null {
     for (const attempt of attempts) {
       const res = attempt()
       const text = `${res.stderr ?? ''}${res.stdout ?? ''}`
-      const m = text.match(/version "([^"]+)"/)
-      if (m) {
-        result = {
-          version: m[1],
-          major: majorOf(m[1]),
-          arch: text.match(/(64|32)-Bit/i)?.[0]
-        }
+      const parsed = parseJavaVersionOutput(text)
+      if (parsed) {
+        result = { ...parsed, arch: text.match(/(64|32)-Bit/i)?.[0] }
         break
       }
     }
@@ -319,34 +367,16 @@ export function probeJava(path: string): VersionProbe | null {
   return result
 }
 
-function pick(configured: string | undefined, minMajor: number, purpose: string): { path: string; probe: VersionProbe } | { error: string } {
-  const candidates = javaCandidates(configured)
-  const seen: string[] = []
-  for (const candidate of candidates) {
-    if (!candidate.path) continue
-    const exists = candidate.path === 'java' || (() => {
-      try {
-        return fs.existsSync(candidate.path) && fs.statSync(candidate.path).isFile()
-      } catch {
-        return false
-      }
-    })()
-    if (!exists) continue
-    const probe = probeJava(candidate.path)
-    if (!probe) {
-      seen.push(`${candidate.path} (not a working java)`)
-      continue
+function pick(configured: string | undefined, minMajor: number, purpose: string): JavaSelection | { error: string } {
+  const candidates = javaCandidates(configured).filter((c) => {
+    if (c.path === 'java') return true
+    try {
+      return fs.existsSync(c.path) && fs.statSync(c.path).isFile()
+    } catch {
+      return false
     }
-    if (probe.major >= minMajor) return { path: candidate.path, probe }
-    seen.push(`${candidate.path} (Java ${probe.major}${candidate.configured ? ', set in Settings' : ''})`)
-  }
-  const want = minMajor === 21 ? 'Java 21' : `Java ${minMajor}+`
-  return {
-    error:
-      `${want} is required for ${purpose}, but none was found.` +
-      (seen.length ? ` Tried: ${seen.slice(0, 6).join('; ')}${seen.length > 6 ? `; and ${seen.length - 6} more` : ''}.` : '') +
-      ' Install Temurin OpenJDK 21 (https://adoptium.net) and set java.exe in Settings → Model.'
-  }
+  })
+  return selectJava(candidates, probeJava, minMajor, purpose)
 }
 
 /**

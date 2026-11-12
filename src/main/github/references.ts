@@ -381,13 +381,7 @@ export async function decompileJar(jarPath: string, destDir: string, opts: Decom
   }
 
   if (lastCode !== 0) {
-    // Translate the JVM's version error instead of showing a stack trace: it means
-    // java chose for the game was too old for the decompiler jar.
-    const unsupported = lastOutput.match(/class file version (\d+).*?up to (\d+)/s)
-    const versionError = unsupported
-      ? `The decompiler needs a newer Java than the one used here (${path.basename(java)} is too old: it supports class file ` +
-        `${unsupported[2]} but the jar is ${unsupported[1]}). Set a JDK 17+ in Settings → Model → Java, or let the app auto-detect one.`
-      : null
+    const versionError = translateDecompilerError(lastOutput, java)
     return {
       ok: false,
       sourcesDir: javaFiles ? destDir : undefined,
@@ -410,6 +404,30 @@ export async function decompileJar(jarPath: string, destDir: string, opts: Decom
     }
   }
   return { ok: true, sourcesDir: destDir, javaFiles, log: lines.join('\n'), durationMs: Date.now() - started }
+}
+
+/**
+ * Turn the JVM's version complaint into something the user can act on. A Java 8
+ * handed a class-file-61 jar prints fourteen lines of stack trace that say
+ * nothing about Java versions; this says exactly which java is too old.
+ * Pure, so it is testable without a JVM.
+ */
+export function translateDecompilerError(output: string, javaPath: string): string | null {
+  const unsupported = output.match(/class file version (\d+)[\s\S]*?up to (\d+)/)
+  if (!unsupported) return null
+  const wanted = unsupported[1]
+  const supported = unsupported[2]
+  // 52 = Java 8, 61 = Java 17. Name the Java version rather than the class-file id.
+  const nameOf = (classFile: string): string => {
+    const n = Number(classFile)
+    if (!Number.isFinite(n)) return `class file ${classFile}`
+    return `Java ${n - 44}`
+  }
+  return (
+    `The decompiler needs a newer Java: ${path.basename(javaPath)} is ${nameOf(supported)} ` +
+    `(class file ${supported}) and the decompiler jar is ${nameOf(wanted)} (class file ${wanted}). ` +
+    'Set a JDK 17+ in Settings → Model → Java, or leave it empty so the app finds one.'
+  )
 }
 
 export function countJava(dir: string): number {
