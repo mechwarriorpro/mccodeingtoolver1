@@ -88,8 +88,16 @@ for (const t of tests) {
   console.log(`\n=== ${t} ===`)
   try {
     execFileSync(process.execPath, [path.join(root, 'tests', t)], { stdio: 'inherit', cwd: root })
-  } catch {
+  } catch (e) {
     failed++
+    // Surface the failing output in the CI step summary: Actions log downloads are
+    // unreliable behind proxies, but annotations always come through.
+    const out = `${e.stdout ?? ''}${e.stderr ?? ''}`
+    const lines = out.split(/\r?\n/).filter((l) => /FAIL|Error|error:|not found/.test(l))
+    if (process.env.GITHUB_ACTIONS) {
+      console.log(`::error title=${t} failed::${(lines.slice(0, 6).join(' | ') || 'see step log').replace(/%/g, '%25').slice(0, 900)}`)
+    }
+    console.log(lines.slice(0, 20).join('\n') || String(e.message).slice(0, 800))
   }
 }
 console.log(failed ? `\n${failed} test file(s) failed` : '\nall tests passed')

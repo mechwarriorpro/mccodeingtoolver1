@@ -114,7 +114,8 @@ export async function runLocalBuild(opts: BuildOptions): Promise<BuildResult> {
   const result = await new Promise<{ code: number | null }>((resolve) => {
     let child: ChildProcess
     const useShell = gw.shell
-    const cmd = useShell ? `"${gw.cmd}"` : gw.cmd
+    // shell:true lets cmd.exe handle the .bat quoting and any spaces in the path.
+    const cmd = gw.cmd
     child = spawn(cmd, args, {
       cwd: opts.workspaceDir,
       env,

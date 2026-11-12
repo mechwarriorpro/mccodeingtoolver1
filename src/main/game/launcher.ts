@@ -136,7 +136,9 @@ export async function launchDevClient(opts: DevLaunchOptions): Promise<{ ok: boo
   if (opts.jvmArgs?.trim()) env.JAVA_TOOL_OPTIONS = `${env.JAVA_TOOL_OPTIONS ?? ''} ${opts.jvmArgs}`.trim()
 
   try {
-    const cmd = isWin ? `"${wrapper}"` : wrapper
+    // With shell:true on Windows the wrapper path is quoted by cmd.exe itself;
+    // adding quotes here would double them and fail to launch.
+    const cmd = wrapper
     const child = spawn(cmd, args, { cwd: opts.workspaceDir, env, shell: isWin, windowsHide: false, detached: false })
     current = { child, logPath, startedAt: Date.now(), instanceId: opts.instanceId, exitCode: null, titleScreen: false }
     attach(child, logPath)
