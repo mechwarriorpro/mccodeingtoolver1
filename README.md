@@ -61,9 +61,15 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.2.1 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.3.0 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
-> v0.2.0 adds in-app GitHub sign-in and the reference-mod decompiler.
+> v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
+> decompiler picking a Java it could not run.
+> **v0.3.0** adds Fabric/Forge/NeoForge and Minecraft 1.2.5→latest, self-update, editable
+> reference forks, 30-second gameplay clips with vision analysis, and lessons from past errors.
+>
+> From 0.3.0 on, the app updates itself: once you have it installed, new versions arrive
+> through GitHub releases without downloading the installer again.
 
 The `Build Windows installer` workflow compiles it on a `windows-latest` runner, because
 `electron-builder` must download the Electron binary (~115 MB) — from Electron's GitHub
