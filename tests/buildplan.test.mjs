@@ -20,6 +20,7 @@
  */
 import { check, section, finish } from './helpers.mjs'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
 process.on('uncaughtException', (err) => {
@@ -68,7 +69,7 @@ check('a POSIX path with spaces needs no special handling', posixSpaced.args.len
 
 section('Java comes from the project, not the app')
 // A 1.12.2 project must not be told it needs Java 21.
-const dir = fs.mkdtempSync(path.join(process.env.TMPDIR ?? '/tmp', 'mcb-'))
+const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcb-'))
 const write = (sub, props, build) => {
   const d = path.join(dir, sub)
   fs.mkdirSync(d, { recursive: true })
