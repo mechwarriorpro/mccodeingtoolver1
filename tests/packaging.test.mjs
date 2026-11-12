@@ -88,6 +88,15 @@ check('adm-zip is resolvable as CommonJS', fs.existsSync(path.join(root, 'node_m
 check('adm-zip is listed in electron-builder files (production dep)', /dependencies/.test(fs.readFileSync(path.join(root, 'package.json'), 'utf8')))
 check('asar still unpacks the Claude CLI', /claude-agent-sdk/.test(fs.readFileSync(path.join(root, 'electron-builder.yml'), 'utf8')))
 
+section('the update feed is published, or self-update silently never works')
+const publishYml = fs.readFileSync(path.join(root, 'electron-builder.yml'), 'utf8')
+check('electron-builder knows where to publish', /publish:\s*\n\s*provider:\s*github/.test(publishYml))
+check('the publish owner/repo are filled in', /owner:\s*\S+/.test(publishYml) && /repo:\s*\S+/.test(publishYml))
+check(
+  'electron-updater is a runtime dependency',
+  !!JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).dependencies?.['electron-updater']
+)
+
 section('release workflow stamps the installer version from the tag')
 const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8')
 check(
@@ -98,5 +107,9 @@ check(
   'a misnamed installer asset fails the release',
   /does not match tag version/.test(workflow)
 )
+// Without latest.yml and the blockmap an installed build cannot see an update,
+// even though the .exe is right there on the release page.
+check('the release publishes latest.yml', /latest\.yml/.test(workflow))
+check('the release publishes the blockmap', /\*\.blockmap/.test(workflow))
 
 finish('packaging')

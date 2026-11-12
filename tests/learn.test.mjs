@@ -120,4 +120,4 @@ check('lessons are on disk, not only in memory', reloaded.length === before)
 check('the file exists', fs.existsSync(path.join('.test-tmp', 'learn.json')))
 
 learn.clearLessons()
-finish()
+finish('learning from mistakes')

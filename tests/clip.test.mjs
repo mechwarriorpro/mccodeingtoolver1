@@ -90,4 +90,4 @@ check('it carries the note', digest.includes('test the furnace GUI'))
 check('it carries the analysis', digest.includes('Block sprite is pink'))
 check('an unanalysed clip says so', clips.clipDigest({ id: 'x', dir: '', startedAt: 0, durationMs: 1000, fps: 2, frames: [], ended: 'duration' }).includes('Not analysed'))
 
-finish()
+finish('gameplay clips')
