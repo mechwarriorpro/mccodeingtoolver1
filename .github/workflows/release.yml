@@ -72,7 +72,16 @@ jobs:
           retention-days: 7
 
       - name: Package installer
-        run: npx electron-builder --win --publish never
+        shell: pwsh
+        run: |
+          npx electron-builder --win --publish never 2>&1 | Tee-Object -FilePath eb.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            $tail = (Get-Content eb.log -Tail 25) -join ' | '
+            $tail = $tail -replace '%','%25'
+            Write-Host "::error title=electron-builder::$(($tail.Substring(0, [Math]::Min(800, $tail.Length))))"
+            exit $code
+          }
         env:
           # No code-signing certificate; produce an unsigned installer.
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
