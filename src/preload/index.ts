@@ -44,6 +44,26 @@ const api = {
     clearCache: () => ipcRenderer.invoke('java:clearCache')
   },
 
+  update: {
+    state: () => ipcRenderer.invoke('update:state'),
+    check: () => ipcRenderer.invoke('update:check'),
+    install: () => ipcRenderer.invoke('update:install'),
+    setAuto: (enabled: boolean) => ipcRenderer.invoke('update:setAuto', enabled),
+    clearCache: () => ipcRenderer.invoke('update:clearCache'),
+    supported: () => ipcRenderer.invoke('update:supported')
+  },
+
+  forks: {
+    list: () => ipcRenderer.invoke('fork:list'),
+    suggest: (referenceId: string) => ipcRenderer.invoke('fork:suggest', referenceId),
+    create: (opts: unknown) => ipcRenderer.invoke('fork:create', opts),
+    remove: (id: string) => ipcRenderer.invoke('fork:remove', id),
+    open: (id: string) => ipcRenderer.invoke('fork:open', id),
+    tree: (id: string) => ipcRenderer.invoke('fork:tree', id),
+    readFile: (opts: unknown) => ipcRenderer.invoke('fork:readFile', opts),
+    writeFile: (opts: unknown) => ipcRenderer.invoke('fork:writeFile', opts)
+  },
+
   versions: {
     catalog: (opts?: unknown) => ipcRenderer.invoke('versions:catalog', opts),
     loaders: (opts: unknown) => ipcRenderer.invoke('versions:loaders', opts),
@@ -132,7 +152,9 @@ const api = {
     onGithubDeviceCode: (cb: (p: unknown) => void) => on('github:device-code', cb),
     onGithubDeviceTick: (cb: (p: unknown) => void) => on('github:device-tick', cb),
     onRefLine: (cb: (p: unknown) => void) => on('ref:line', cb),
-    onRefListChanged: (cb: () => void) => on('ref:list-changed', cb)
+    onRefListChanged: (cb: () => void) => on('ref:list-changed', cb),
+    onUpdateState: (cb: (p: unknown) => void) => on('update:state', cb),
+    onForkListChanged: (cb: () => void) => on('fork:list-changed', cb)
   },
 
   shell: {

@@ -8,6 +8,7 @@ import BuildPanel from './components/BuildPanel'
 import SetupModal from './components/SetupModal'
 import SettingsModal from './components/SettingsModal'
 import ReferencePanel from './components/ReferencePanel'
+import ForkPanel from './components/ForkPanel'
 
 type RailTab = 'game' | 'project' | 'files' | 'refs'
 
@@ -348,10 +349,16 @@ export default function App(): JSX.Element {
               <BuildPanel project={project} config={config} onRefreshProject={() => void refreshProject()} onOpenImage={setLightbox} onToast={toast} />
             )}
             {railTab === 'refs' && (
-              <div className="card">
-                <h4>Reference mods</h4>
-                <ReferencePanel project={project} onToast={toast} />
-              </div>
+              <>
+                <div className="card">
+                  <h4>Reference mods</h4>
+                  <ReferencePanel project={project} onToast={toast} />
+                </div>
+                <div className="card">
+                  <h4>Editable forks</h4>
+                  <ForkPanel onToast={toast} />
+                </div>
+              </>
             )}
             {railTab === 'files' && (
               <div className="card">

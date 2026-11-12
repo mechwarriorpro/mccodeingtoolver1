@@ -78,7 +78,11 @@ const mustTrack = [
   // added with multi-loader / all-versions support
   'src/main/versions/catalog.ts',
   'src/main/versions/eras.ts',
-  'src/main/mod/generate.ts'
+  'src/main/mod/generate.ts',
+  // added with the update feed and editable reference forks
+  'src/main/update.ts',
+  'src/main/mod/fork.ts',
+  'src/renderer/src/components/ForkPanel.tsx'
 ]
 const tracked = new Set(lines(git(['ls-files'])))
 const missing = mustTrack.filter((f) => !tracked.has(f) && fs.existsSync(path.join(root, f)))

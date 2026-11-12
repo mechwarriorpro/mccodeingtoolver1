@@ -144,6 +144,37 @@ export default function ReferencePanel({ project, onToast }: Props): JSX.Element
     }
   }
 
+  /**
+   * Turn a decompiled mod into a buildable project. The target version comes from
+   * the jar's own metadata, because decompiled code only compiles against the
+   * version it was written for.
+   */
+  async function makeFork(m: ReferenceModUi): Promise<void> {
+    setBusy(`fork:${m.id}`)
+    try {
+      const hint = await api.forks.suggest(m.id)
+      if (!hint.ok) {
+        onToast(hint.error ?? 'Could not read the mod metadata', 'err')
+        return
+      }
+      const target = `${hint.loader === 'fabric' ? 'Fabric' : hint.loader === 'neoforge' ? 'NeoForge' : 'Forge'} ${hint.mcVersion}`
+      const res = await api.forks.create({
+        referenceId: m.id,
+        loader: hint.loader,
+        mcVersion: hint.mcVersion
+      })
+      if (!res.ok) {
+        onToast(res.error ?? 'Could not create the fork', 'err')
+        return
+      }
+      setLines((l) => [...l, `Forked ${m.title} as a ${target} project at ${res.fork?.dir}`])
+      if (res.fork) await api.forks.open(res.fork.id)
+      onToast(res.warning ? `Fork created — ${res.warning}` : `Fork created as a ${target} project`, res.warning ? 'err' : 'ok')
+    } finally {
+      setBusy('')
+    }
+  }
+
   async function remove(id: string): Promise<void> {
     const res = await api.refs.remove(id)
     setMods(res.mods)
@@ -281,6 +312,9 @@ export default function ReferencePanel({ project, onToast }: Props): JSX.Element
                   </button>
                   <button className="small ghost" onClick={() => void api.refs.openFolder(m.id)}>
                     Open sources
+                  </button>
+                  <button className="small" disabled={busy === `fork:${m.id}`} onClick={() => void makeFork(m)} title="Copy the decompiled sources into a real project you can build and edit">
+                    {busy === `fork:${m.id}` ? 'Forking…' : 'Make editable copy'}
                   </button>
                 </>
               ) : (

@@ -28,6 +28,8 @@ export interface AppConfig {
   decompilerJar: string
   /** gradlew vs gradle. */
   preferWrapper: boolean
+  /** Check GitHub releases for a newer build at startup (default on). */
+  autoUpdate: boolean
 
   game: {
     /** Every place we can install into: Technic instance, Prism instance, plain run dir. */

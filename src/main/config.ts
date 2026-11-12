@@ -14,6 +14,7 @@ const defaultConfig: AppConfig = {
   javaPath: '',
   decompilerJar: '',
   preferWrapper: true,
+  autoUpdate: true,
   game: {
     instances: [],
     activeInstanceId: '',

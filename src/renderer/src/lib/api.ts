@@ -24,6 +24,39 @@ export interface VersionChoice {
   loaders: Loader[]
 }
 
+export interface ForkInfo {
+  id: string
+  referenceId: string
+  slug: string
+  title: string
+  license?: string
+  homepage?: string
+  repo?: string
+  dir: string
+  loader: Loader
+  mcVersion: string
+  loaderVersion: string
+  packages: string[]
+  files: number
+  createdAt: number
+  updatedAt: number
+  dirty?: boolean
+}
+
+export interface UpdateState {
+  status: 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'none' | 'error'
+  /** Version offered by the update, when there is one. */
+  version?: string
+  /** Release notes for the offered update. */
+  notes?: string
+  /** 0-100 while downloading. */
+  percent?: number
+  error?: string
+  /** A dev checkout cannot self-update; the UI says so instead of failing. */
+  supported: boolean
+  checkedAt?: number
+}
+
 export interface ProjectSummary {
   open: boolean
   dir?: string
@@ -70,6 +103,39 @@ export interface McfApi {
     check: (javaPath: string) => Promise<{ ok: boolean; version?: string; major?: number; suitsGame?: boolean; suitsTools?: boolean; error?: string; cleared?: boolean }>
     clearCache: () => Promise<{ ok: boolean }>
   }
+  update: {
+    state: () => Promise<UpdateState & { versionLabel: string }>
+    check: () => Promise<UpdateState>
+    install: () => Promise<{ ok: boolean; error?: string }>
+    setAuto: (enabled: boolean) => Promise<UpdateState>
+    clearCache: () => Promise<{ ok: boolean; bytes?: number; error?: string }>
+    supported: () => Promise<{ supported: boolean }>
+  }
+  forks: {
+    list: () => Promise<ForkInfo[]>
+    suggest: (referenceId: string) => Promise<{
+      ok: boolean
+      loader?: Loader
+      mcVersion?: string
+      title?: string
+      license?: string
+      repo?: string
+      warning?: string
+      error?: string
+    }>
+    create: (opts: {
+      referenceId: string
+      loader?: Loader
+      mcVersion?: string
+      loaderVersion?: string
+      parentDir?: string
+    }) => Promise<{ ok: boolean; fork?: ForkInfo; error?: string; warning?: string }>
+    remove: (id: string) => Promise<ForkInfo[]>
+    open: (id: string) => Promise<{ ok: boolean; dir?: string; error?: string }>
+    tree: (id: string) => Promise<{ path: string; dir: boolean }[]>
+    readFile: (opts: { id: string; path: string }) => Promise<{ ok: boolean; text?: string; error?: string }>
+    writeFile: (opts: { id: string; path: string; text: string }) => Promise<{ ok: boolean; error?: string }>
+  }
   versions: {
     catalog: (opts?: { force?: boolean; snapshots?: boolean }) => Promise<{
       ok: boolean
@@ -110,6 +176,7 @@ export interface McfApi {
     readFile: (rel: string) => Promise<{ ok: boolean; text?: string; error?: string }>
     writeFile: (rel: string, content: string) => Promise<{ ok: boolean; error?: string }>
   }
+  shell: { openPath: (p: string) => Promise<string> }
   dialog: {
     pickFolder: (opts?: { title?: string; defaultPath?: string }) => Promise<string | null>
     pickFiles: (opts?: { title?: string; filters?: { name: string; extensions: string[] }[]; multi?: boolean }) => Promise<string[]>
@@ -179,6 +246,8 @@ export interface McfApi {
     onGithubDeviceTick: (cb: (p: { secondsLeft: number }) => void) => () => void
     onRefLine: (cb: (p: { line: string }) => void) => () => void
     onRefListChanged: (cb: () => void) => () => void
+    onUpdateState: (cb: (p: UpdateState) => void) => () => void
+    onForkListChanged: (cb: () => void) => () => void
   }
 }
 

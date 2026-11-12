@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AppConfig, GameInstance } from '../../../shared/types'
-import { api } from '../lib/api'
+import { api, type UpdateState } from '../lib/api'
 import GithubLogin from './GithubLogin'
 
 interface Props {
@@ -20,13 +20,20 @@ const MODELS = [
 ]
 
 export default function SettingsModal({ config, onClose, onSaved, onToast, onOpenReferences }: Props): JSX.Element {
-  const [tab, setTab] = useState<'model' | 'github' | 'game'>('model')
+  const [tab, setTab] = useState<'model' | 'github' | 'game' | 'updates'>('model')
   const [draft, setDraft] = useState(config)
   const [apiKey, setApiKey] = useState('')
   const [detected, setDetected] = useState<GameInstance[]>([])
   const [saving, setSaving] = useState(false)
   const [java, setJava] = useState<{ game: { path: string | null; version?: string; error?: string }; tools: { path: string | null; version?: string; error?: string }; split: boolean } | null>(null)
   const [javaCheck, setJavaCheck] = useState<{ ok: boolean; version?: string; major?: number; error?: string; cleared?: boolean } | null>(null)
+  const [update, setUpdate] = useState<(UpdateState & { versionLabel?: string }) | null>(null)
+  const [checking, setChecking] = useState(false)
+
+  useEffect(() => {
+    void api.update.state().then(setUpdate)
+    return api.events.onUpdateState((st) => setUpdate((prev) => ({ ...st, versionLabel: prev?.versionLabel })))
+  }, [])
 
   useEffect(() => {
     void api.instance.detect().then(setDetected)
@@ -75,6 +82,9 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
           </button>
           <button className={tab === 'game' ? 'on' : ''} onClick={() => setTab('game')}>
             Game
+          </button>
+          <button className={tab === 'updates' ? 'on' : ''} onClick={() => setTab('updates')}>
+            Updates
           </button>
         </div>
 
@@ -327,6 +337,88 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
           </>
         )}
 
+        {tab === 'updates' && (
+          <>
+            <div className="field">
+              <label>Installed version</label>
+              <div style={{ fontSize: 13, color: 'var(--text)' }}>{update?.versionLabel ?? '…'}</div>
+            </div>
+
+            <div className="field">
+              <label>Status</label>
+              <div className="hint" style={{ marginTop: 0, fontSize: 12 }}>
+                {updateStatusLine(update, checking)}
+              </div>
+              {update?.error ? (
+                <div className="hint" style={{ color: 'var(--red)' }}>
+                  {update.error}
+                </div>
+              ) : null}
+              {update?.percent !== undefined && update.status === 'downloading' ? (
+                <div className="progress" style={{ marginTop: 8 }}>
+                  <div className="bar" style={{ width: `${update.percent}%` }} />
+                </div>
+              ) : null}
+            </div>
+
+            <div className="row" style={{ marginBottom: 14 }}>
+              <button
+                className="small"
+                disabled={checking || !update?.supported}
+                onClick={async () => {
+                  setChecking(true)
+                  try {
+                    setUpdate({ ...(await api.update.check()), versionLabel: update?.versionLabel })
+                  } finally {
+                    setChecking(false)
+                  }
+                }}
+              >
+                {checking ? 'Checking…' : 'Check for updates'}
+              </button>
+              {update?.status === 'ready' ? (
+                <button className="small primary" onClick={() => void api.update.install()}>
+                  Restart and install {update.version}
+                </button>
+              ) : null}
+              <button
+                className="small"
+                onClick={async () => {
+                  const res = await api.update.clearCache()
+                  onToast(res.ok ? `Cleared ${Math.round((res.bytes ?? 0) / 1024 / 1024)} MB of downloaded updates` : res.error ?? 'Could not clear', res.ok ? 'ok' : 'err')
+                }}
+              >
+                Clear downloaded files
+              </button>
+            </div>
+
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12.5, color: 'var(--muted)' }}>
+              <input
+                type="checkbox"
+                style={{ width: 'auto' }}
+                checked={draft.autoUpdate}
+                onChange={(e) => {
+                  set('autoUpdate', e.target.checked)
+                  void api.update.setAuto(e.target.checked).then(setUpdate)
+                }}
+              />
+              Check for new versions automatically (recommended)
+            </label>
+            <div className="hint">
+              Updates are downloaded in the background from this project's GitHub releases and applied on the next restart.
+              The Minecraft version list updates on its own every 24 h without an app update, so new game versions appear
+              even when you skip an update.
+            </div>
+
+            {update?.notes ? (
+              <div className="field" style={{ marginTop: 14 }}>
+                <label>What's new in {update.version}</label>
+                <pre className="code-view" style={{ maxHeight: 200 }}>{update.notes}</pre>
+              </div>
+            ) : null}
+          </>
+        )}
+
         <div className="actions">
           <button onClick={onClose}>Cancel</button>
           <button className="primary" disabled={saving} onClick={() => void save()}>
@@ -336,4 +428,29 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
       </div>
     </div>
   )
+}
+
+/** One plain-English line per updater state. */
+function updateStatusLine(st: (UpdateState & { versionLabel?: string }) | null, checking: boolean): string {
+  if (!st) return 'Checking…'
+  if (!st.supported) return 'This build cannot update itself (development build). Install a released version to get automatic updates.'
+  if (checking) return 'Checking GitHub releases…'
+  switch (st.status) {
+    case 'checking':
+      return 'Checking GitHub releases…'
+    case 'available':
+      return `Version ${st.version} is available — downloading in the background.`
+    case 'downloading':
+      return `Downloading version ${st.version}… ${st.percent ?? 0}%`
+    case 'ready':
+      return `Version ${st.version} is downloaded and ready. It will install when you restart the app.`
+    case 'none':
+      return st.checkedAt
+        ? `You are up to date (checked ${new Date(st.checkedAt).toLocaleString()}).`
+        : 'You are up to date.'
+    case 'error':
+      return 'The last check failed.'
+    default:
+      return 'Updates are checked at startup.'
+  }
 }

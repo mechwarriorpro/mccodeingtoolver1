@@ -21,6 +21,9 @@ const sources = [
   'src/main/mod/generate.ts',
   'src/main/versions/catalog.ts',
   'src/main/versions/eras.ts',
+  'src/main/mod/scaffold.ts',
+  'src/main/github/references.ts',
+  'src/main/mod/fork.ts',
   'src/main/util/exec.ts'
 ]
 

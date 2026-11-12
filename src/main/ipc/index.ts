@@ -55,6 +55,26 @@ import {
   selectableVersions
 } from '../versions/catalog'
 import { resolveEra } from '../versions/eras'
+import {
+  countForkSources,
+  createFork,
+  getFork,
+  listForks,
+  loadForks,
+  removeFork,
+  suggestedTarget,
+  touchFork
+} from '../mod/fork'
+import {
+  checkForUpdates,
+  clearUpdaterCache,
+  currentUpdateState,
+  initUpdater,
+  installUpdate,
+  setAutoUpdate,
+  updatesSupported,
+  versionLabel
+} from '../update'
 import { isGradleProject, runLocalBuild, buildLogPath, findBuiltJar, gitSummary } from '../build/gradle'
 import { ghPreflight, initGithubRepo, runActionsBuild } from '../build/actions'
 import { readJarInfo, installJar } from '../mod/jar'
@@ -465,6 +485,70 @@ export function registerIpc(): void {
     return res
   })
 
+  /* ------------------------------------------------------- editable forks */
+
+  ipcMain.handle('fork:list', () =>
+    listForks().map((f) => ({ ...f, files: countForkSources(f.dir) }))
+  )
+
+  ipcMain.handle('fork:suggest', (_e, referenceId: string) => {
+    const mod = listReferences().find((m) => m.id === referenceId)
+    if (!mod) return { ok: false, error: 'Unknown reference mod.' }
+    return { ok: true, ...suggestedTarget(mod), title: mod.title, license: mod.license, repo: mod.repo }
+  })
+
+  ipcMain.handle('fork:create', (_e, opts: { referenceId: string; loader?: Loader; mcVersion?: string; loaderVersion?: string; parentDir?: string }) => {
+    const res = createFork(opts)
+    if (res.ok) send('fork:list-changed')
+    return res
+  })
+
+  ipcMain.handle('fork:remove', (_e, id: string) => {
+    const rest = removeFork(id)
+    send('fork:list-changed')
+    return rest
+  })
+
+  ipcMain.handle('fork:open', (_e, id: string) => {
+    const fork = getFork(id)
+    if (!fork) return { ok: false, error: 'Unknown fork.' }
+    return { ok: true, dir: fork.dir }
+  })
+
+  /** Read/write inside a fork, used by the reference panel's editor. */
+  ipcMain.handle('fork:readFile', (_e, opts: { id: string; path: string }) => {
+    const fork = getFork(opts.id)
+    if (!fork) return { ok: false, error: 'Unknown fork.' }
+    const full = safeJoin(fork.dir, opts.path)
+    if (!full) return { ok: false, error: 'That path is outside the fork.' }
+    try {
+      return { ok: true, text: fs.readFileSync(full, 'utf8') }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  })
+
+  ipcMain.handle('fork:writeFile', (_e, opts: { id: string; path: string; text: string }) => {
+    const fork = getFork(opts.id)
+    if (!fork) return { ok: false, error: 'Unknown fork.' }
+    const full = safeJoin(fork.dir, opts.path)
+    if (!full) return { ok: false, error: 'That path is outside the fork.' }
+    try {
+      fs.mkdirSync(path.dirname(full), { recursive: true })
+      fs.writeFileSync(full, opts.text, 'utf8')
+      touchFork(fork.dir)
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  })
+
+  ipcMain.handle('fork:tree', (_e, id: string) => {
+    const fork = getFork(id)
+    if (!fork) return []
+    return listTree(fork.dir, 800)
+  })
+
   ipcMain.handle('ref:search', (_e, opts: { query: string; id?: string; regex?: boolean }) => {
     if (!opts.query?.trim()) return { hits: [] }
     try {
@@ -542,6 +626,16 @@ export function registerIpc(): void {
     resetSession()
     return { ...res, dir }
   })
+
+  /* ------------------------------------------------------------------- update */
+
+  initUpdater()
+  ipcMain.handle('update:state', () => ({ ...currentUpdateState(), versionLabel: versionLabel() }))
+  ipcMain.handle('update:check', async () => checkForUpdates())
+  ipcMain.handle('update:install', () => installUpdate())
+  ipcMain.handle('update:setAuto', (_e, enabled: boolean) => setAutoUpdate(enabled))
+  ipcMain.handle('update:clearCache', () => clearUpdaterCache())
+  ipcMain.handle('update:supported', () => ({ supported: updatesSupported() }))
 
   /* ------------------------------------------------------------------ versions */
 
@@ -951,6 +1045,14 @@ function parseProps(file: string): Record<string, string> {
     /* none */
   }
   return out
+}
+
+/** Join inside a folder without allowing `..` to escape it. */
+function safeJoin(root: string, rel: string): string | null {
+  const full = path.resolve(root, rel)
+  const base = path.resolve(root)
+  if (full !== base && !full.startsWith(base + path.sep)) return null
+  return full
 }
 
 function listTree(root: string, limit: number): { path: string; dir: boolean }[] {
