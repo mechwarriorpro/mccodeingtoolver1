@@ -34,6 +34,12 @@ export default { app, shell, screen, nativeImage }
 `
 )
 
+console.log('building the app bundle (needed by the packaging test)…')
+execFileSync(process.execPath, [path.join(root, 'node_modules', 'electron-vite', 'bin', 'electron-vite.js'), 'build'], {
+  cwd: root,
+  stdio: 'inherit'
+})
+
 console.log('compiling testable modules…')
 // Call tsc's JS entry point with the current node binary: `npx` is npx.cmd on Windows
 // and execFileSync cannot launch it without a shell.

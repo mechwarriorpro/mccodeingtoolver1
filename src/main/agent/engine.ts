@@ -340,12 +340,25 @@ export class AgentSession {
   }
 }
 
-/** In a packaged app the SDK's CLI must be read from the asar-unpacked resources. */
+/**
+ * Locate Claude Code's CLI. The SDK is bundled into out/main (it is ESM-only, so it
+ * cannot be require()d from a CJS bundle), but the CLI is a real file that must be
+ * spawned, so electron-builder keeps the package outside the asar.
+ */
 function resolveBundledCli(): string {
   const candidates = [
+    // packaged: asarUnpack puts the SDK on disk next to app.asar
     path.join(process.resourcesPath, 'app.asar.unpacked', 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'cli.js'),
+    // packaged without unpacking (works because cli.js ships inside the asar too)
     path.join(process.resourcesPath, 'app', 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'cli.js'),
+    path.join(process.resourcesPath, 'app.asar', 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'cli.js'),
+    // dev
     path.join(app.getAppPath(), 'node_modules', '@anthropic-ai', 'claude-agent-sdk', 'cli.js')
   ]
-  return candidates.find((p) => fs.existsSync(p)) ?? candidates[0]
+  const found = candidates.find((p) => fs.existsSync(p))
+  if (!found) {
+    // Fail with the search path, not a confusing ENOENT from spawn.
+    throw new Error(`Claude Code CLI not found. Looked in:\n${candidates.join('\n')}`)
+  }
+  return found
 }
