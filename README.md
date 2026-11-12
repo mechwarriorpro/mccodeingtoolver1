@@ -43,7 +43,13 @@ setup and API key.
 
 ### Easiest: download the built installer
 
-**[MC.Forge.Agent-Setup-0.1.0.exe](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/download/v0.1.0/MC.Forge.Agent-Setup-0.1.0.exe)** (101 MB, unsigned)
+**[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
+`MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
+
+> **Use v0.1.1 or newer.** v0.1.0 crashes on launch with
+> `Error [ERR_REQUIRE_ESM]: require() of ES Module ...claude-agent-sdk\sdk.mjs not supported`,
+> because the main process was built as CommonJS while the Claude Agent SDK is ESM-only.
+> v0.1.1+ bundles the SDK into the main bundle instead.
 
 The `Build Windows installer` workflow compiles it on a `windows-latest` runner, because
 `electron-builder` must download the Electron binary (~115 MB) — from Electron's GitHub
@@ -59,7 +65,7 @@ npm install
 npm run dist:win          # compiles the app, then packages the NSIS installer
 ```
 
-Output: `release/MC Forge Agent-Setup-0.1.0.exe`
+Output: `release/MC Forge Agent-Setup-<version>.exe`
 
 `npm run dev` runs it without packaging. `npm run pack:win` is the same as `dist:win`.
 
@@ -73,8 +79,10 @@ git tag v0.1.1
 git push origin v0.1.1
 ```
 
-The workflow builds on the tag, attaches the `.exe` to the GitHub release, and verifies the
-asset exists before finishing.
+Bump `version` in `package.json` to match the tag first — the tag build stamps `package.json`
+from the tag name too, and the final step fails the run if the published `.exe` name does not
+contain the tag's version. The workflow builds on the tag, attaches the `.exe` to the GitHub
+release, and verifies the asset exists before finishing.
 
 ## First run
 

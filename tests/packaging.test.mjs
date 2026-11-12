@@ -46,7 +46,7 @@ const Module = require('module')
 const orig = Module._load
 const app = { requestSingleInstanceLock: () => false, on() {}, whenReady: () => ({ then() {} }),
   setAppUserModelId() {}, getPath: () => require('os').tmpdir(), getAppPath: () => process.cwd(),
-  getVersion: () => '0.1.0', quit() {}, exit() {} }
+  getVersion: () => '0.0.0-test', quit() {}, exit() {} }
 Module._load = function (req) {
   if (req === 'electron') return new Proxy({ app }, { get: (t, k) => t[k] ?? (() => ({})) })
   return orig.apply(this, arguments)
@@ -73,6 +73,17 @@ const viteConfig = fs.readFileSync(path.join(root, 'electron.vite.config.ts'), '
 check(
   'main build bundles (excludes) the SDK from externalisation',
   /externalizeDepsPlugin\(\{[^}]*exclude:[^}]*@anthropic-ai\/claude-agent-sdk/s.test(viteConfig)
+)
+
+section('release workflow stamps the installer version from the tag')
+const workflow = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8')
+check(
+  'tag builds stamp package.json from the tag',
+  /name: Stamp version from tag[\s\S]{0,900}?p\.version/.test(workflow)
+)
+check(
+  'a misnamed installer asset fails the release',
+  /does not match tag version/.test(workflow)
 )
 
 finish('packaging')
