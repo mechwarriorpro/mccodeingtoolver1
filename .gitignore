@@ -1,14 +1,23 @@
+# dependencies
 node_modules/
-out/
-out-test/
-release/
-dist/
-build/
+
+# build output
+/out/
+/out-test/
+/release/
+/dist/
+/build/
+*.tsbuildinfo
+
+# local runtime
 .test-tmp/
 *.log
 .DS_Store
 Thumbs.db
+
+# secrets
 .env
 .env.*
+
+# the vendored mod template has its own rules
 !template/**/.gitignore
-*.tsbuildinfo

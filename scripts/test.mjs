@@ -81,6 +81,7 @@ const walk = (dir) => {
 }
 walk(outDir)
 
+// repo.test.mjs uses git directly, so it runs without the compiled modules
 const tests = fs.readdirSync(path.join(root, 'tests')).filter((f) => f.endsWith('.test.mjs'))
 let failed = 0
 for (const t of tests) {
