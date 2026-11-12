@@ -20,6 +20,12 @@ const defaultConfig: AppConfig = {
   visionModel: '',
   visionProvider: '',
   visionProviderKey: '',
+  local: {
+    modelsDir: '',
+    roles: { agent: [], vision: [], quick: [] },
+    installDir: '',
+    managed: false
+  },
   game: {
     instances: [],
     activeInstanceId: '',

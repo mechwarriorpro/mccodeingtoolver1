@@ -1,5 +1,21 @@
 export type AutonomyMode = 'auto' | 'review' | 'ask'
 
+/**
+ * Local models. A role points at a list of model ids so one download can serve
+ * several uses (a big coder can write code *and* describe screenshots); the
+ * first entry is the one actually used.
+ */
+export interface LocalSettings {
+  /** Where Ollama keeps its weights. Empty means Ollama's own default. */
+  modelsDir: string
+  /** Model ids per role. `agent` drives coding, `vision` looks at clips. */
+  roles: { agent: string[]; vision: string[]; quick: string[] }
+  /** Install directory for the Ollama program itself, Windows only. */
+  installDir: string
+  /** We started the daemon with OLLAMA_MODELS, so the app owns its lifetime. */
+  managed: boolean
+}
+
 export interface AppConfig {
   /** API key for the selected provider (Anthropic by default). */
   apiKey: string
@@ -38,6 +54,8 @@ export interface AppConfig {
   visionProvider: string
   /** Key for the vision provider, when it differs from the agent's provider. */
   visionProviderKey: string
+  /** Local (Ollama) settings: which model fills each role, and where weights live. */
+  local: LocalSettings
 
   game: {
     /** Every place we can install into: Technic instance, Prism instance, plain run dir. */

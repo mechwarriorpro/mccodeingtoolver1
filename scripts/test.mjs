@@ -27,6 +27,7 @@ const sources = [
   'src/main/game/clip.ts',
   'src/main/learn.ts',
   'src/main/providers.ts',
+  'src/main/local.ts',
   'src/main/util/exec.ts'
 ]
 

@@ -9,6 +9,7 @@ import { installJar, copyExtraMods, readJarInfo } from '../mod/jar'
 import { buildTechnicPackZip, detectTechnicInstances, launchTechnic } from '../game/technic'
 import { captureGameWindow, listScreenshots } from '../game/capture'
 import { analyseClip, attachAnalysis, clipDigest, getClip, listClips, startClip, stopClip } from '../game/clip'
+import { resolveVisionModel } from '../game/vision'
 import { confirmLesson, listLessons, recall, recordFailure } from '../learn'
 import { captureFrameBuffer } from '../game/capture'
 import { gameStatus, launchDevClient, readGameLog, stopGame } from '../game/launcher'
@@ -452,12 +453,17 @@ export function createAgentTools(ctx: ToolContext) {
         }
 
         if (analyse !== false) {
+          // Share one resolution rule with the clips panel: local role mapping
+          // first, then the vision provider, then the agent's own provider.
+          const v = resolveVisionModel()
           const res = await analyseClip({
             clip,
             goal,
-            apiKey: effectiveApiKey(),
-            baseUrl: effectiveBaseUrl(),
-            model: loadConfig().visionModel || undefined
+            apiKey: v.apiKey,
+            baseUrl: v.baseUrl,
+            auth: v.auth,
+            providerLabel: v.providerLabel,
+            model: v.model
           })
           if (res.ok && res.text) {
             attachAnalysis(clip.id, { model: res.model ?? 'vision', text: res.text, frames: res.frames ?? 0 })

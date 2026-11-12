@@ -129,7 +129,7 @@ the build loop and the screenshots all behave identically; only the model behind
 | --- | --- | --- | --- |
 | **Z.ai** | `glm-4.7-flash` | free tier | no |
 | **OpenRouter** | `qwen/qwen3-coder:free` (coding) or `nvidia/nemotron-3.5-super-vl:free` (vision) | free tier | no |
-| **Ollama** | `qwen3-coder` | free forever, local | no — no account at all |
+| **Ollama** | see [Local models](#local-models-install-download-and-pick-a-model-per-job) | free forever, local | no — no account at all |
 | Anthropic | Claude Sonnet 4.5 | paid | yes |
 
 - **Refresh free models** asks OpenRouter for its current `:free` roster, because that list rotates.
@@ -144,6 +144,51 @@ the build loop and the screenshots all behave identically; only the model behind
 - The Anthropic key path is untouched. Switching back to Anthropic restores the original behaviour, and
   a key belonging to one provider is never sent to another (the agent clears `ANTHROPIC_API_KEY` for
   third parties and uses a bearer token instead).
+
+### Local models: install, download, and pick a model per job
+
+Settings → **Local models** sets up Ollama from inside the app. It reads top to
+bottom, because each step depends on the one above:
+
+1. **Install Ollama.** Silently, with no installer window. The app downloads the
+   official `OllamaSetup.exe` (~1 GB) from GitHub, or uses a copy bundled in the
+   exe if one was added at build time ([vendor/README.md](vendor/README.md)) —
+   which is the only way this works on a machine with no internet.
+2. **Choose where the weights go.** A small coder is 5 GB and a good one is
+   19 GB, so this is asked *before* anything downloads. The app reports the free
+   space on the chosen drive and refuses a location with no room. The app starts
+   the daemon itself with `OLLAMA_MODELS` set, rather than needing a manual
+   system-wide environment variable.
+3. **Download a bundle** — the set of models covering every use case at a chosen
+   quality, so you do not have to decide model by model:
+
+   | Bundle | Models | Size |
+   | --- | --- | --- |
+   | Essential | Qwen3 Coder 7B + Qwen3-VL 8B | ~11 GB |
+   | Recommended | Qwen3 Coder 30B + Qwen3-VL 8B | ~25 GB |
+   | Vision only | Qwen3-VL 8B | ~6 GB |
+   | Everything | all six catalogue models | ~59 GB |
+
+   Already-installed models are skipped, and nothing is downloaded twice.
+4. **Or download one model at a time**, with live progress and a cancel button.
+5. **Say which model does which job.** There are three jobs, and they are the
+   app's real model call sites, not invented categories:
+
+   - **Coding agent** — writes the mod and runs builds. Needs tool calling.
+   - **Screenshots & clips** — looks at the game window and recorded clips. Needs
+     a model that accepts images.
+   - **Background / quick tasks** — short turns and the SDK's cheap alias.
+
+   **The same model can fill several jobs.** A large coder is usually good at
+   both coding and reading screenshots, so picking it twice is allowed — and it
+   is still downloaded once. The panel shows how many unique models your choices
+   need and their total size, with a single button to fetch whatever is missing.
+
+The catalogue marks each model `tools` / `vision`, and the pickers only offer
+models that can actually do the job: a vision-only model is not offered for
+coding, and the app says why rather than letting a run fail. Ollama 0.14 or newer
+is required for the Anthropic-compatible endpoint; the app checks `/v1/messages`
+and tells you if the installed version is too old.
 
 ### Reference mods (read how other mods do it)
 
@@ -253,6 +298,10 @@ transcript is complete even when the live text was cut short.
 
 ## Notes & limits
 
+- **Local models are a separate download.** Ollama itself is ~1 GB and the model
+  weights are 5–19 GB each; none of that ships inside the 108 MB installer unless
+  you deliberately add `vendor/OllamaSetup.exe`. Local quality depends on your
+  GPU and RAM — a 30B model needs roughly 24 GB of video memory to be pleasant.
 - The app needs the Electron binary to run; if `npm install` cannot download it (offline / blocked
   CDN), building the installer fails even though the code is fine.
 - **Direct client launch is 1.21.1 NeoForge only.** Other versions build and install fine (the jar

@@ -1,5 +1,6 @@
 import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron'
 import fs from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { AgentSession } from '../agent/engine'
 import { effectiveApiKey, effectiveBaseUrl, loadConfig, redactConfig, saveConfig, screenshotsDir, attachmentsDir } from '../config'
@@ -55,6 +56,25 @@ import {
   selectableVersions
 } from '../versions/catalog'
 import { resolveEra } from '../versions/eras'
+import { resolveVisionModel } from '../game/vision'
+import {
+  BUNDLES,
+  LOCAL_MODELS,
+  LOCAL_ROLES,
+  bundleById,
+  cancelPull,
+  defaultModelsDir,
+  findOllama,
+  freeSpaceGb,
+  hasBundledInstaller,
+  installInProgress,
+  installOllama,
+  probeOllama,
+  pullModel,
+  roleFit,
+  startOllamaServe,
+  type BundleId
+} from '../local'
 import { KNOWN_MODELS, PROVIDERS, DEFAULT_MODELS, discoverModels, requiresKey, type ProviderId } from '../providers'
 import { clearLessons, confirmLesson, listLessons, recall, retireLesson } from '../learn'
 import {
@@ -557,26 +577,17 @@ export function registerIpc(): void {
     if (!clip) return { ok: false, error: 'Unknown clip.' }
     if (!clip.frames.length) return { ok: false, error: 'That clip has no frames.' }
     send('clip:analysing', { id: clip.id })
-    // Vision follows the agent's provider unless Settings names its own. A
-    // model without vision on the agent side can still be paired with a
-    // vision-capable one here, which is why this is a separate pick.
-    const c = loadConfig()
-    // "provider:model" lets Settings point vision at a different provider than
-    // the agent. Without it, clip analysis uses the agent's own model.
-    const [vp, vm] = (c.visionProvider || '').split(':')
-    const provider = (vp || c.provider || 'anthropic') as ProviderId
-    const providerDef = PROVIDERS.find((p) => p.id === provider)
-    const visionKey = provider === (c.provider || 'anthropic')
-      ? effectiveApiKey()
-      : c.visionProviderKey || ''
+    // One rule shared with the agent's clip tool, so a clip analyses the same
+    // way however it was triggered.
+    const v = resolveVisionModel(opts.model)
     const res = await analyseClip({
       clip,
       goal: opts.goal,
-      model: opts.model || c.visionModel || vm || undefined,
-      apiKey: visionKey,
-      baseUrl: providerDef?.baseUrl || undefined,
-      auth: provider === 'anthropic' ? 'anthropic' : 'bearer',
-      providerLabel: providerDef?.label ?? 'The AI provider'
+      model: v.model,
+      apiKey: v.apiKey,
+      baseUrl: v.baseUrl,
+      auth: v.auth,
+      providerLabel: v.providerLabel
     })
     if (res.ok && res.text) {
       attachAnalysis(clip.id, { model: res.model ?? 'vision', text: res.text, frames: res.frames ?? 0 })
@@ -730,6 +741,194 @@ export function registerIpc(): void {
     saveConfig({ workspaceDir: dir })
     resetSession()
     return { ...res, dir }
+  })
+
+  /* --------------------------------------------------------------- local models */
+
+  /** Catalog, bundles and role definitions, plus what is actually installed. */
+  ipcMain.handle('local:info', async () => {
+    const cfg = loadConfig()
+    const exe = findOllama()
+    const modelsDir = cfg.local?.modelsDir || defaultModelsDir()
+    const probe = exe ? await probeOllama() : { running: false, anthropic: false }
+    let installed: { id: string; sizeGb: number }[] = []
+    // Read the manifest off disk as well as asking the daemon: the daemon may
+    // not be running yet and Settings still needs to show what is downloaded.
+    const manifests = path.join(modelsDir, 'manifests', 'registry.ollama.ai', 'library')
+    try {
+      for (const name of fs.readdirSync(manifests)) {
+        for (const tag of fs.readdirSync(path.join(manifests, name))) {
+          installed.push({ id: tag === 'latest' ? name : `${name}:${tag}`, sizeGb: 0 })
+        }
+      }
+    } catch {
+      installed = []
+    }
+    // Sizes come from the blobs the manifest points at; the daemon's own list is
+    // the authoritative one when it is up.
+    if (probe.running) {
+      try {
+        const text = await (await fetch('http://localhost:11434/api/tags', { signal: AbortSignal.timeout(4000) })).text()
+        const parsed = (JSON.parse(text) as { models?: { name?: string; size?: number }[] }).models ?? []
+        const byName = new Map(parsed.filter((m) => m.name).map((m) => [m.name as string, (m.size ?? 0) / 1e9]))
+        installed = [...byName.entries()].map(([id, gb]) => ({ id, sizeGb: Math.round(gb * 10) / 10 }))
+      } catch {
+        // Fall back to the manifest scan above.
+      }
+    }
+    return {
+      installed: !!exe,
+      bundledInstaller: hasBundledInstaller(),
+      exe,
+      running: probe.running,
+      anthropicCompatible: probe.anthropic,
+      version: 'version' in probe ? probe.version : undefined,
+      modelsDir,
+      defaultModelsDir: defaultModelsDir(),
+      freeGb: freeSpaceGb(modelsDir || defaultModelsDir()),
+      installedModels: installed,
+      roles: cfg.local?.roles ?? { agent: [], vision: [], quick: [] },
+      models: LOCAL_MODELS,
+      bundles: BUNDLES,
+      roleDefs: LOCAL_ROLES
+    }
+  })
+
+  /** Re-detect after the user installs Ollama outside the app. */
+  ipcMain.handle('local:probe', async () => {
+    const exe = findOllama()
+    return { exe, ...(exe ? await probeOllama() : { running: false, anthropic: false as const }) }
+  })
+
+  /**
+   * Download and run the official Ollama installer, streaming progress. The
+   * download is ~1 GB, so every step reports back rather than freezing the UI.
+   */
+  ipcMain.handle('local:install', async (_e, opts: { installDir?: string; modelsDir?: string }) => {
+    if (installInProgress()) return { ok: false, error: 'An install is already running.' }
+    const cfg = loadConfig()
+    if (opts.modelsDir !== undefined) saveConfig({ ...cfg, local: { ...cfg.local, modelsDir: opts.modelsDir } })
+    const res = await installOllama({
+      installDir: opts.installDir || cfg.local?.installDir || undefined,
+      onEvent: (ev) => send('local:install-progress', ev)
+    })
+    if (res.ok) {
+      // Point the daemon at the chosen weight location before it starts.
+      const dir = loadConfig().local?.modelsDir
+      if (dir) {
+        const exe = res.path ?? findOllama()
+        if (exe && !(await probeOllama()).running) {
+          startOllamaServe(exe, dir)
+          await delay(1500)
+        }
+      }
+    }
+    return res
+  })
+
+  /** Save the weights location. Restarts a daemon the app manages so the change applies. */
+  ipcMain.handle('local:setModelsDir', async (_e, dir: string) => {
+    const cfg = loadConfig()
+    if (dir) {
+      try {
+        fs.mkdirSync(dir, { recursive: true })
+      } catch (e) {
+        return { ok: false, error: `Cannot create ${dir}: ${(e as Error).message}` }
+      }
+      const free = freeSpaceGb(dir)
+      if (free !== undefined && free < 20) {
+        return { ok: false, error: `Only ${Math.round(free)} GB free on that drive. A coding model needs about 20 GB.` }
+      }
+    }
+    saveConfig({ ...cfg, local: { ...cfg.local, modelsDir: dir } })
+    const exe = findOllama()
+    if (exe && cfg.local?.managed) {
+      const running = await probeOllama()
+      if (running.running) {
+        // A process reads its environment at launch, so a live daemon has to be
+        // restarted for OLLAMA_MODELS to take effect. The app only does this for
+        // a daemon it started itself.
+        try {
+          execFileSync('taskkill', ['/F', '/IM', 'ollama.exe'], { stdio: 'ignore' })
+        } catch {
+          // Not running under that name; the serve call below handles it.
+        }
+        await delay(800)
+        startOllamaServe(exe, dir || defaultModelsDir())
+      }
+    }
+    return { ok: true, modelsDir: dir || defaultModelsDir(), restartNeeded: !!exe && !cfg.local?.managed }
+  })
+
+  /** Start the daemon ourselves so OLLAMA_MODELS is honoured. */
+  ipcMain.handle('local:startDaemon', async () => {
+    const cfg = loadConfig()
+    const exe = findOllama()
+    if (!exe) return { ok: false, error: 'Ollama is not installed.' }
+    const probe = await probeOllama()
+    if (probe.running) return { ok: true, alreadyRunning: true }
+    startOllamaServe(exe, cfg.local?.modelsDir || defaultModelsDir())
+    saveConfig({ ...cfg, local: { ...cfg.local, managed: true } })
+    // The daemon takes a moment to bind the port; a single retry is enough and
+    // avoids a spinner that never resolves.
+    await delay(2000)
+    const after = await probeOllama()
+    return after.running ? { ok: true } : { ok: false, error: after.error ?? 'Ollama did not start.' }
+  })
+
+  /** Pull one model, streaming Ollama's progress lines to the renderer. */
+  ipcMain.handle('local:pull', async (_e, modelId: string) => {
+    if (!LOCAL_MODELS.some((m) => m.id === modelId)) return { ok: false, error: 'That model is not in the catalogue.' }
+    const probe = await probeOllama()
+    if (!probe.running) return { ok: false, error: 'Ollama is not running. Install or start it first.' }
+    if (!probe.anthropic) {
+      return { ok: false, error: 'This Ollama version has no Anthropic-compatible endpoint. Update to 0.14 or newer.' }
+    }
+    return pullModel(modelId, (p) => send('local:pull-progress', p))
+  })
+
+  ipcMain.handle('local:cancelPull', () => cancelPull())
+
+  /** Download every model the current role mapping needs, de-duplicated. */
+  ipcMain.handle('local:pullBundle', async (_e, opts: { bundle?: BundleId; models?: string[] }) => {
+    const probe = await probeOllama()
+    if (!probe.running) return { ok: false, error: 'Ollama is not running. Install or start it first.' }
+    const wanted = opts.models ?? bundleById(opts.bundle ?? 'recommended')?.models ?? []
+    const targets = [...new Set(wanted)].filter((id) => LOCAL_MODELS.some((m) => m.id === id))
+    if (!targets.length) return { ok: false, error: 'Nothing to download.' }
+    const failures: string[] = []
+    for (const [i, id] of targets.entries()) {
+      send('local:bundle-progress', { index: i, of: targets.length, model: id, state: 'start' })
+      const res = await pullModel(id, (p) => send('local:pull-progress', p))
+      send('local:bundle-progress', { index: i, of: targets.length, model: id, state: res.ok ? 'done' : 'error', error: res.error })
+      if (!res.ok) {
+        // A cancelled run must not carry on downloading the rest.
+        if (/cancel/i.test(res.error ?? '')) return { ok: false, error: 'Download cancelled.', done: targets.slice(0, i) }
+        failures.push(`${id}: ${res.error}`)
+      }
+    }
+    return failures.length ? { ok: false, error: failures.join('; '), done: targets } : { ok: true, done: targets }
+  })
+
+  /** Store which model ids fill each role. */
+  ipcMain.handle('local:setRoles', async (_e, roles: { agent?: string[]; vision?: string[]; quick?: string[] }) => {
+    const cfg = loadConfig()
+    const clean: Record<string, string[]> = {}
+    const problems: string[] = []
+    for (const role of LOCAL_ROLES) {
+      const list = [...new Set((roles[role.id] ?? []).filter((id) => LOCAL_MODELS.some((m) => m.id === id)))]
+      for (const id of list) {
+        const fit = roleFit(id, role.id)
+        if (!fit.ok) problems.push(`${role.label}: ${fit.reason}`)
+      }
+      clean[role.id] = list
+    }
+    if (problems.length) return { ok: false, error: problems.join(' ') }
+    saveConfig({ ...cfg, local: { ...cfg.local, roles: clean as AppConfig['local']['roles'] } })
+    // The agent's model follows the agent role when on Ollama, so the single
+    // `model` field stays truthful for the Settings picker.
+    if ((cfg.provider || 'anthropic') === 'ollama' && clean.agent[0]) saveConfig({ ...loadConfig(), model: clean.agent[0] })
+    return { ok: true, roles: clean }
   })
 
   /* ----------------------------------------------------------------- providers */
@@ -1312,4 +1511,9 @@ function explainProviderError(status: number, body: string): string {
   if (status === 429) return 'Rate limited by the provider. Free tiers are strict; wait a minute or pick another model.'
   if (status >= 500) return 'The provider had a server error. Try again in a moment.'
   return `Provider returned HTTP ${status}: ${snippet}`
+}
+
+/** Small sleep used between daemon restarts. */
+function delay(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms))
 }

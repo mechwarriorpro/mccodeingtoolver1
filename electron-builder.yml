@@ -28,6 +28,13 @@ extraResources:
   - from: template
     to: template
     filter: ['**/*']
+  # Optional bundled Ollama installer, so "install local models" works with no
+  # download at all. Put OllamaSetup.exe in `vendor/` before packaging; when it is
+  # absent this entry is skipped and the app downloads the installer instead.
+  # The 1 GB installer is deliberately NOT committed -- see vendor/README.md.
+  - from: vendor
+    to: vendor
+    filter: ['OllamaSetup.exe']
 npmRebuild: false
 # Self-update feed. The packaged app checks this repo's releases at startup and
 # downloads a new installer in the background; `latest.yml` (published by the

@@ -183,7 +183,11 @@ export class AgentSession {
     const apiKey = effectiveApiKey()
     const baseUrl = effectiveBaseUrl()
     const provider = (cfg.provider || 'anthropic') as ProviderId
-    const model = cfg.model || ''
+    // For local Ollama the role mapping wins over the single `model` field, so
+    // the agent and its background alias can be different downloads.
+    const localAgent = provider === 'ollama' ? cfg.local?.roles?.agent?.[0] ?? '' : ''
+    const localQuick = provider === 'ollama' ? cfg.local?.roles?.quick?.[0] || localAgent : ''
+    const model = localAgent || cfg.model || ''
     // The SDK spawns the Claude Code CLI with a JS runtime. In a packaged build there is
     // no system Node, but the Electron binary itself can run as Node when this is set.
     const isElectronRuntime = !!process.versions.electron
@@ -197,11 +201,16 @@ export class AgentSession {
     // to another host, and forces the model alias so free models are not asked
     // for as "claude-sonnet-...".
     Object.assign(env, providerEnv(provider, apiKey, model))
+    // providerEnv points every alias at the agent model; give the cheap alias its
+    // own model when the user mapped one, or the SDK would load a second copy.
+    if (provider === 'ollama' && localQuick && localQuick !== model) {
+      env.ANTHROPIC_DEFAULT_HAIKU_MODEL = localQuick
+    }
     if (baseUrl) env.ANTHROPIC_BASE_URL = baseUrl
 
     return {
       cwd: workspace,
-      model: cfg.model || undefined,
+      model: model || undefined,
       systemPrompt: {
         type: 'preset',
         preset: 'claude_code',
@@ -219,7 +228,7 @@ export class AgentSession {
           githubRepo: cfg.github.repo,
           loader: detectLoader(props),
           mcVersion: detectMcVersion(props),
-          providerNote: providerCaveats(provider, cfg.model || providerById(provider).label).join(' ')
+          providerNote: providerCaveats(provider, model || providerById(provider).label).join(' ')
         })}\n\n${coordinatorPrompt()}`
       },
       settingSources: ['user', 'project', 'local'],

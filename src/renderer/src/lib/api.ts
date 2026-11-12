@@ -24,6 +24,73 @@ export interface VersionChoice {
   loaders: Loader[]
 }
 
+export interface LocalModelDef {
+  id: string
+  label: string
+  sizeGb: number
+  tools: boolean
+  vision: boolean
+  suits: string[]
+  note: string
+}
+
+export interface LocalRoleDef {
+  id: 'agent' | 'vision' | 'quick'
+  label: string
+  helps: string
+  needs: 'tools' | 'vision'
+}
+
+export interface BundleDef {
+  id: string
+  label: string
+  summary: string
+  models: string[]
+  covers: string[]
+}
+
+export interface LocalInfo {
+  installed: boolean
+  /** The packaged app already contains the Ollama installer. */
+  bundledInstaller: boolean
+  exe: string | null
+  running: boolean
+  anthropicCompatible: boolean
+  version?: string
+  modelsDir: string
+  defaultModelsDir: string
+  freeGb?: number
+  installedModels: { id: string; sizeGb: number }[]
+  roles: { agent: string[]; vision: string[]; quick: string[] }
+  models: LocalModelDef[]
+  bundles: BundleDef[]
+  roleDefs: LocalRoleDef[]
+}
+
+export interface InstallProgress {
+  phase: 'download' | 'install' | 'done' | 'error'
+  progress?: number
+  receivedMb?: number
+  totalMb?: number
+  message: string
+}
+
+export interface PullProgress {
+  model: string
+  status: string
+  progress?: number
+  done: boolean
+  error?: string
+}
+
+export interface BundleProgress {
+  index: number
+  of: number
+  model: string
+  state: 'start' | 'done' | 'error'
+  error?: string
+}
+
 export interface ProviderDef {
   id: string
   label: string
@@ -162,6 +229,20 @@ export interface McfApi {
     }>
     check: (javaPath: string) => Promise<{ ok: boolean; version?: string; major?: number; suitsGame?: boolean; suitsTools?: boolean; error?: string; cleared?: boolean }>
     clearCache: () => Promise<{ ok: boolean }>
+  }
+  local: {
+    info: () => Promise<LocalInfo>
+    probe: () => Promise<{ exe: string | null; running: boolean; anthropic: boolean; version?: string }>
+    install: (opts: { installDir?: string; modelsDir?: string }) => Promise<{ ok: boolean; path?: string; error?: string }>
+    setModelsDir: (dir: string) => Promise<{ ok: boolean; modelsDir?: string; restartNeeded?: boolean; error?: string }>
+    startDaemon: () => Promise<{ ok: boolean; error?: string; alreadyRunning?: boolean }>
+    pull: (modelId: string) => Promise<{ ok: boolean; error?: string }>
+    pullBundle: (opts: { bundle?: string; models?: string[] }) => Promise<{ ok: boolean; done?: string[]; error?: string }>
+    cancelPull: () => Promise<{ cancelled: boolean; model?: string }>
+    setRoles: (roles: { agent?: string[]; vision?: string[]; quick?: string[] }) => Promise<{ ok: boolean; roles?: Record<string, string[]>; error?: string }>
+    onInstallProgress: (cb: (p: InstallProgress) => void) => () => void
+    onPullProgress: (cb: (p: PullProgress) => void) => () => void
+    onBundleProgress: (cb: (p: BundleProgress) => void) => () => void
   }
   providers: {
     list: () => Promise<{

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { AppConfig, GameInstance } from '../../../shared/types'
 import { api, type ProviderDef, type ProviderModel, type UpdateState } from '../lib/api'
+import LocalModelsPanel from './LocalModelsPanel'
 import GithubLogin from './GithubLogin'
 
 interface Props {
@@ -13,7 +14,7 @@ interface Props {
 }
 
 export default function SettingsModal({ config, onClose, onSaved, onToast, onOpenReferences }: Props): JSX.Element {
-  const [tab, setTab] = useState<'model' | 'github' | 'game' | 'updates'>('model')
+  const [tab, setTab] = useState<'model' | 'local' | 'github' | 'game' | 'updates'>('model')
   const [draft, setDraft] = useState(config)
   const [apiKey, setApiKey] = useState('')
   const [detected, setDetected] = useState<GameInstance[]>([])
@@ -89,6 +90,9 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
           <button className={tab === 'model' ? 'on' : ''} onClick={() => setTab('model')}>
             Model
           </button>
+          <button className={tab === 'local' ? 'on' : ''} onClick={() => setTab('local')}>
+            Local models
+          </button>
           <button className={tab === 'github' ? 'on' : ''} onClick={() => setTab('github')}>
             GitHub
           </button>
@@ -115,6 +119,14 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
                   setApiKey('')
                   setTest(null)
                   setModelSource('')
+                  // Choosing Ollama with no role mapping yet would leave the
+                  // agent with no model, so seed a sensible one from Local models.
+                  if (next === 'ollama') {
+                    void api.local.info().then((info) => {
+                      const agent = info.roles.agent[0]
+                      if (agent) set('model', agent)
+                    })
+                  }
                 }}
               >
                 {providers.map((p) => (
@@ -124,7 +136,19 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
                   </option>
                 ))}
               </select>
-              {currentProvider ? <div className="hint">{currentProvider.note}</div> : null}
+              {currentProvider ? (
+                <div className="hint">
+                  {currentProvider.note}
+                  {currentProvider.id === 'ollama' ? (
+                    <>
+                      {' '}
+                      <button className="link" onClick={() => setTab('local')}>
+                        Install it and choose models →
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
 
             <div className="field">
@@ -357,6 +381,8 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
             </div>
           </>
         )}
+
+        {tab === 'local' && <LocalModelsPanel onToast={onToast} />}
 
         {tab === 'github' && (
           <>

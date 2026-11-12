@@ -44,6 +44,21 @@ const api = {
     clearCache: () => ipcRenderer.invoke('java:clearCache')
   },
 
+  local: {
+    info: () => ipcRenderer.invoke('local:info'),
+    probe: () => ipcRenderer.invoke('local:probe'),
+    install: (opts: unknown) => ipcRenderer.invoke('local:install', opts),
+    setModelsDir: (dir: string) => ipcRenderer.invoke('local:setModelsDir', dir),
+    startDaemon: () => ipcRenderer.invoke('local:startDaemon'),
+    pull: (modelId: string) => ipcRenderer.invoke('local:pull', modelId),
+    pullBundle: (opts: unknown) => ipcRenderer.invoke('local:pullBundle', opts),
+    cancelPull: () => ipcRenderer.invoke('local:cancelPull'),
+    setRoles: (roles: unknown) => ipcRenderer.invoke('local:setRoles', roles),
+    onInstallProgress: (cb: (p: unknown) => void) => on('local:install-progress', cb),
+    onPullProgress: (cb: (p: unknown) => void) => on('local:pull-progress', cb),
+    onBundleProgress: (cb: (p: unknown) => void) => on('local:bundle-progress', cb)
+  },
+
   providers: {
     list: () => ipcRenderer.invoke('providers:list'),
     models: (opts: unknown) => ipcRenderer.invoke('providers:models', opts),
