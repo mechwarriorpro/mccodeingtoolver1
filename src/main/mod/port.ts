@@ -21,6 +21,7 @@ import { readProps } from './props'
 import { ERAS, resolveEra, javaForVersion } from '../versions/eras'
 import { generateProject } from './generate'
 import { scaffoldProject, templateRoot } from './scaffold'
+import { sourceJavaLevel } from '../build/gradle'
 import { compareMcVersions, type Loader } from '../versions/catalog'
 
 export type Layout = 'neoforge' | 'forge-gradle' | 'architectury' | 'fabric' | 'unknown'
@@ -44,6 +45,16 @@ export interface DetectedProject {
   hasBuildScript: boolean
   /** The project still carries files that only old eras use. */
   legacyFiles: string[]
+  /** Java level the build script asks for, if it says. */
+  declaredJava: number | null
+  /** Java level the targets declared *Minecraft version* needs. */
+  expectedJava: number
+  /**
+   * The sources are already on a newer Java than gradle.properties declares.
+   * That is the normal state half way through an upgrade, and it is worth saying
+   * out loud rather than presenting a two-ended port of a one-ended project.
+   */
+  midUpgrade: boolean
 }
 
 const BUILD_FILES = ['build.gradle', 'build.gradle.kts', 'settings.gradle', 'settings.gradle.kts']
@@ -199,6 +210,13 @@ export function detectProject(dir: string): DetectedProject {
   const version = props.mod_version ?? props.version ?? ''
   if (modId) evidence.push(`mod_id=${modId}`)
 
+  // Sources and gradle.properties move at different times during an upgrade, so
+  // the build script can already target Java 21 while the properties still say
+  // 1.12.2. Comparing the two is how that state gets noticed at all.
+  const declaredJava = sourceJavaLevel(dir)
+  const eraForSource = layout === 'unknown' ? null : resolveEra(loader, mcVersion || '1.12.2')
+  const expectedJava = eraForSource && mcVersion ? javaForVersion(loader, mcVersion, eraForSource) : 8
+
   const legacyFiles = [
     'mcmod.info',
     'src/main/resources/mcmod.info',
@@ -218,7 +236,10 @@ export function detectProject(dir: string): DetectedProject {
     version: version || null,
     evidence,
     hasBuildScript: build.name !== '',
-    legacyFiles
+    legacyFiles,
+    declaredJava,
+    expectedJava,
+    midUpgrade: declaredJava !== null && declaredJava > expectedJava
   }
 }
 
@@ -412,6 +433,16 @@ export function planPort(dir: string, target: { loader: Loader; mcVersion: strin
         `The generated project uses ${toolchainFor(target.loader)} instead; merge any custom dependencies or tasks across by hand. ` +
         'It cannot be edited into the new form — the two share almost no syntax.'
     })
+    if (from.midUpgrade) {
+      manual.push({
+        kind: 'mechanical',
+        title: 'This project is already half migrated',
+        detail:
+          `The sources already ask for Java ${from.declaredJava} while gradle.properties declares Minecraft ` +
+          `${from.mcVersion} (Java ${from.expectedJava}). The port treats the declared version as the starting point ` +
+          'but copies the sources as they are, so some of the work below may already be done. Check before redoing it.'
+      })
+    }
     manual.push(...apiNotesFor(from.mcVersion, target.mcVersion, from.loader, target.loader))
     if (!manual.some((m) => m.kind === 'api')) {
       manual.push({
@@ -440,6 +471,12 @@ export function migrationReport(plan: PortPlan, date = new Date()): string {
   lines.push(`Generated ${date.toISOString().slice(0, 10)} by MC Forge Agent.`)
   lines.push('')
   lines.push(`- **From:** ${from.loader} ${from.mcVersion || '(unknown)'} — ${from.layout}`)
+  if (from.midUpgrade) {
+    lines.push(
+      `- **Half migrated already:** sources ask for Java ${from.declaredJava}, the declared Minecraft ` +
+        `version needs Java ${from.expectedJava}`
+    )
+  }
   lines.push(`- **To:** ${target.loader} ${target.mcVersion} (Java ${plan.java})`)
   lines.push(`- **Sources:** \`${from.sourceRoot}\``)
   lines.push('')

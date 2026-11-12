@@ -127,6 +127,58 @@ check('an empty folder is unknown, not a guess', () => {
   assert.equal(p.loader, 'unknown')
 })
 
+console.log('\na project caught mid-upgrade')
+
+// ICBM Classic's real state: sources rewritten for 1.21.1, gradle.properties
+// still on 1.12.2. The two halves move at different times, so this is normal.
+const HALF = {
+  'gradle.properties': 'mod_id=icbm\nmod_name=ICBM Classic\nminecraft_version=1.12.2\nmod_version=6.4.1\n',
+  'build.gradle': [
+    'plugins { id "java-library" }',
+    'java { sourceCompatibility = JavaVersion.VERSION_21 targetCompatibility = JavaVersion.VERSION_21 }',
+    ''
+  ].join('\n'),
+  'src/main/resources/mcmod.info': '[]',
+  'src/main/java/com/builtbroken/icbm/ICBM.java': 'package com.builtbroken.icbm;\npublic record ICBM() {}\n'
+}
+
+check('a build script asking for Java 21 over 1.12.2 properties is noticed', () => {
+  const p = port.detectProject(fixture('m1', HALF))
+  assert.equal(p.declaredJava, 21)
+  assert.equal(p.expectedJava, 8)
+  assert.equal(p.midUpgrade, true)
+})
+
+check('an untouched 1.12.2 project is not flagged', () => {
+  const p = port.detectProject(fixture('m2', FORGE_112))
+  assert.equal(p.midUpgrade, false)
+})
+
+check('the plan says so instead of describing a clean two-ended port', () => {
+  const plan = port.planPort(fixture('m3', HALF), { loader: 'neoforge', mcVersion: '1.21.1' })
+  const step = plan.manual.find((m) => /half migrated/i.test(m.title))
+  assert.ok(step, 'no half-migrated step')
+  assert.match(step.detail, /Java 21/)
+  assert.match(step.detail, /1\.12\.2/)
+  assert.match(step.detail, /may already be done/)
+})
+
+check('the report states the half-migrated starting point', () => {
+  const plan = port.planPort(fixture('m4', HALF), { loader: 'neoforge', mcVersion: '1.21.1' })
+  const text = port.migrationReport(plan, new Date('2026-05-01T00:00:00Z'))
+  assert.match(text, /Half migrated already/)
+  assert.match(text, /sources ask for Java 21/)
+})
+
+check('the sources are copied as they are, not downgraded', () => {
+  const src = fixture('m5', HALF)
+  const out = path.join(root, 'half-out')
+  const r = port.convertProject({ sourceDir: src, targetDir: out, target: { loader: 'neoforge', mcVersion: '1.21.1' }, backup: false })
+  assert.equal(r.ok, true, r.error)
+  const text = fs.readFileSync(path.join(out, 'src/main/java/com/builtbroken/icbm/ICBM.java'), 'utf8')
+  assert.match(text, /record ICBM/)
+})
+
 console.log('\nplanning the move')
 
 check('Forge 1.12.2 → NeoForge 1.21.1 is a major jump needing Java 21', () => {

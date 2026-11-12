@@ -411,6 +411,13 @@ Two combinations are called out rather than quietly attempted:
 - **Architectury** (multi-loader) projects are refused: only one loader can be
   generated, so porting one would silently drop the other.
 
+**It knows when a project is already half migrated.** Sources and
+`gradle.properties` move at different times: in ICBM Classic the code was rewritten for 1.21.1
+(`records`, Java 21) while the properties still declared 1.12.2. The port detects that mismatch — the
+build script asking for a newer Java than the declared Minecraft version needs — flags it in the
+detection panel and in `MIGRATION.md`, and copies the sources exactly as they are, so the report
+never pretends a one-ended project is a clean two-ended port.
+
 **Nothing is destroyed.** The original folder is never written to. A `backup-…`
 copy is made inside it first, and the new project goes in a folder of its own —
 a half-migrated mod is the last thing you want to be holding the only copy of.

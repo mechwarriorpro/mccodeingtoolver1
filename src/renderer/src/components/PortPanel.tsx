@@ -216,6 +216,13 @@ export default function PortPanel({ onToast, onEditProject, activeDir }: Props):
             Read from {summaryLine ? 'the build files' : 'the project'}, not from the folder name — old mods are usually
             named after the version they were built for.
           </p>
+          {project.midUpgrade && (
+            <div className="hint warn">
+              This project is already part way through an upgrade: the sources ask for Java {project.declaredJava} but
+              gradle.properties declares {project.mcVersion}, which needs Java {project.expectedJava}. The port starts
+              from the declared version and copies the sources as they are, so some of the work may already be done.
+            </div>
+          )}
           {project.legacyFiles.length > 0 && (
             <p className="hint">
               Left behind on the way out: {project.legacyFiles.join(', ')} — the new loader cannot read them, and the new

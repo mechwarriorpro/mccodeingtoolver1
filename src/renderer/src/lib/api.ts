@@ -215,6 +215,9 @@ export interface DetectedProject {
   version: string | null
   sourceRoot: string
   legacyFiles: string[]
+  declaredJava: number | null
+  expectedJava: number
+  midUpgrade: boolean
 }
 
 export interface PortStep {
