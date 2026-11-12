@@ -94,11 +94,19 @@ for (const t of tests) {
     // Actions log downloads are unreliable behind proxies, but annotations and the
     // step summary always come through, so report there too.
     const out = `${e.stdout ?? ''}${e.stderr ?? ''}`
-    const interesting = out
-      .split(/\r?\n/)
-      .filter((l) => /FAIL|error|not found|Exception|\bat .*\(/.test(l))
-      .slice(0, 8)
-    failures.push({ file: t, detail: interesting.join(' | ') || String(e.message).slice(0, 300) })
+    // Keep the assertion lines and the indented detail lines that follow them.
+    const all = out.split(/\r?\n/).map((l) => l.replace(/\r/g, ''))
+    const picked = []
+    for (let i = 0; i < all.length; i++) {
+      if (/^\s*FAIL /.test(all[i])) {
+        picked.push(all[i].trim())
+        const next = all[i + 1]
+        if (next && /^\s{5,}\S/.test(next)) picked.push(next.trim().slice(0, 200))
+      } else if (/Error:|error:|not found|Exception/.test(all[i]) && picked.length < 8) {
+        picked.push(all[i].trim().slice(0, 200))
+      }
+    }
+    failures.push({ file: t, detail: picked.slice(0, 6).join(' | ') || String(e.message).slice(0, 300) })
   }
 }
 
