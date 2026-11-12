@@ -39,6 +39,26 @@ jobs:
         env:
           CI: 'true'
 
+      # Annotations and the step summary are readable through the API even when
+      # artifact/log downloads are blocked by a proxy, so echo failures here too.
+      - name: Report test failures
+        if: failure()
+        shell: bash
+        run: |
+          if [ -f test-failures.json ]; then
+            node -e '
+              const fs = require("fs");
+              const f = JSON.parse(fs.readFileSync("test-failures.json", "utf8"));
+              for (const x of f) {
+                const msg = String(x.detail || "").replace(/%/g, "%25").replace(/\r?\n/g, " ").slice(0, 700);
+                console.log(`::error title=${x.file}::${msg}`);
+              }
+              fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n### Test failures\n" + f.map(x => `- **${x.file}**: ${x.detail}`).join("\n"));
+            '
+          else
+            echo "::error title=tests::npm test failed before writing test-failures.json"
+          fi
+
       - name: Upload test diagnostics
         if: always()
         uses: actions/upload-artifact@v4

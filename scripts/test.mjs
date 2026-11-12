@@ -106,7 +106,9 @@ for (const t of tests) {
         picked.push(all[i].trim().slice(0, 200))
       }
     }
-    failures.push({ file: t, detail: picked.slice(0, 6).join(' | ') || String(e.message).slice(0, 300) })
+    // Keep enough of the raw tail to diagnose a crash even when no FAIL line was printed.
+    const tail = all.filter(Boolean).slice(-6).join(' ~ ')
+    failures.push({ file: t, detail: picked.slice(0, 4).join(' | ') || tail.slice(0, 600) || String(e.message).slice(0, 300) })
   }
 }
 
