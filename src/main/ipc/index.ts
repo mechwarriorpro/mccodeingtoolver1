@@ -2,7 +2,7 @@ import { BrowserWindow, app, dialog, ipcMain, shell } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import { AgentSession } from '../agent/engine'
-import { effectiveApiKey, loadConfig, redactConfig, saveConfig, screenshotsDir, attachmentsDir } from '../config'
+import { effectiveApiKey, effectiveBaseUrl, loadConfig, redactConfig, saveConfig, screenshotsDir, attachmentsDir } from '../config'
 import type {
   AppConfig,
   ChatMessage,
@@ -55,6 +55,20 @@ import {
   selectableVersions
 } from '../versions/catalog'
 import { resolveEra } from '../versions/eras'
+import { clearLessons, confirmLesson, listLessons, recall, retireLesson } from '../learn'
+import {
+  MAX_CLIP_MS,
+  analyseClip,
+  attachAnalysis,
+  clipDigest,
+  deleteClip,
+  getClip,
+  isRecording,
+  listClips,
+  startClip,
+  stopClip
+} from '../game/clip'
+import { captureFrameBuffer } from '../game/capture'
 import {
   countForkSources,
   createFork,
@@ -483,6 +497,72 @@ export function registerIpc(): void {
     const res = linkToProject(id, cfg.workspaceDir)
     if (res.ok) resetSession()
     return res
+  })
+
+  /* -------------------------------------------------------- past mistakes */
+
+  ipcMain.handle('learn:list', () => listLessons())
+
+  ipcMain.handle('learn:recall', (_e, opts: { error: string; loader?: Loader; mcVersion?: string }) =>
+    recall(opts.error, { loader: opts.loader, mcVersion: opts.mcVersion })
+  )
+
+  ipcMain.handle('learn:update', (_e, opts: { id: string; rule?: string; fix?: string; avoid?: string }) =>
+    confirmLesson(opts.id, { rule: opts.rule, fix: opts.fix, avoid: opts.avoid })
+  )
+
+  ipcMain.handle('learn:remove', (_e, id: string) => retireLesson(id))
+  ipcMain.handle('learn:clear', () => {
+    clearLessons()
+    return []
+  })
+
+  /* -------------------------------------------------- gameplay clips / vision */
+
+  ipcMain.handle('clip:start', async (_e, opts: { durationMs?: number; fps?: number; note?: string } = {}) => {
+    if (isRecording()) return { ok: false, error: 'A clip is already being recorded.' }
+    send('clip:started', { maxMs: MAX_CLIP_MS })
+    // The recorder resolves only when the clip ends, so this handler is awaited
+    // by the renderer for the whole capture. Progress arrives on clip:frame.
+    const clip = await startClip({
+      durationMs: opts.durationMs,
+      fps: opts.fps,
+      note: opts.note,
+      grab: captureFrameBuffer,
+      onFrame: (frame, index, total) => send('clip:frame', { t: frame.t, index, total, path: frame.path }),
+      onDone: (done) => send('clip:done', { clip: done })
+    })
+    return { ok: true, clip }
+  })
+
+  ipcMain.handle('clip:stop', () => stopClip())
+  ipcMain.handle('clip:list', () => listClips())
+  ipcMain.handle('clip:get', (_e, id: string) => getClip(id))
+  ipcMain.handle('clip:remove', (_e, id: string) => deleteClip(id))
+
+  /** Send the clip's frames to a vision model and store the write-up. */
+  ipcMain.handle('clip:analyse', async (_e, opts: { id: string; goal?: string; model?: string }) => {
+    const clip = getClip(opts.id)
+    if (!clip) return { ok: false, error: 'Unknown clip.' }
+    if (!clip.frames.length) return { ok: false, error: 'That clip has no frames.' }
+    send('clip:analysing', { id: clip.id })
+    const res = await analyseClip({
+      clip,
+      goal: opts.goal,
+      model: opts.model || loadConfig().visionModel || undefined,
+      apiKey: effectiveApiKey(),
+      baseUrl: effectiveBaseUrl()
+    })
+    if (res.ok && res.text) {
+      attachAnalysis(clip.id, { model: res.model ?? 'vision', text: res.text, frames: res.frames ?? 0 })
+    }
+    return res
+  })
+
+  /** Text digest, injected into the agent conversation on request. */
+  ipcMain.handle('clip:digest', (_e, id: string) => {
+    const clip = getClip(id)
+    return clip ? { ok: true, text: clipDigest(clip) } : { ok: false, error: 'Unknown clip.' }
   })
 
   /* ------------------------------------------------------- editable forks */

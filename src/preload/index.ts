@@ -53,6 +53,24 @@ const api = {
     supported: () => ipcRenderer.invoke('update:supported')
   },
 
+  learn: {
+    list: () => ipcRenderer.invoke('learn:list'),
+    recall: (opts: unknown) => ipcRenderer.invoke('learn:recall', opts),
+    update: (opts: unknown) => ipcRenderer.invoke('learn:update', opts),
+    remove: (id: string) => ipcRenderer.invoke('learn:remove', id),
+    clear: () => ipcRenderer.invoke('learn:clear')
+  },
+
+  clips: {
+    start: (opts?: unknown) => ipcRenderer.invoke('clip:start', opts),
+    stop: () => ipcRenderer.invoke('clip:stop'),
+    list: () => ipcRenderer.invoke('clip:list'),
+    get: (id: string) => ipcRenderer.invoke('clip:get', id),
+    remove: (id: string) => ipcRenderer.invoke('clip:remove', id),
+    analyse: (opts: unknown) => ipcRenderer.invoke('clip:analyse', opts),
+    digest: (id: string) => ipcRenderer.invoke('clip:digest', id)
+  },
+
   forks: {
     list: () => ipcRenderer.invoke('fork:list'),
     suggest: (referenceId: string) => ipcRenderer.invoke('fork:suggest', referenceId),
@@ -154,7 +172,11 @@ const api = {
     onRefLine: (cb: (p: unknown) => void) => on('ref:line', cb),
     onRefListChanged: (cb: () => void) => on('ref:list-changed', cb),
     onUpdateState: (cb: (p: unknown) => void) => on('update:state', cb),
-    onForkListChanged: (cb: () => void) => on('fork:list-changed', cb)
+    onForkListChanged: (cb: () => void) => on('fork:list-changed', cb),
+    onClipStarted: (cb: (p: { maxMs: number }) => void) => on('clip:started', cb),
+    onClipFrame: (cb: (p: { t: number; index: number; total: number; path: string }) => void) => on('clip:frame', cb),
+    onClipDone: (cb: (p: { clip: unknown }) => void) => on('clip:done', cb),
+    onClipAnalysing: (cb: (p: { id: string }) => void) => on('clip:analysing', cb)
   },
 
   shell: {

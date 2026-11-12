@@ -15,6 +15,7 @@ const defaultConfig: AppConfig = {
   decompilerJar: '',
   preferWrapper: true,
   autoUpdate: true,
+  visionModel: '',
   game: {
     instances: [],
     activeInstanceId: '',

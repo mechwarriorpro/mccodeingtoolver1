@@ -1,5 +1,6 @@
 import type { Loader } from '../versions/catalog'
 import { resolveEra } from '../versions/eras'
+import { lessonsForPrompt } from '../learn'
 
 /**
  * System prompt appended to Claude Code's preset prompt.
@@ -67,6 +68,11 @@ You have Claude Code's normal file tools (Read/Write/Edit/Glob/Grep/LS) plus app
 - \`mcp__mcfrogeagent__stop_game\` — close the game.
 - \`mcp__mcfrogeagent__export_technic_pack\` — produce a Technic-compatible pack zip from the instance.
 - \`mcp__mcfrogeagent__read_log\` — read the full \`run/logs/latest.log\` or a crash report.
+- \`mcp__mcfrogeagent__capture_clip\` — record up to 30 s of gameplay as frames and analyse it with a vision model. Use it for anything that only shows up over time (animations, mob behaviour, a crash after a few seconds, particles).
+- \`mcp__mcfrogeagent__stop_clip\` / \`list_clips\` / \`clip_report\` — stop the current clip, list past clips, and read one clip's analysis as text.
+- \`mcp__mcfrogeagent__recall_mistakes\` — check whether an error you are looking at has happened before, with the fix that worked. **Call it before debugging a build or runtime failure from scratch.**
+- \`mcp__mcfrogeagent__remember_fix\` — record an error and the fix that actually worked, so it is recognised next time. Call it once the fix is verified.
+- \`mcp__mcfrogeagent__list_mistakes\` — the lessons the app has learned so far.
 - \`mcp__mcfrogeagent__add_reference_mod\` — pull another mod from a GitHub release (or a local jar), decompile it with Vineflower, and copy the sources to \`reference/<slug>/\`.
 - \`mcp__mcfrogeagent__list_reference_mods\` / \`search_reference\` / \`reference_status\` — browse and grep those sources.
 
@@ -97,6 +103,7 @@ Never claim a build succeeded without checking the returned exit code / errors. 
 
 ${eraRules(loader, mc, era)}
 
+${lessonsBlock(loader, mc)}
 # Style
 
 - Small, focused files. Name things after what they do.
@@ -186,4 +193,17 @@ function modernJava(mc: string, since: string): boolean {
     if (d) return d > 0
   }
   return true
+}
+
+/**
+ * The learning block, or nothing at all when there is nothing to say. An empty
+ * heading would only teach the model that the section is noise.
+ */
+function lessonsBlock(loader: Loader, mc: string): string {
+  try {
+    const block = lessonsForPrompt({ loader, mcVersion: mc })
+    return block ? `${block}\n\n` : ''
+  } catch {
+    return ''
+  }
 }

@@ -431,3 +431,22 @@ a.link:hover { text-decoration: underline; }
   font-family: var(--mono); font-size: 11.5px; line-height: 1.55; tab-size: 4;
 }
 .fork-text:focus { outline: none; border-color: var(--line-2); }
+
+/* ------------------------------------------------------- gameplay clip panel */
+.clips { display: flex; flex-direction: column; }
+.filmstrip { display: flex; gap: 6px; overflow-x: auto; padding: 2px 0 6px; }
+.strip-frame {
+  position: relative; flex: 0 0 auto; border: 1px solid var(--line); border-radius: 6px;
+  padding: 0; background: var(--bg-3); cursor: pointer; overflow: hidden;
+}
+.strip-frame img { display: block; width: 132px; height: 75px; object-fit: cover; }
+.strip-frame span {
+  position: absolute; left: 4px; bottom: 3px; font-size: 9.5px; font-family: var(--mono);
+  color: #fff; background: rgba(0, 0, 0, 0.62); border-radius: 3px; padding: 0 4px;
+}
+.strip-frame:hover { border-color: var(--line-2); }
+.clip-analysis {
+  margin: 0; padding: 10px 12px; border-radius: 8px; background: #0b0e12; border: 1px solid var(--line);
+  font-size: 12px; line-height: 1.6; white-space: pre-wrap; max-height: 340px; overflow-y: auto;
+  font-family: inherit; color: var(--text);
+}

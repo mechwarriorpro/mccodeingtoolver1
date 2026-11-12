@@ -30,6 +30,8 @@ export interface AppConfig {
   preferWrapper: boolean
   /** Check GitHub releases for a newer build at startup (default on). */
   autoUpdate: boolean
+  /** Vision model used to analyse gameplay clips. Empty = built-in default. */
+  visionModel: string
 
   game: {
     /** Every place we can install into: Technic instance, Prism instance, plain run dir. */

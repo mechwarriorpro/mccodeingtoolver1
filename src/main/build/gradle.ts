@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
 import { findJava, run } from '../util/exec'
+import { indexErrors } from '../learn'
 
 export type BuildMode = 'local' | 'actions'
 
@@ -151,6 +152,15 @@ export async function runLocalBuild(opts: BuildOptions): Promise<BuildResult> {
 
   const log = fs.readFileSync(logPath, 'utf8')
   const errors = result.code === 0 ? [] : extractErrors(log)
+  if (errors.length) {
+    // Learning happens on every failing build, not only when the agent asks:
+    // by the time it reads the error the lesson is already recallable.
+    try {
+      indexErrors(errors, { logPath, source: 'local-build' })
+    } catch {
+      /* learning must never fail a build */
+    }
+  }
   const jarPath = result.code === 0 ? findBuiltJar(opts.workspaceDir) : undefined
   push(`[build] exit=${result.code} jar=${jarPath ?? 'none'}`)
   logStream.end()

@@ -171,6 +171,36 @@ async function captureViaElectron(): Promise<Buffer | null> {
   }
 }
 
+/**
+ * One frame for the clip recorder, kept in memory.
+ *
+ * The OS window-grab path spawns PowerShell, which takes a few hundred ms — far
+ * too slow for even 2 fps. desktopCapturer is a single in-process call, so a
+ * 30 s clip is possible without stuttering the app. The trade-off is that it
+ * grabs the screen (the game is fullscreen or a normal window, so it is in
+ * frame) rather than the game window alone.
+ */
+export async function captureFrameBuffer(): Promise<{ png: Buffer; label?: string } | null> {
+  const png = await captureViaElectron()
+  if (!png) return null
+  const label = await windowTitle().catch(() => undefined)
+  return { png, label }
+}
+
+/** Best-effort window title, used to note which window was in front. */
+async function windowTitle(): Promise<string | undefined> {
+  if (!isWin) return undefined
+  const { execFile } = await import('node:child_process')
+  return await new Promise((resolve) => {
+    execFile(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', "(Get-Process | Where-Object {$_.MainWindowTitle -ne ''} | Select-Object -First 1).MainWindowTitle"],
+      { timeout: 3000, windowsHide: true },
+      (err, stdout) => resolve(err ? undefined : stdout.trim() || undefined)
+    )
+  })
+}
+
 export function listScreenshots(): { path: string; createdAt: number; label?: string }[] {
   const dir = screenshotsDir()
   let files: string[] = []

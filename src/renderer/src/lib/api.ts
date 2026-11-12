@@ -24,6 +24,43 @@ export interface VersionChoice {
   loaders: Loader[]
 }
 
+export interface Lesson {
+  id: string
+  fingerprint: string
+  rule: string
+  avoid?: string
+  fix?: string
+  source: 'local-build' | 'actions' | 'crash' | 'vision' | 'manual'
+  loader?: string
+  mcVersion?: string
+  sample: string
+  logPath?: string
+  seen: number
+  firstSeen: number
+  lastSeen: number
+  confirmed?: boolean
+}
+
+export interface ClipFrame {
+  path: string
+  /** Milliseconds from the start of the clip. */
+  t: number
+  label?: string
+}
+
+export interface ClipRecord {
+  id: string
+  dir: string
+  startedAt: number
+  durationMs: number
+  fps: number
+  frames: ClipFrame[]
+  ended: 'duration' | 'stopped' | 'error'
+  error?: string
+  note?: string
+  analysis?: { at: number; model: string; text: string; frames: number }
+}
+
 export interface ForkInfo {
   id: string
   referenceId: string
@@ -110,6 +147,22 @@ export interface McfApi {
     setAuto: (enabled: boolean) => Promise<UpdateState>
     clearCache: () => Promise<{ ok: boolean; bytes?: number; error?: string }>
     supported: () => Promise<{ supported: boolean }>
+  }
+  learn: {
+    list: () => Promise<Lesson[]>
+    recall: (opts: { error: string; loader?: Loader; mcVersion?: string }) => Promise<{ lesson: Lesson; score: number; exact: boolean }[]>
+    update: (opts: { id: string; rule?: string; fix?: string; avoid?: string }) => Promise<Lesson | null>
+    remove: (id: string) => Promise<Lesson[]>
+    clear: () => Promise<Lesson[]>
+  }
+  clips: {
+    start: (opts?: { durationMs?: number; fps?: number; note?: string }) => Promise<{ ok: boolean; clip?: ClipRecord; error?: string }>
+    stop: () => Promise<{ ok: boolean; error?: string }>
+    list: () => Promise<ClipRecord[]>
+    get: (id: string) => Promise<ClipRecord | null>
+    remove: (id: string) => Promise<ClipRecord[]>
+    analyse: (opts: { id: string; goal?: string; model?: string }) => Promise<{ ok: boolean; text?: string; model?: string; frames?: number; error?: string }>
+    digest: (id: string) => Promise<{ ok: boolean; text?: string; error?: string }>
   }
   forks: {
     list: () => Promise<ForkInfo[]>
@@ -248,6 +301,10 @@ export interface McfApi {
     onRefListChanged: (cb: () => void) => () => void
     onUpdateState: (cb: (p: UpdateState) => void) => () => void
     onForkListChanged: (cb: () => void) => () => void
+    onClipStarted: (cb: (p: { maxMs: number }) => void) => () => void
+    onClipFrame: (cb: (p: { t: number; index: number; total: number; path: string }) => void) => () => void
+    onClipDone: (cb: (p: { clip: ClipRecord }) => void) => () => void
+    onClipAnalysing: (cb: (p: { id: string }) => void) => () => void
   }
 }
 

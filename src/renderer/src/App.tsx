@@ -9,8 +9,10 @@ import SetupModal from './components/SetupModal'
 import SettingsModal from './components/SettingsModal'
 import ReferencePanel from './components/ReferencePanel'
 import ForkPanel from './components/ForkPanel'
+import ClipPanel from './components/ClipPanel'
+import LearnPanel from './components/LearnPanel'
 
-type RailTab = 'game' | 'project' | 'files' | 'refs'
+type RailTab = 'game' | 'project' | 'files' | 'refs' | 'clips' | 'learn'
 
 export default function App(): JSX.Element {
   const [config, setConfig] = useState<(AppConfig & { apiKeySet: boolean }) | null>(null)
@@ -333,6 +335,12 @@ export default function App(): JSX.Element {
             <button className={railTab === 'refs' ? 'on' : ''} onClick={() => setRailTab('refs')}>
               References
             </button>
+            <button className={railTab === 'clips' ? 'on' : ''} onClick={() => setRailTab('clips')} title="Record gameplay and analyse it with a vision model">
+              Clips
+            </button>
+            <button className={railTab === 'learn' ? 'on' : ''} onClick={() => setRailTab('learn')} title="Mistakes the app has learned from">
+              Lessons
+            </button>
           </div>
           <div className="rail-body">
             {railTab === 'game' && (
@@ -359,6 +367,22 @@ export default function App(): JSX.Element {
                   <ForkPanel onToast={toast} />
                 </div>
               </>
+            )}
+            {railTab === 'learn' && (
+              <div className="card">
+                <h4>Lessons from past mistakes</h4>
+                <LearnPanel onToast={toast} />
+              </div>
+            )}
+            {railTab === 'clips' && (
+              <div className="card">
+                <h4>Gameplay clips</h4>
+                <ClipPanel
+                  onToast={toast}
+                  onOpenImage={setLightbox}
+                  onSendToAgent={(text) => void send(text, [])}
+                />
+              </div>
             )}
             {railTab === 'files' && (
               <div className="card">

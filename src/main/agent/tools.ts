@@ -2,12 +2,15 @@ import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import fs from 'node:fs'
 import path from 'node:path'
-import { loadConfig, effectiveApiKey } from '../config'
+import { loadConfig, effectiveApiKey, effectiveBaseUrl } from '../config'
 import { runLocalBuild } from '../build/gradle'
 import { resolveJava, resolveToolJava } from '../util/exec'
 import { installJar, copyExtraMods, readJarInfo } from '../mod/jar'
 import { buildTechnicPackZip, detectTechnicInstances, launchTechnic } from '../game/technic'
 import { captureGameWindow, listScreenshots } from '../game/capture'
+import { analyseClip, attachAnalysis, clipDigest, getClip, listClips, startClip, stopClip } from '../game/clip'
+import { confirmLesson, listLessons, recall, recordFailure } from '../learn'
+import { captureFrameBuffer } from '../game/capture'
 import { gameStatus, launchDevClient, readGameLog, stopGame } from '../game/launcher'
 import { installNeoForge, isNeoForgeInstalled } from '../game/neoforge'
 import { launchNeoForge, runningGame, stopNeoForge } from '../game/client'
@@ -362,6 +365,129 @@ export function createAgentTools(ctx: ToolContext) {
           loaderVersion: props.neo_version ?? '21.1.265'
         })
         return res.ok ? text(`Wrote ${res.zip}`) : err(res.error ?? 'export failed')
+      }
+    ),
+
+    tool(
+      'recall_mistakes',
+      'Before fixing a build/runtime error, check whether the same failure happened before in this app. Returns past lessons with the fix that worked, best match first.',
+      {
+        error: z.string().describe('The error text (a javac error, gradle failure, or crash line) to look up'),
+        loader: z.enum(['neoforge', 'forge', 'fabric']).optional(),
+        mcVersion: z.string().optional()
+      },
+      async ({ error, loader, mcVersion }) => {
+        const res = recall(error, { loader, mcVersion, limit: 5 })
+        if (!res.length) return text('No similar past mistake on record. Diagnose it from scratch and then record what fixed it with remember_fix.')
+        return text(
+          JSON.stringify(
+            res.map((r) => ({
+              score: Number(r.score.toFixed(2)),
+              exact: r.exact,
+              rule: r.lesson.rule,
+              fix: r.lesson.fix,
+              avoid: r.lesson.avoid,
+              seen: r.lesson.seen,
+              confirmed: r.lesson.confirmed,
+              sample: r.lesson.sample.slice(0, 500)
+            })),
+            null,
+            2
+          )
+        )
+      }
+    ),
+
+    tool(
+      'remember_fix',
+      'Record a failure and the fix that worked, so the same mistake is recognised next time. Call this after you have actually fixed something that failed — not for every build error, since errors that are fixed immediately are learned automatically.',
+      {
+        error: z.string().describe('The original error text'),
+        fix: z.string().describe('What fixed it, in one or two sentences (the API to use, the property to set, the file to add)'),
+        rule: z.string().optional().describe('The general rule, if the fix applies more widely than this exact error'),
+        avoid: z.string().optional().describe('What not to do again'),
+        loader: z.enum(['neoforge', 'forge', 'fabric']).optional(),
+        mcVersion: z.string().optional()
+      },
+      async ({ error, fix, rule, avoid, loader, mcVersion }) => {
+        const rec = recordFailure({ error, fix, rule, source: 'manual', loader, mcVersion })
+        if (!rec.lesson) return err(`Not recorded: ${rec.ignored ?? 'unusable error text'}`)
+        if (avoid || rule) confirmLesson(rec.lesson.id, { rule, avoid, fix })
+        return text(`${rec.added ? 'Learned a new' : 'Updated an existing'} lesson (seen ${rec.lesson.seen}×): ${rec.lesson.rule}`)
+      }
+    ),
+
+    tool('list_mistakes', 'List the lessons this app has learned from past failures, most useful first.', {}, async () =>
+      text(JSON.stringify(listLessons().slice(0, 40).map((l) => ({ id: l.id, rule: l.rule, fix: l.fix, avoid: l.avoid, seen: l.seen, source: l.source, confirmed: l.confirmed, loader: l.loader, mcVersion: l.mcVersion })), null, 2))
+    ),
+
+    tool(
+      'capture_clip',
+      'Record a short gameplay clip (frames, max 30 s) of the game window and analyse it with a vision model. Use this when the user reports something that only shows up over time — an animation, a mob behaviour, a crash after a few seconds, particles, a GUI transition — or when a single screenshot cannot show the problem. Frames are returned as images so you can see them yourself; the analysis is a second opinion.',
+      {
+        seconds: z.number().min(1).max(30).optional().describe('Clip length in seconds. Default 10, maximum 30.'),
+        goal: z.string().optional().describe('What to look for, e.g. "does the ruby sword swing animation play"'),
+        analyse: z.boolean().optional().describe('Also run the vision-model write-up. Default true.')
+      },
+      async ({ seconds, goal, analyse }) => {
+        const clip = await startClip({
+          durationMs: (seconds ?? 10) * 1000,
+          fps: 2,
+          note: goal,
+          grab: captureFrameBuffer
+        })
+        if (!clip.frames.length) return err('No frames were captured. Is the game running and visible?')
+        ctx.notify('clip:done', { clip })
+
+        const parts: { type: string; text?: string; data?: string; mimeType?: string }[] = [
+          {
+            type: 'text' as const,
+            text: `Captured ${(clip.durationMs / 1000).toFixed(1)}s (${clip.frames.length} frames) into ${clip.dir}.`
+          }
+        ]
+        // A handful of frames, spread across the clip, so the model can see it.
+        for (const f of clip.frames.filter((_, i) => clip.frames.length <= 6 || i % Math.ceil(clip.frames.length / 6) === 0).slice(0, 6)) {
+          const png = fs.readFileSync(f.path)
+          parts.push({ type: 'image' as const, data: png.toString('base64'), mimeType: 'image/png' })
+        }
+
+        if (analyse !== false) {
+          const res = await analyseClip({
+            clip,
+            goal,
+            apiKey: effectiveApiKey(),
+            baseUrl: effectiveBaseUrl(),
+            model: loadConfig().visionModel || undefined
+          })
+          if (res.ok && res.text) {
+            attachAnalysis(clip.id, { model: res.model ?? 'vision', text: res.text, frames: res.frames ?? 0 })
+            parts.push({ type: 'text' as const, text: `\nVision analysis:\n${res.text}` })
+          } else if (res.error) {
+            parts.push({ type: 'text' as const, text: `\n(Vision analysis unavailable: ${res.error})` })
+          }
+        }
+        return { content: parts as never }
+      }
+    ),
+
+    tool('stop_clip', 'Stop the clip that is currently recording, keeping the frames captured so far.', {}, async () =>
+      stopClip().ok ? text('Stopping the clip; frames captured so far are kept.') : err('No clip is recording.')
+    ),
+
+    tool(
+      'list_clips',
+      'List gameplay clips recorded in this app, newest first, with their analyses.',
+      {},
+      async () => text(JSON.stringify(listClips().slice(0, 10).map((c) => ({ id: c.id, dir: c.dir, durationMs: c.durationMs, frames: c.frames.length, note: c.note, analysis: c.analysis?.text?.slice(0, 1200) })), null, 2))
+    ),
+
+    tool(
+      'clip_report',
+      'The full text digest (duration, note, vision analysis) of one clip by id, to reason about after the images are out of context.',
+      { id: z.string().describe('Clip id from list_clips or capture_clip') },
+      async ({ id }) => {
+        const clip = getClip(id)
+        return clip ? text(clipDigest(clip)) : err('Unknown clip id.')
       }
     ),
 

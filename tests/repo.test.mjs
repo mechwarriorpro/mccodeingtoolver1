@@ -82,7 +82,12 @@ const mustTrack = [
   // added with the update feed and editable reference forks
   'src/main/update.ts',
   'src/main/mod/fork.ts',
-  'src/renderer/src/components/ForkPanel.tsx'
+  'src/renderer/src/components/ForkPanel.tsx',
+  // added with gameplay clips and the learning store
+  'src/main/game/clip.ts',
+  'src/main/learn.ts',
+  'src/renderer/src/components/ClipPanel.tsx',
+  'src/renderer/src/components/LearnPanel.tsx'
 ]
 const tracked = new Set(lines(git(['ls-files'])))
 const missing = mustTrack.filter((f) => !tracked.has(f) && fs.existsSync(path.join(root, f)))
