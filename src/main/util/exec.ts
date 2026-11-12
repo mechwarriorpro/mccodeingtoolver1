@@ -289,14 +289,27 @@ export function probeJava(path: string): VersionProbe | null {
 
   let result: VersionProbe | null = null
   try {
-    const res = spawnSync(path, ['-version'], { timeout: 8000, windowsHide: true, encoding: 'utf8' })
-    const text = `${res.stderr ?? ''}${res.stdout ?? ''}`
-    const m = text.match(/version "([^"]+)"/)
-    if (m) {
-      result = {
-        version: m[1],
-        major: majorOf(m[1]),
-        arch: text.match(/(64|32)-Bit/i)?.[0]
+    // A .bat/.cmd wrapper (some launchers ship one) cannot be spawned directly on
+    // Windows, and Node refuses to exec .bat without a shell. Route through cmd.exe
+    // rather than shell:true, which would mangle an unquoted path with spaces.
+    const attempts: (() => ReturnType<typeof spawnSync>)[] = /\.(bat|cmd)$/i.test(path)
+      ? [
+          () => spawnSync(process.env.COMSPEC || 'cmd.exe', ['/c', path, '-version'], { timeout: 8000, windowsHide: true, encoding: 'utf8' }),
+          () => spawnSync(path, ['-version'], { timeout: 8000, windowsHide: true, encoding: 'utf8', shell: true })
+        ]
+      : [() => spawnSync(path, ['-version'], { timeout: 8000, windowsHide: true, encoding: 'utf8' })]
+
+    for (const attempt of attempts) {
+      const res = attempt()
+      const text = `${res.stderr ?? ''}${res.stdout ?? ''}`
+      const m = text.match(/version "([^"]+)"/)
+      if (m) {
+        result = {
+          version: m[1],
+          major: majorOf(m[1]),
+          arch: text.match(/(64|32)-Bit/i)?.[0]
+        }
+        break
       }
     }
   } catch {

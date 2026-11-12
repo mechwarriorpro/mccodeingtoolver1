@@ -138,27 +138,43 @@ section('java for the decompiler is version-checked, not just "found"')
 // The reported crash: PATH/JAVA_HOME held a Java 8, Vineflower needs 17+, and
 // java died with UnsupportedClassVersionError (class file 61 vs 52).
 const exec = await import('../out-test/main/util/exec.js')
+const isWin = process.platform === 'win32'
 const stubDir = path.join(tmp, 'javas')
+
+/**
+ * A fake java that answers -version. Windows cannot execute a shebang script, so
+ * the stub is a .cmd there and a shell script elsewhere; both write the same
+ * `openjdk version "..."` line to stderr, which is what the probe parses.
+ */
 const makeJava = (name, versionLine) => {
-  const dir = path.join(stubDir, name, 'bin')
+  const dir = path.join(stubDir, name)
   fs.mkdirSync(dir, { recursive: true })
-  const exe = path.join(dir, 'java')
-  fs.writeFileSync(exe, `#!/bin/sh\nif [ "$1" = "-version" ]; then echo 'openjdk version "${versionLine}" 2024-01-01' >&2; fi\nexit 0\n`)
-  fs.chmodSync(exe, 0o755)
-  return exe
+  const line = `openjdk version "${versionLine}" 2024-01-01`
+  if (isWin) {
+    const file = path.join(dir, 'java.cmd')
+    fs.writeFileSync(file, `@echo off\r\nif "%~1"=="-version" ( echo ${line} 1>&2 )\r\nexit /b 0\r\n`)
+    return file
+  }
+  const file = path.join(dir, 'java')
+  fs.writeFileSync(file, `#!/bin/sh\nif [ "$1" = "-version" ]; then echo '${line}' >&2; fi\nexit 0\n`)
+  fs.chmodSync(file, 0o755)
+  return file
 }
+
 const j8 = makeJava('jdk8', '1.8.0_412')
 const j17 = makeJava('jdk17', '17.0.11')
 const j21 = makeJava('jdk21', '21.0.4')
-const jBad = path.join(stubDir, 'not-java', 'bin', 'java')
-fs.mkdirSync(path.dirname(jBad), { recursive: true })
-fs.writeFileSync(jBad, 'this is not an executable java\n')
+const jBadDir = path.join(stubDir, 'not-java')
+fs.mkdirSync(jBadDir, { recursive: true })
+const jBad = path.join(jBadDir, isWin ? 'java.exe' : 'java')
+fs.writeFileSync(jBad, isWin ? 'not a real executable\r\n' : 'this is not a real java\n')
+if (!isWin) fs.chmodSync(jBad, 0o755)
 
 const probe8 = exec.probeJava(j8)
 check('probe reads Java 8 as major 8', probe8?.major === 8, JSON.stringify(probe8))
 check('probe reads Java 17 as major 17', exec.probeJava(j17)?.major === 17, JSON.stringify(exec.probeJava(j17)))
 check('probe reads Java 21 as major 21', exec.probeJava(j21)?.major === 21, JSON.stringify(exec.probeJava(j21)))
-check('probe returns null for a broken java', exec.probeJava(jBad) === null)
+check('probe returns null for a broken java', exec.probeJava(jBad) === null, JSON.stringify(exec.probeJava(jBad)))
 check('probe returns null for a missing path', exec.probeJava(path.join(stubDir, 'nope', 'java')) === null)
 
 check('tool java accepts 17', exec.resolveToolJava(j17).path === j17, JSON.stringify(exec.resolveToolJava(j17)))
@@ -178,19 +194,26 @@ check('no JVM crash text leaks through', !/UnsupportedClassVersionError/.test(j8
 
 section('an UnsupportedClassVersionError becomes advice, not a stack trace')
 // If a stale java slips through, translate the JVM message instead of printing
-// the 14-line stack trace the user saw.
-const slowDir = path.join(tmp, 'javas', 'old', 'bin')
-fs.mkdirSync(slowDir, { recursive: true })
-const oldJava = path.join(slowDir, 'java')
-fs.writeFileSync(oldJava, [
-  '#!/bin/sh',
-  'if [ "$1" = "-version" ]; then echo \'openjdk version "21.0.1" 2024-01-01\' >&2; exit 0; fi',
-  "echo 'Exception in thread \"main\" java.lang.UnsupportedClassVersionError: org/jetbrains/java/decompiler/main/decompiler/ConsoleDecompiler has been compiled by a more recent version of the Java Runtime (class file version 61.0), this version of the Java Runtime only recognizes class file versions up to 52.0' >&2",
-  'exit 1',
-  ''
-].join('\n'))
-fs.chmodSync(oldJava, 0o755)
-const oldRun = await refs.decompileJar(jarPath, path.join(tmp, 'out-old'), { javaPath: oldJava, customJar: '/tmp/does-not-matter.jar' })
+// the 14-line stack trace the user saw. The stub claims to be Java 21 (so the
+// version gate passes) but then throws the class-file error a Java 8 would.
+const oldDir = path.join(tmp, 'javas', 'old')
+fs.mkdirSync(oldDir, { recursive: true })
+const msg =
+  'Exception in thread "main" java.lang.UnsupportedClassVersionError: org/jetbrains/java/decompiler/main/decompiler/ConsoleDecompiler ' +
+  'has been compiled by a more recent version of the Java Runtime (class file version 61.0), this version of the Java Runtime only ' +
+  'recognizes class file versions up to 52.0'
+let oldJava
+if (isWin) {
+  oldJava = path.join(oldDir, 'java.cmd')
+  fs.writeFileSync(oldJava, `@echo off\r\nif "%~1"=="-version" ( echo openjdk version "21.0.1" 2024-01-01 1>&2 & exit /b 0 )\r\necho ${msg.replace(/[&|<>]/g, '')} 1>&2\r\nexit /b 1\r\n`)
+} else {
+  oldJava = path.join(oldDir, 'java')
+  fs.writeFileSync(oldJava, `#!/bin/sh\nif [ "$1" = "-version" ]; then echo 'openjdk version "21.0.1" 2024-01-01' >&2; exit 0; fi\nprintf '%s\\n' '${msg}' >&2\nexit 1\n`)
+  fs.chmodSync(oldJava, 0o755)
+}
+const fakeJar = path.join(tmp, 'decompiler.jar')
+fs.writeFileSync(fakeJar, 'stub')
+const oldRun = await refs.decompileJar(jarPath, path.join(tmp, 'out-old'), { javaPath: oldJava, customJar: fakeJar })
 check('class-file error is translated', /needs a newer Java/.test(oldRun.error ?? ''), oldRun.error)
 check('the translated error names both versions', /61/.test(oldRun.error ?? '') && /17\+/.test(oldRun.error ?? ''), oldRun.error)
 check('no raw stack trace in the error', !/UnsupportedClassVersionError/.test(oldRun.error ?? ''), oldRun.error)
