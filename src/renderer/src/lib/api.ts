@@ -75,6 +75,37 @@ export interface HardwareInfo {
   primary?: GpuInfo
   recommendedBundle: string
   suggestedContext: number
+  system: SystemInfo
+  verdicts: Record<string, ModelVerdict>
+  /** Largest model that runs comfortably, if any. */
+  bestModel?: string
+  /** Nothing in the catalogue can run here. */
+  noneRun: boolean
+}
+
+export type Verdict = 'good' | 'slow' | 'tight' | 'impossible'
+
+export interface SystemInfo {
+  platform: string
+  ramGb: number
+  cpuCores: number
+  cpus: string
+  gpus: GpuInfo[]
+  primary?: GpuInfo
+  usableGb: number
+  cpuOnly: boolean
+  summary: string
+  notes: string[]
+}
+
+export interface ModelVerdict {
+  modelId: string
+  verdict: Verdict
+  needGb: number
+  haveGb: number
+  reason?: string
+  fix?: string
+  onCpu: boolean
 }
 
 export interface GpuInfo {
@@ -106,7 +137,7 @@ export interface BundleProgress {
   index: number
   of: number
   model: string
-  state: 'start' | 'done' | 'error'
+  state: 'start' | 'done' | 'error' | 'skipped'
   error?: string
 }
 
@@ -255,8 +286,8 @@ export interface McfApi {
     install: (opts: { installDir?: string; modelsDir?: string }) => Promise<{ ok: boolean; path?: string; error?: string }>
     setModelsDir: (dir: string) => Promise<{ ok: boolean; modelsDir?: string; restartNeeded?: boolean; error?: string }>
     startDaemon: () => Promise<{ ok: boolean; error?: string; alreadyRunning?: boolean }>
-    pull: (modelId: string) => Promise<{ ok: boolean; error?: string }>
-    pullBundle: (opts: { bundle?: string; models?: string[] }) => Promise<{ ok: boolean; done?: string[]; error?: string }>
+    pull: (modelId: string) => Promise<{ ok: boolean; error?: string; hardware?: ModelVerdict }>
+    pullBundle: (opts: { bundle?: string; models?: string[] }) => Promise<{ ok: boolean; done?: string[]; skipped?: string[]; error?: string }>
     cancelPull: () => Promise<{ cancelled: boolean; model?: string }>
     setRoles: (roles: { agent?: string[]; vision?: string[]; quick?: string[] }) => Promise<{ ok: boolean; roles?: Record<string, string[]>; error?: string }>
     setContext: (tokens: number) => Promise<{ ok: boolean; contextLength?: number; restartNeeded?: boolean; error?: string }>

@@ -28,6 +28,7 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
   const [loadingModels, setLoadingModels] = useState(false)
   const [testing, setTesting] = useState(false)
   const [test, setTest] = useState<{ ok: boolean; message: string } | null>(null)
+  const [localFit, setLocalFit] = useState<{ none: boolean; cpuOnly: boolean; best?: string; installed: boolean; running: boolean } | null>(null)
   const [update, setUpdate] = useState<(UpdateState & { versionLabel?: string }) | null>(null)
   const [checking, setChecking] = useState(false)
 
@@ -125,7 +126,19 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
                     void api.local.info().then((info) => {
                       const agent = info.roles.agent[0]
                       if (agent) set('model', agent)
+                      // Hardware is checked before the provider is saved, so a
+                      // machine that cannot run any local model is told now
+                      // rather than after a failed first message.
+                      setLocalFit({
+                        none: info.hardware?.noneRun ?? false,
+                        cpuOnly: info.hardware?.system?.cpuOnly ?? false,
+                        best: info.models.find((m) => m.id === info.hardware?.bestModel)?.label,
+                        installed: info.installed,
+                        running: info.running
+                      })
                     })
+                  } else {
+                    setLocalFit(null)
                   }
                 }}
               >
@@ -136,6 +149,29 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
                   </option>
                 ))}
               </select>
+              {localFit ? (
+                <div className={`local-blocked`} style={{ marginTop: 8 }}>
+                  {localFit.none ? (
+                    <>
+                      <strong>Local models will not run on this machine.</strong> Every model needs more memory
+                      than is available. Switch to a free cloud provider above (Z.ai or OpenRouter) — no card
+                      needed — or open <strong>Local models</strong> to see the numbers.
+                    </>
+                  ) : !localFit.installed ? (
+                    <>
+                      Ollama is not installed yet. Open <strong>Local models</strong> to install it and download a
+                      model{localFit.best ? ` — ${localFit.best} is the best fit for this machine.` : '.'}
+                    </>
+                  ) : !localFit.running ? (
+                    <>Ollama is installed but not running. Open <strong>Local models</strong> and press Start Ollama.</>
+                  ) : localFit.cpuOnly ? (
+                    <>
+                      No supported graphics card: models will run on the <strong>CPU</strong>. That works, but it is
+                      slow — pick the smallest model in <strong>Local models</strong>.
+                    </>
+                  ) : null}
+                </div>
+              ) : null}
               {currentProvider ? (
                 <div className="hint">
                   {currentProvider.note}

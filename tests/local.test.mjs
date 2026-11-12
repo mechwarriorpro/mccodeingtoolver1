@@ -195,6 +195,92 @@ check('an integrated GPU does not win over a discrete one', local.primaryGpu([
   { name: 'AMD Radeon RX 5700 XT', vendor: 'amd', vramGb: 8, needsVulkan: true }
 ])?.name === 'AMD Radeon RX 5700 XT')
 
+section('a model is judged against the machine, not assumed')
+// The rule: never refuse something that would work, never let something that
+// cannot load be downloaded silently.
+const strong = { platform: 'win32', ramGb: 48, cpuCores: 16, cpus: 'x', gpus: [], usableGb: 32, cpuOnly: false, summary: '', notes: [] }
+const eight = { ...strong, ramGb: 16, usableGb: 13 }
+const potato = { ...strong, ramGb: 4, usableGb: 2, cpuOnly: true }
+const cpuOnly = { ...strong, ramGb: 32, usableGb: 26, cpuOnly: true, primary: undefined }
+
+check('a big machine runs the big coder well', local.verdictFor('qwen3-coder:30b', strong).verdict === 'good')
+check('that verdict is not "slow"', local.verdictFor('qwen3-coder:30b', strong).verdict !== 'slow')
+check('an 8 GB card still runs Gemma 4, with a warning', ['good', 'tight', 'slow'].includes(local.verdictFor('gemma4:12b', eight).verdict))
+check('and it is not presented as comfortable', local.verdictFor('gemma4:12b', eight).verdict !== 'good')
+check('an 8 GB machine is told the 30B will not run', local.verdictFor('qwen3-coder:30b', eight).verdict === 'impossible')
+check('a 4 GB machine cannot run any model', local.verdictFor('qwen3-coder:7b', potato).verdict === 'impossible')
+check('a 24 GB machine is told the 30B is tight, not comfortable', local.verdictFor('qwen3-coder:30b', { ...strong, usableGb: 24 }).verdict === 'tight')
+check('nothing fits on a 4 GB machine', local.suitability(potato).none === true)
+check('something fits on 24 GB', local.suitability(strong).none === false)
+check('the best model on a big machine is the biggest one', local.suitability(strong).best === 'qwen3-coder:30b')
+check('an impossible verdict carries the numbers', local.verdictFor('qwen3-coder:30b', potato).reason?.includes('GB'))
+check('an impossible verdict offers a fix', !!local.verdictFor('qwen3-coder:30b', potato).fix)
+check('the fix mentions the cloud alternative', /cloud|free/i.test(local.verdictFor('qwen3-coder:30b', potato).fix ?? ''))
+
+section('CPU-only machines are warned, not blocked')
+// A GPU is not required. Refusing here would be the very failure this rule
+// exists to prevent: slow is different from impossible.
+const cpuVerdict = local.verdictFor('qwen3-coder:7b', cpuOnly)
+check('a small model still runs without a GPU', cpuVerdict.verdict !== 'impossible')
+check('it is flagged as running on the CPU', cpuVerdict.onCpu === true)
+check('the user is told it will be slow', /slow|CPU/i.test(`${cpuVerdict.reason ?? ''}${local.suitability(cpuOnly).systems.notes.join(' ')}`))
+check('a CPU-only machine can still run something', local.suitability(cpuOnly).none === false)
+// 22.6 GB into 26 GB is a tight fit, not an impossible one — calling it
+// impossible would refuse something that works, which is the failure this rule
+// exists to prevent.
+check('a 30B on 26 GB of RAM is a tight fit rather than a refusal', local.verdictFor('qwen3-coder:30b', { ...cpuOnly, usableGb: 26 }).verdict === 'tight')
+check('and it says why', /little is left|tight/i.test(local.verdictFor('qwen3-coder:30b', { ...cpuOnly, usableGb: 26 }).reason ?? ''))
+check('a 30B on 8 GB of RAM is refused', local.verdictFor('qwen3-coder:30b', { ...cpuOnly, ramGb: 8, usableGb: 4 }).verdict === 'impossible')
+
+section('memory estimates are plausible')
+check('a 7B model needs more than its weights', local.modelMemoryGb('qwen3-coder:7b', 12288) > 5)
+check('it needs less than twice that', local.modelMemoryGb('qwen3-coder:7b', 12288) < 10)
+check('bigger models need more memory', local.modelMemoryGb('qwen3-coder:30b') > local.modelMemoryGb('qwen3-coder:7b'))
+check('a larger context needs more memory', local.modelMemoryGb('gemma4:12b', 32768) > local.modelMemoryGb('gemma4:12b', 8192))
+check('a vision model costs a little extra for its projector', local.modelMemoryGb('gemma4:12b') > local.modelMemoryGb('qwen3-coder:7b') / 2)
+check('an unknown model needs nothing', local.modelMemoryGb('nope') === 0)
+check('every catalogue model has a sane estimate', local.LOCAL_MODELS.every((m) => local.modelMemoryGb(m.id) >= m.sizeGb))
+
+section('this machine is detected, whatever it is')
+const system = local.detectSystem()
+check('RAM is reported', system.ramGb > 0)
+check('CPU cores are reported', system.cpuCores > 0)
+check('the platform is known', typeof system.platform === 'string' && system.platform.length > 0)
+check('there is always a summary', system.summary.length > 0)
+check('usable memory is not negative', system.usableGb >= 0)
+check('a GPU list is always returned', Array.isArray(system.gpus))
+check('suitability covers every catalogue model', Object.keys(local.suitability(system).verdicts).length === local.LOCAL_MODELS.length)
+check('every verdict is one of the four states', Object.values(local.suitability(system).verdicts).every((v) => ['good', 'slow', 'tight', 'impossible'].includes(v.verdict)))
+
+section('free space is measured without throwing on odd paths')
+check('a missing drive does not throw', typeof local.freeSpaceGb('Z:\\nope\\nope') === 'number' || local.freeSpaceGb('Z:\\nope\\nope') === undefined)
+check('it falls back when the given folder does not exist', local.freeSpaceGb('Z:\\definitely\\not\\here') === undefined || local.freeSpaceGb('Z:\\definitely\\not\\here') > 0)
+
+section('weak machines still have somewhere to go')
+// Before this, the catalogue bottomed out at a 5 GB coder, so an 8 GB laptop
+// with no GPU was told that nothing at all would run — which was both true of
+// that catalogue and a bad answer.
+const tinyModels = local.LOCAL_MODELS.filter((m) => m.sizeGb <= 3)
+check('there are models small enough for 8 GB of RAM', tinyModels.length >= 2)
+check('one of them can call tools', tinyModels.some((m) => m.tools))
+check('one of them can read images', tinyModels.some((m) => m.vision))
+check('the small models are honest about being small', tinyModels.every((m) => m.note.length > 20))
+const eightGbNoGpu = { platform: 'win32', ramGb: 8, cpuCores: 4, cpus: 'x', gpus: [], usableGb: 5.5, cpuOnly: true, summary: '', notes: [] }
+check('an 8 GB machine with no GPU can run something', local.suitability(eightGbNoGpu).none === false)
+check('and the smallest model is the one it is offered', local.suitability(eightGbNoGpu).best === 'llama3.2:3b')
+check('the 7B is only "slow" there, not refused', local.verdictFor('qwen3-coder:7b', eightGbNoGpu).verdict !== 'impossible')
+check('a low-end bundle exists for that machine', !!local.bundleById('lowend'))
+const lowend = local.bundleById('lowend')
+check('the low-end bundle covers every role', ['agent', 'vision', 'quick'].every((r) => lowend.covers.includes(r)))
+check('it weighs less than 7 GB', local.bundleSizeGb(lowend.models) < 7)
+check('every model in it fits an 8 GB machine', lowend.models.every((id) => local.verdictFor(id, eightGbNoGpu).verdict !== 'impossible'))
+
+section('a machine with almost nothing is told plainly')
+const fourGb = { platform: 'win32', ramGb: 4, cpuCores: 2, cpus: 'x', gpus: [], usableGb: 1.5, cpuOnly: true, summary: '', notes: [] }
+check('a 4 GB machine is reported as unable to run any local model', local.suitability(fourGb).none === true)
+check('it is offered no best model', local.suitability(fourGb).best === undefined)
+check('but it is pointed at the free cloud models', /cloud/i.test(local.verdictFor('llama3.2:3b', fourGb).fix ?? ''))
+
 section('a bundled installer is optional, not assumed')
 // The packaged app may carry OllamaSetup.exe in resources/vendor. In the test
 // environment it never does, and that must be a clean "no", not a crash.

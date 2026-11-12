@@ -570,3 +570,22 @@ button.link:hover { color: var(--accent-2); }
   font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
   color: var(--accent); font-weight: 600;
 }
+
+/* hardware suitability */
+.local-hw.blocked { border-color: rgba(255, 107, 107, 0.45); }
+.local-blocked {
+  padding: 10px 12px; border-radius: 8px; font-size: 12.5px; line-height: 1.55;
+  background: rgba(255, 107, 107, 0.1); border: 1px solid rgba(255, 107, 107, 0.34); color: #ffc4c4;
+}
+.model-row.blocked { opacity: 0.72; }
+.badge.red { background: rgba(255, 107, 107, 0.14); color: #ff9d9d; }
+.fit-note {
+  font-size: 11.5px; line-height: 1.55; padding: 7px 9px; border-radius: 7px;
+  background: rgba(245, 192, 90, 0.07); border: 1px solid rgba(245, 192, 90, 0.24); color: #e8cf9d;
+}
+.fit-note.impossible {
+  background: rgba(255, 107, 107, 0.08); border-color: rgba(255, 107, 107, 0.3); color: #ffc0c0;
+}
+.fit-note .fit-fix { color: var(--muted); }
+.fit-note .fit-math { display: block; margin-top: 3px; color: var(--dim); font-family: var(--mono); font-size: 10.5px; }
+.chip.off { opacity: 0.55; text-decoration: line-through; }

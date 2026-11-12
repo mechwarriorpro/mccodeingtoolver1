@@ -23,6 +23,7 @@
  */
 
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { app } from 'electron'
@@ -133,6 +134,33 @@ export const LOCAL_MODELS: LocalModelDef[] = [
     note: 'One download for every job: it codes and reads images. The best pick for an 8 GB card — it needs about 8 GB at Q4, so keep the context modest.'
   },
   {
+    id: 'llama3.2:3b',
+    label: 'Llama 3.2 3B',
+    sizeGb: 2,
+    tools: true,
+    vision: false,
+    suits: ['quick', 'agent'],
+    note: 'Small enough for 8 GB of RAM with no graphics card. Honest limit: it handles one or two tools reliably, so expect it to fumble a long agent run.'
+  },
+  {
+    id: 'qwen3:4b',
+    label: 'Qwen3 4B',
+    sizeGb: 3,
+    tools: true,
+    vision: false,
+    suits: ['quick', 'agent'],
+    note: 'Better instruction-following than the 3B for a gigabyte more. Still a small model: good for small edits, not for multi-file work.'
+  },
+  {
+    id: 'gemma3:4b',
+    label: 'Gemma 3 4B',
+    sizeGb: 3,
+    tools: true,
+    vision: true,
+    suits: ['vision', 'quick'],
+    note: 'The smallest model here that can read a screenshot, so clip checks work on a low-end machine. Tool use is basic.'
+  },
+  {
     id: 'llama3.2-vision:11b',
     label: 'Llama 3.2 Vision 11B',
     sizeGb: 8,
@@ -143,7 +171,7 @@ export const LOCAL_MODELS: LocalModelDef[] = [
   }
 ]
 
-export type BundleId = 'compact' | 'essential' | 'recommended' | 'vision' | 'max'
+export type BundleId = 'lowend' | 'compact' | 'essential' | 'recommended' | 'vision' | 'max'
 
 export interface BundleDef {
   id: BundleId
@@ -162,6 +190,13 @@ export interface BundleDef {
  * `max` is the only one that pulls all six.
  */
 export const BUNDLES: BundleDef[] = [
+  {
+    id: 'lowend',
+    label: 'Low-end / CPU only',
+    summary: 'A 3B coder and a 4B vision model: the smallest setup that still covers every job on a machine with 8 GB of RAM and no GPU.',
+    models: ['llama3.2:3b', 'gemma3:4b'],
+    covers: ['agent', 'quick', 'vision']
+  },
   {
     id: 'compact',
     label: '8 GB GPU (one model)',
@@ -347,13 +382,30 @@ export function dirSizeBytes(dir: string): number {
   return total
 }
 
-export function freeSpaceGb(dir: string): number | undefined {
+/**
+ * The async form, for anything the UI waits on.
+ *
+ * Walking a 30 GB models folder synchronously blocks the main process — which
+ * on Windows means the whole window stops responding — so the Settings panel
+ * uses this one.
+ */
+export async function dirSizeBytesAsync(dir: string): Promise<number> {
+  let entries: fs.Dirent[]
   try {
-    const s = fs.statfsSync(path.parse(path.resolve(dir)).root)
-    return (s.bavail * s.bsize) / 1e9
+    entries = await fs.promises.readdir(dir, { withFileTypes: true })
   } catch {
-    return undefined
+    return 0
   }
+  let total = 0
+  for (const e of entries) {
+    const p = path.join(dir, e.name)
+    try {
+      total += e.isDirectory() ? await dirSizeBytesAsync(p) : (await fs.promises.stat(p)).size
+    } catch {
+      // Vanished mid-walk; not worth failing the measurement over.
+    }
+  }
+  return total
 }
 
 /**
@@ -765,4 +817,215 @@ export function cancelPull(): { cancelled: boolean; model?: string } {
 
 export function installInProgress(): boolean {
   return !!currentInstall
+}
+
+// ------------------------------------------------------------- suitability
+
+/**
+ * Can this machine run this model — and if not, why not?
+ *
+ * The rule this module follows: **never fail silently, never refuse when it
+ * would actually work.** A GPU is not required (Ollama falls back to the CPU and
+ * a small model on a CPU is slow but genuinely usable), so the only hard "no" is
+ * when the memory simply is not there, in which case the model cannot load at
+ * all and saying so up front beats a 20 GB download followed by a crash.
+ */
+export type Verdict = 'good' | 'slow' | 'tight' | 'impossible'
+
+export interface SystemInfo {
+  platform: string
+  /** Physical RAM in GB. */
+  ramGb: number
+  cpuCores: number
+  cpus: string
+  gpus: GpuInfo[]
+  primary?: GpuInfo
+  /** Total memory the model can use: VRAM when a GPU is present, else RAM. */
+  usableGb: number
+  /** True when inference will run on the CPU. */
+  cpuOnly: boolean
+  /** A short phrase for the UI: "RX 5700 XT · 8 GB · Vulkan". */
+  summary: string
+  notes: string[]
+}
+
+export interface ModelVerdict {
+  modelId: string
+  verdict: Verdict
+  /** Memory the model is expected to need: weights + a modest context. */
+  needGb: number
+  /** What the machine has. */
+  haveGb: number
+  /** Always present unless the verdict is 'good'. */
+  reason?: string
+  /** What the user can do about it. */
+  fix?: string
+  /** Set when the model will run, but not on the GPU. */
+  onCpu: boolean
+}
+
+/**
+ * Rough KV-cache cost per 1k tokens, in GB, by model size. Measured from
+ * published figures for Q4 builds rather than derived from a formula, because
+ * real caches include attention overhead the naive maths misses.
+ */
+function kvGbPer1k(weightsGb: number): number {
+  if (weightsGb <= 4) return 0.03
+  if (weightsGb <= 6) return 0.04
+  if (weightsGb <= 10) return 0.09
+  if (weightsGb <= 14) return 0.14
+  return 0.16
+}
+
+/** Memory a model needs at a given context, plus a fixed runtime allowance. */
+export function modelMemoryGb(modelId: string, contextTokens = 12288): number {
+  const m = modelById(modelId)
+  if (!m) return 0
+  const kv = kvGbPer1k(m.sizeGb) * (contextTokens / 1024)
+  // Ollama's compute buffers, the vision projector when present, and the driver.
+  const overhead = 1.0 + (m.vision ? 0.6 : 0)
+  return Math.round((m.sizeGb + kv + overhead) * 10) / 10
+}
+
+/**
+ * Somewhere to put the weights, with a fallback.
+ *
+ * `statfsSync` is not implemented on every filesystem, and the models folder may
+ * not exist yet — neither is a reason to lose the free-space warning.
+ */
+export function freeSpaceGb(dir: string): number | undefined {
+  const candidates = [dir, defaultModelsDir(), process.env.USERPROFILE ?? '', process.env.SystemDrive ?? 'C:\\']
+  for (const c of candidates) {
+    if (!c) continue
+    try {
+      // Measure the drive the path is on, even if the folder itself is missing.
+      const root = path.parse(path.resolve(c)).root
+      const s = fs.statfsSync(root)
+      if (s && s.bsize > 0) return (s.bavail * s.bsize) / 1e9
+    } catch {
+      // Try the next candidate: another drive may be measurable.
+    }
+  }
+  return undefined
+}
+
+export function detectSystem(): SystemInfo {
+  const gpus = detectGpus()
+  const primary = primaryGpu(gpus)
+  const ramGb = Math.round((os.totalmem() / 1e9) * 10) / 10
+  const cpus = os.cpus()
+  const notes: string[] = []
+
+  // An integrated GPU has no memory of its own; Ollama will use the CPU there.
+  const discrete = !!primary && primary.vendor !== 'unknown' && (primary.vramGb ?? 0) > 0
+  const cpuOnly = !discrete
+  if (cpuOnly) {
+    notes.push(
+      gpus.length
+        ? 'No supported graphics card was found, so models will run on the CPU. Small models still work — they are just slower.'
+        : 'No graphics card was detected, so models will run on the CPU. Small models still work — they are just slower.'
+    )
+  }
+  if (primary?.needsVulkan) {
+    notes.push('This AMD card is RDNA 1, which ROCm dropped. Ollama uses Vulkan for it, which is enabled automatically.')
+  }
+  if (ramGb < 8) {
+    notes.push('Less than 8 GB of system RAM: only the smallest models will load, and Windows itself will be tight.')
+  }
+
+  // Without a GPU everything comes from RAM. Windows itself needs ~2.5 GB, and a
+  // small model plus its context is happiest inside the rest, so all of it
+  // counts — being too pessimistic here is what wrongly reports "nothing runs".
+  const usableGb = discrete ? (primary?.vramGb ?? 0) + Math.max(0, (ramGb - 6) * 0.5) : Math.max(0, ramGb - 2.5)
+  const summary = primary
+    ? `${primary.name}${primary.vramGb ? ` · ${primary.vramGb} GB` : ''}${primary.needsVulkan ? ' · Vulkan' : ''}`
+    : `${cpus.length} CPU cores · ${Math.round(ramGb)} GB RAM · no GPU acceleration`
+
+  return {
+    platform: process.platform,
+    ramGb,
+    cpuCores: cpus.length,
+    cpus: cpus[0]?.model?.trim() ?? 'unknown CPU',
+    gpus,
+    primary,
+    usableGb: Math.round(usableGb * 10) / 10,
+    cpuOnly,
+    summary,
+    notes
+  }
+}
+
+/** Judge one model against the machine. */
+export function verdictFor(modelId: string, system: SystemInfo, contextTokens?: number): ModelVerdict {
+  const m = modelById(modelId)
+  const have = system.usableGb
+  if (!m) {
+    return { modelId, verdict: 'impossible', needGb: 0, haveGb: have, reason: 'Unknown model.', onCpu: false }
+  }
+  const ctx = contextTokens ?? contextForVram(system.primary?.vramGb)
+  const need = modelMemoryGb(modelId, ctx)
+
+  if (need <= have * 0.75) {
+    return {
+      modelId,
+      verdict: 'good',
+      needGb: need,
+      haveGb: have,
+      onCpu: system.cpuOnly,
+      reason: system.cpuOnly ? 'Runs on the CPU: usable for small changes, but expect it to be slow.' : undefined
+    }
+  }
+  if (need <= have) {
+    return {
+      modelId,
+      verdict: 'tight',
+      needGb: need,
+      haveGb: have,
+      onCpu: system.cpuOnly,
+      reason: `Needs about ${need} GB and the machine has roughly ${Math.round(have)} GB, so little is left for the rest of the system.`,
+      fix: 'Lower the context window, close other apps, or pick a smaller model.'
+    }
+  }
+  // Over budget by a little: Ollama can split a model between VRAM and RAM, which
+  // works but is much slower. Over by a lot and it will not load at all.
+  if (need <= have * 1.4 && system.ramGb >= need) {
+    return {
+      modelId,
+      verdict: 'slow',
+      needGb: need,
+      haveGb: have,
+      onCpu: true,
+      reason: `Needs about ${need} GB but only ${Math.round(have)} GB is available to the GPU, so part of the model runs in system RAM.`,
+      fix: 'It will work, just slowly. Lower the context window or choose a smaller model to keep it on the card.'
+    }
+  }
+  return {
+    modelId,
+    verdict: 'impossible',
+    needGb: need,
+    haveGb: have,
+    onCpu: false,
+    reason:
+      `This will not run here: it needs about ${need} GB of memory and this machine can give it roughly ` +
+      `${Math.round(have)} GB (${system.ramGb} GB of RAM${system.primary?.vramGb ? `, ${system.primary.vramGb} GB of VRAM` : ', no GPU'}).`,
+    fix: 'Choose a smaller model, or use a cloud provider — Settings → Model has free ones that need no card.'
+  }
+}
+
+/** Verdicts for the whole catalogue, plus the best option that actually fits. */
+export function suitability(system: SystemInfo, contextTokens?: number): {
+  systems: SystemInfo
+  verdicts: Record<string, ModelVerdict>
+  /** The largest model that is comfortably usable, if any. */
+  best: string | undefined
+  /** True when nothing in the catalogue fits. */
+  none: boolean
+} {
+  const verdicts: Record<string, ModelVerdict> = {}
+  for (const m of LOCAL_MODELS) verdicts[m.id] = verdictFor(m.id, system, contextTokens)
+  // "Best" is the biggest model judged good, so quality is maximised subject to
+  // actually running well.
+  const good = LOCAL_MODELS.filter((m) => verdicts[m.id].verdict === 'good').sort((a, b) => b.sizeGb - a.sizeGb)
+  const none = Object.values(verdicts).every((v) => v.verdict === 'impossible')
+  return { systems: system, verdicts, best: good[0]?.id, none }
 }

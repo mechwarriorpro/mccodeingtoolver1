@@ -61,7 +61,7 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.4.2 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.4.3 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
 > v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
 > decompiler picking a Java it could not run.
@@ -72,6 +72,8 @@ Settings or from GitHub's settings at any time.
 > bundles, and a model chosen per job (one model can cover several).
 > **v0.4.2** sizes those models to your actual GPU — it reads your card, suggests a bundle for its
 > VRAM, and picks a context window that fits, with explicit support for AMD cards on Vulkan.
+> **v0.4.3** judges every model against your machine before downloading it: it runs if there is any
+> way to run it, and says plainly when there is not.
 >
 > From 0.3.0 on, the app updates itself: once you have it installed, new versions arrive
 > through GitHub releases without downloading the installer again.
@@ -168,6 +170,7 @@ bottom, because each step depends on the one above:
 
    | Bundle | Models | Size | For |
    | --- | --- | --- | --- |
+   | Low-end / CPU only | Llama 3.2 3B + Gemma 3 4B | ~5 GB | 8 GB RAM, no GPU |
    | **8 GB GPU (one model)** | Gemma 4 12B | ~8 GB | **Suggested for 8 GB cards** |
    | Essential | Qwen3 Coder 7B + Qwen3-VL 8B | ~11 GB | 8–12 GB, two specialised models |
    | Recommended | Qwen3 Coder 30B + Qwen3-VL 8B | ~25 GB | 16–24 GB |
@@ -200,6 +203,33 @@ bottom, because each step depends on the one above:
    both coding and reading screenshots, so picking it twice is allowed — and it
    is still downloaded once. The panel shows how many unique models your choices
    need and their total size, with a single button to fetch whatever is missing.
+
+#### What happens if your hardware cannot run a model
+
+Every model is judged against your actual machine before you download anything.
+Each one gets a verdict, and the reason and the numbers are shown:
+
+| Verdict | Meaning | What the app does |
+| --- | --- | --- |
+| **Runs well** | Fits with room to spare | Offers it |
+| **Tight fit** | Fits, but little left for the system | Offers it, with a warning |
+| **Slow here** | Only fits by spilling into system RAM | Offers it, says it will be slow |
+| **Will not run** | More memory than the machine has | Refuses the download, says why |
+
+The only hard refusal is the last one, because a model that cannot load will
+never load — downloading 20 GB to watch it fail is worse than being told. Nothing
+else is blocked: **a graphics card is not required** (Ollama falls back to the
+CPU, and a small model on a CPU is slow but genuinely usable), and a "tight fit"
+still works. A CPU-only machine gets a warning and a suggested small model
+rather than a refusal.
+
+If **nothing** in the catalogue fits — under about 4 GB of RAM — the panel says so
+plainly instead of hedging, and points at the free cloud models in Settings →
+Model, which need no card and work identically. You are never left with a broken
+agent and no explanation.
+
+Choosing Ollama as the provider on such a machine also warns you in Settings →
+Model, before you send a message.
 
 #### AMD graphics cards
 
@@ -336,8 +366,13 @@ transcript is complete even when the live text was cut short.
   you deliberately add `vendor/OllamaSetup.exe`.
 - **8 GB of VRAM is the tight case.** Weights, KV cache and overhead all share
   the card. A 12B model at Q4 is ~8 GB before any context, so on an 8 GB card use
-  one model (Gemma 4 12B) and a 12K context; a 30B model wants ~24 GB and will
-  crawl or spill to system RAM below that.
+  one model (Gemma 4 12B) and a 12K context; a 30B model wants ~22 GB and is only
+  comfortable at 32 GB or more.
+- **No GPU is fine, but it is slow.** Models then run on the CPU. A 3B model is
+  usable; a 7B takes minutes per reply. The app says which verdict applies
+  rather than silently crawling.
+- **Under ~4 GB of RAM, local models are not viable at all.** The app will say so
+  and point you at the free cloud models instead.
 - **RDNA 1 AMD cards are Vulkan-only.** ROCm dropped `gfx1010` (RX 5000 series);
   do not follow guides telling you to set `HSA_OVERRIDE_GFX_VERSION`.
 - The app needs the Electron binary to run; if `npm install` cannot download it (offline / blocked

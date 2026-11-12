@@ -203,8 +203,10 @@ export default function ChatPanel({
               </div>
               {!hasKey && (
                 <div className="free-hint">
-                  No API key yet? Settings → Model has free models from Z.ai and OpenRouter, and Ollama runs locally
-                  for no cost at all. The agent's tools and the live output below work the same way.
+                  No API key yet? Settings → Model has free models from Z.ai and OpenRouter that need no credit
+                  card, and the agent's tools and live output work exactly the same. Ollama is also an option if
+                  you would rather run a model on your own machine — Settings → Local models checks your hardware
+                  first and will tell you honestly if it will not fit.
                 </div>
               )}
             </div>

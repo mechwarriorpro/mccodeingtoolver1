@@ -7,6 +7,7 @@ import {
   type LocalInfo,
   type LocalModelDef,
   type LocalRoleDef,
+  type ModelVerdict,
   type PullProgress
 } from '../lib/api'
 
@@ -92,24 +93,59 @@ export default function LocalModelsPanel({ onToast }: { onToast: (m: string, kin
 
       {error ? <div className="local-error">{error}</div> : null}
 
-      {/* Detected hardware decides which bundle is suggested and how much
-          context the daemon asks for, so it is stated rather than assumed. */}
-      {info.hardware?.primary ? (
-        <div className="local-hw">
+      {/* Detected hardware decides which bundle is suggested, how much context
+          the daemon asks for, and whether a model can run at all. It is stated
+          rather than assumed, and a hard limitation is said plainly. */}
+      {info.hardware?.system ? (
+        <div className={`local-hw ${info.hardware.noneRun ? 'blocked' : ''}`}>
           <div className="local-hw-main">
-            <strong>{info.hardware.primary.name}</strong>
-            {info.hardware.primary.vramGb ? (
-              <span className="badge">{info.hardware.primary.vramGb} GB VRAM</span>
-            ) : null}
-            {info.hardware.primary.needsVulkan ? <span className="badge amber">Vulkan, not ROCm</span> : null}
+            {info.hardware.primary ? (
+              <>
+                <strong>{info.hardware.primary.name}</strong>
+                {info.hardware.primary.vramGb ? <span className="badge">{info.hardware.primary.vramGb} GB VRAM</span> : null}
+                {info.hardware.primary.needsVulkan ? <span className="badge amber">Vulkan, not ROCm</span> : null}
+              </>
+            ) : (
+              <strong>CPU only</strong>
+            )}
+            <span className="badge">{Math.round(info.hardware.system.ramGb)} GB RAM</span>
+            <span className="badge">{info.hardware.system.cpuCores} cores</span>
           </div>
-          {info.hardware.primary.note ? <div className="hint">{info.hardware.primary.note}</div> : null}
-          <div className="hint">
-            Suggested for this card: <strong>{info.bundles.find((b) => b.id === info.hardware.recommendedBundle)?.label}</strong>
-            {info.hardware.primary.vramGb && info.hardware.primary.vramGb <= 9
-              ? ' — one 8 GB model that covers coding and screenshots, rather than two.'
-              : ''}
-          </div>
+
+          {info.hardware.noneRun ? (
+            // Nothing in the catalogue fits. Saying "performance may vary" here
+            // would be a lie, so it says it cannot run and offers the way out.
+            <>
+              <div className="local-blocked">
+                <strong>Local models will not run on this machine.</strong> Every model here needs more memory
+                than is available, so downloading one would waste the space and then fail to load.
+              </div>
+              <div className="hint">
+                You are not stuck: <strong>Settings → Model</strong> has free cloud models (Z.ai, OpenRouter) that
+                need no credit card. The agent, the tools and the build loop all work the same.
+              </div>
+            </>
+          ) : (
+            <>
+              {info.hardware.system.cpuOnly ? (
+                <div className="local-warn">
+                  No supported graphics card: models run on the <strong>CPU</strong>. That works, but it is slow —
+                  expect minutes rather than seconds for a small model, so start with the smallest one.
+                </div>
+              ) : null}
+              {info.hardware.bestModel ? (
+                <div className="hint">
+                  Best that fits here: <strong>{info.models.find((m) => m.id === info.hardware.bestModel)?.label}</strong>
+                  {' — '}
+                  {info.bundles.find((b) => b.id === info.hardware.recommendedBundle)?.label} is suggested below.
+                </div>
+              ) : null}
+            </>
+          )}
+          {info.hardware.primary?.note ? <div className="hint">{info.hardware.primary.note}</div> : null}
+          {info.hardware.system.notes.filter(() => !info.hardware.system.cpuOnly).map((n, i) => (
+            <div key={i} className="hint">{n}</div>
+          ))}
         </div>
       ) : null}
 
@@ -270,6 +306,10 @@ export default function LocalModelsPanel({ onToast }: { onToast: (m: string, kin
             const totalGb = b.models.reduce((s, id) => s + (info.models.find((m) => m.id === id)?.sizeGb ?? 0), 0)
             const missing = b.models.filter((id) => !has(id))
             const complete = missing.length === 0
+            // A bundle containing a model this machine cannot run still offers
+            // the rest of itself, with the exclusion stated.
+            const blocked = b.models.filter((id) => info.hardware?.verdicts?.[id]?.verdict === 'impossible')
+            const runnable = b.models.filter((id) => !blocked.includes(id))
             return (
               <div
                 key={b.id}
@@ -283,15 +323,16 @@ export default function LocalModelsPanel({ onToast }: { onToast: (m: string, kin
                 <div className="bundle-summary">{b.summary}</div>
                 <div className="bundle-models">
                   {b.models.map((id) => (
-                    <span key={id} className={`chip ${has(id) ? 'on' : ''}`}>
+                    <span key={id} className={`chip ${has(id) ? 'on' : ''} ${blocked.includes(id) ? 'off' : ''}`}>
                       {has(id) ? '✓ ' : ''}
                       {info.models.find((m) => m.id === id)?.label ?? id}
+                      {blocked.includes(id) ? ' — will not run here' : ''}
                     </span>
                   ))}
                 </div>
                 <button
                   className={complete ? 'small ghost' : 'small primary'}
-                  disabled={busy || !info.running}
+                  disabled={busy || !info.running || runnable.length === 0}
                   onClick={async () => {
                     setBusy(true)
                     setError('')
@@ -299,11 +340,20 @@ export default function LocalModelsPanel({ onToast }: { onToast: (m: string, kin
                     setBusy(false)
                     setBundle(null)
                     if (!res.ok) setError(res.error ?? 'Download failed')
+                    else if (res.skipped?.length) onToast(`${b.label}: installed what this machine can run`)
                     else onToast(`${b.label} downloaded`)
                     await refresh()
                   }}
                 >
-                  {complete ? 'Installed' : busy ? 'Downloading…' : `Download ${Math.round(totalGb)} GB`}
+                  {complete
+                    ? 'Installed'
+                    : runnable.length === 0
+                      ? 'Cannot run here'
+                      : busy
+                        ? 'Downloading…'
+                        : blocked.length
+                          ? `Download ${Math.round(runnable.reduce((t, id) => t + (info.models.find((m) => m.id === id)?.sizeGb ?? 0), 0))} GB`
+                          : `Download ${Math.round(totalGb)} GB`}
                 </button>
               </div>
             )
@@ -323,6 +373,7 @@ export default function LocalModelsPanel({ onToast }: { onToast: (m: string, kin
               m={m}
               installed={has(m.id)}
               progress={pulling[m.id]}
+              verdict={info.hardware?.verdicts?.[m.id]}
               canPull={info.running && !busy}
               onPull={async () => {
                 setError('')
@@ -358,9 +409,11 @@ export default function LocalModelsPanel({ onToast }: { onToast: (m: string, kin
                   <option value="">Not set</option>
                   {info.models
                     .filter((m) => (role.needs === 'vision' ? m.vision : m.tools))
+                    .filter((m) => info.hardware?.verdicts?.[m.id]?.verdict !== 'impossible')
                     .map((m) => (
                       <option key={m.id} value={m.id}>
                         {m.label} ({m.sizeGb} GB){has(m.id) ? ' — installed' : ''}
+                        {info.hardware?.verdicts?.[m.id]?.verdict === 'slow' ? ' — slow here' : ''}
                       </option>
                     ))}
                 </select>
@@ -378,6 +431,12 @@ export default function LocalModelsPanel({ onToast }: { onToast: (m: string, kin
           {needed.some((id) => !has(id)) ? (
             <div className="hint">
               Missing: {needed.filter((id) => !has(id)).map((id) => info.models.find((m) => m.id === id)?.label ?? id).join(', ')}
+            </div>
+          ) : null}
+          {needed.some((id) => info.hardware?.verdicts?.[id]?.verdict === 'impossible') ? (
+            <div className="fit-note impossible">
+              One of your choices will not run on this machine. Pick a smaller model above, or use a cloud provider
+              in Settings → Model.
             </div>
           ) : null}
         </div>
@@ -432,14 +491,18 @@ function ModelRow(props: {
   m: LocalModelDef
   installed: boolean
   progress?: PullProgress
+  verdict?: ModelVerdict
   canPull: boolean
   onPull: () => Promise<void>
   onCancel: () => void
 }): JSX.Element {
-  const { m, installed, progress } = props
+  const { m, installed, progress, verdict } = props
   const active = !!progress && !progress.done
+  // Only a model that cannot load at all is blocked. 'slow' and 'tight' are
+  // warnings, because refusing something that would have worked is worse.
+  const blocked = verdict?.verdict === 'impossible'
   return (
-    <div className={`model-row ${installed ? 'installed' : ''}`}>
+    <div className={`model-row ${installed ? 'installed' : ''} ${blocked ? 'blocked' : ''}`}>
       <div className="model-row-main">
         <div className="model-row-title">
           <strong>{m.label}</strong>
@@ -447,8 +510,16 @@ function ModelRow(props: {
           {m.tools ? <span className="badge green">tools</span> : <span className="badge red">no tools</span>}
           {m.vision ? <span className="badge green">vision</span> : null}
           {installed ? <span className="badge">installed</span> : null}
+          {verdict && !installed ? <VerdictBadge v={verdict} /> : null}
         </div>
         <div className="hint">{m.note}</div>
+        {verdict && verdict.verdict !== 'good' ? (
+          <div className={`fit-note ${verdict.verdict}`}>
+            {verdict.reason}
+            {verdict.fix ? <span className="fit-fix"> {verdict.fix}</span> : null}
+            <span className="fit-math"> Needs ~{verdict.needGb} GB · available ~{Math.round(verdict.haveGb)} GB</span>
+          </div>
+        ) : null}
         {active ? (
           <div className="local-progress">
             <div className="bar">
@@ -467,8 +538,13 @@ function ModelRow(props: {
             Cancel
           </button>
         ) : (
-          <button className="small" disabled={!props.canPull || installed} onClick={() => void props.onPull()}>
-            {installed ? 'Installed' : 'Download'}
+          <button
+            className="small"
+            disabled={!props.canPull || installed || blocked}
+            title={blocked ? verdict?.reason : undefined}
+            onClick={() => void props.onPull()}
+          >
+            {installed ? 'Installed' : blocked ? 'Cannot run here' : 'Download'}
           </button>
         )}
       </div>
@@ -479,4 +555,11 @@ function ModelRow(props: {
 /** Re-exported so Settings can show bundle size without duplicating the rule. */
 export function bundleTotalGb(b: BundleDef, models: LocalModelDef[]): number {
   return b.models.reduce((s, id) => s + (models.find((m) => m.id === id)?.sizeGb ?? 0), 0)
+}
+
+function VerdictBadge({ v }: { v: ModelVerdict }): JSX.Element {
+  if (v.verdict === 'impossible') return <span className="badge red">will not run</span>
+  if (v.verdict === 'slow') return <span className="badge amber">slow here</span>
+  if (v.verdict === 'tight') return <span className="badge amber">tight fit</span>
+  return v.onCpu ? <span className="badge amber">CPU only</span> : <span className="badge green">runs well</span>
 }

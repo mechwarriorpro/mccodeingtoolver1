@@ -66,6 +66,10 @@ import {
   cancelPull,
   contextForVram,
   detectGpus,
+  detectSystem,
+  modelById,
+  suitability,
+  verdictFor,
   defaultModelsDir,
   findOllama,
   freeSpaceGb,
@@ -795,17 +799,21 @@ export function registerIpc(): void {
       models: LOCAL_MODELS,
       bundles: BUNDLES,
       roleDefs: LOCAL_ROLES,
-      // Hardware drives two decisions: which bundle to suggest, and how much
-      // context the daemon asks for. Both are guesses, so both are overridable.
+      // Hardware drives three decisions: which bundle to suggest, how much
+      // context the daemon asks for, and whether a model can run at all. All
+      // three are reported so the UI can explain itself rather than guess.
       hardware: (() => {
-        const gpus = detectGpus()
-        const primary = primaryGpu(gpus)
-        const vramGb = primary?.vramGb
+        const system = detectSystem()
+        const fit = suitability(system, cfg.local?.contextLength || undefined)
         return {
-          gpus,
-          primary,
-          recommendedBundle: recommendBundle(vramGb),
-          suggestedContext: contextForVram(vramGb)
+          gpus: system.gpus,
+          primary: system.primary,
+          recommendedBundle: recommendBundle(system.primary?.vramGb, fit),
+          suggestedContext: contextForVram(system.primary?.vramGb),
+          system,
+          verdicts: fit.verdicts,
+          bestModel: fit.best,
+          noneRun: fit.none
         }
       })(),
       contextLength: cfg.local?.contextLength || 0
@@ -854,8 +862,13 @@ export function registerIpc(): void {
         return { ok: false, error: `Cannot create ${dir}: ${(e as Error).message}` }
       }
       const free = freeSpaceGb(dir)
-      if (free !== undefined && free < 20) {
-        return { ok: false, error: `Only ${Math.round(free)} GB free on that drive. A coding model needs about 20 GB.` }
+      // Not a hard stop: the user may be about to free space, or may only want a
+      // 6 GB vision model. Say the number and let them decide.
+      if (free !== undefined && free < 6) {
+        return {
+          ok: false,
+          error: `That drive has only ${Math.round(free)} GB free — not enough for any model here (the smallest is 6 GB). Pick another folder.`
+        }
       }
     }
     saveConfig({ ...cfg, local: { ...cfg.local, modelsDir: dir } })
@@ -917,6 +930,14 @@ export function registerIpc(): void {
   /** Pull one model, streaming Ollama's progress lines to the renderer. */
   ipcMain.handle('local:pull', async (_e, modelId: string) => {
     if (!LOCAL_MODELS.some((m) => m.id === modelId)) return { ok: false, error: 'That model is not in the catalogue.' }
+    // Downloading 8 GB that cannot load is the worst outcome, so it is refused
+    // here with the reason. 'slow' and 'tight' still download: they work.
+    const cfgNow = loadConfig()
+    const system = detectSystem()
+    const fit = verdictFor(modelId, system, cfgNow.local?.contextLength || undefined)
+    if (fit.verdict === 'impossible') {
+      return { ok: false, error: `${fit.reason} ${fit.fix ?? ''}`.trim(), hardware: fit }
+    }
     const probe = await probeOllama()
     if (!probe.running) return { ok: false, error: 'Ollama is not running. Install or start it first.' }
     if (!probe.anthropic) {
@@ -935,7 +956,17 @@ export function registerIpc(): void {
     const targets = [...new Set(wanted)].filter((id) => LOCAL_MODELS.some((m) => m.id === id))
     if (!targets.length) return { ok: false, error: 'Nothing to download.' }
     const failures: string[] = []
+    const skipped: string[] = []
+    const system = detectSystem()
     for (const [i, id] of targets.entries()) {
+      const fit = verdictFor(id, system, loadConfig().local?.contextLength || undefined)
+      if (fit.verdict === 'impossible') {
+        // Do not download something that cannot load; keep going with the rest
+        // so a bundle still gets the user a working setup.
+        skipped.push(`${modelById(id)?.label ?? id} (${fit.needGb} GB needed, ${Math.round(fit.haveGb)} GB available)`)
+        send('local:bundle-progress', { index: i, of: targets.length, model: id, state: 'skipped', error: fit.reason })
+        continue
+      }
       send('local:bundle-progress', { index: i, of: targets.length, model: id, state: 'start' })
       const res = await pullModel(id, (p) => send('local:pull-progress', p))
       send('local:bundle-progress', { index: i, of: targets.length, model: id, state: res.ok ? 'done' : 'error', error: res.error })
@@ -945,7 +976,18 @@ export function registerIpc(): void {
         failures.push(`${id}: ${res.error}`)
       }
     }
-    return failures.length ? { ok: false, error: failures.join('; '), done: targets } : { ok: true, done: targets }
+    if (failures.length) return { ok: false, error: failures.join('; '), done: targets, skipped }
+    if (skipped.length) {
+      // Partial success, and it must not read as a failure: everything that fits
+      // was installed.
+      return {
+        ok: true,
+        done: targets.filter((id) => !skipped.some((s) => s.startsWith(modelById(id)?.label ?? id))),
+        skipped,
+        error: `Skipped because this machine cannot run them: ${skipped.join(', ')}.`
+      }
+    }
+    return { ok: true, done: targets }
   })
 
   /** Store which model ids fill each role. */
@@ -1563,7 +1605,20 @@ function delay(ms: number): Promise<void> {
  * The thresholds come from the weights themselves — a 12B model at Q4 is about
  * 8 GB before any context, so an 8 GB card is the boundary case.
  */
-function recommendBundle(vramGb: number | undefined): BundleId {
+function recommendBundle(
+  vramGb: number | undefined,
+  fit?: { verdicts: Record<string, { verdict: string }>; best?: string }
+): BundleId {
+  // When the machine is known, trust the per-model verdicts: the largest model
+  // that actually fits might be the compact bundle or something better.
+  if (fit?.best) {
+    if (fit.best === 'gemma4:12b') return 'compact'
+    if (fit.best === 'qwen3-coder:30b') return 'recommended'
+    if (fit.best === 'qwen3-coder:7b' || fit.best === 'gpt-oss:20b') return 'essential'
+    // Only the small models fit, so the honest suggestion is the bundle built
+    // from them rather than a 7B the machine cannot hold.
+    if (['llama3.2:3b', 'qwen3:4b', 'gemma3:4b'].includes(fit.best)) return 'lowend'
+  }
   if (vramGb === undefined) return 'essential'
   if (vramGb <= 8) return 'compact'
   if (vramGb <= 12) return 'essential'
