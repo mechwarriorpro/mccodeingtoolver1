@@ -88,6 +88,7 @@ const failures = []
 for (const t of tests) {
   console.log(`\n=== ${t} ===`)
   try {
+    // stdio:'inherit' keeps the child's own ::error annotations intact for Actions.
     execFileSync(process.execPath, [path.join(root, 'tests', t)], { stdio: 'inherit', cwd: root })
   } catch (e) {
     failed++

@@ -6,23 +6,15 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { check, section, finish } from './helpers.mjs'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '..')
 
-let failures = 0
-function check(name, cond, detail) {
-  if (cond) console.log(`  ok   ${name}`)
-  else {
-    failures++
-    console.log(`  FAIL ${name}${detail ? `\n       ${detail}` : ''}`)
-  }
-}
-
 const { scaffoldProject, validateModId, validatePackage } = await import('../out-test/main/mod/scaffold.js')
 
-console.log('validation')
+section('validation')
 check('rejects uppercase mod id', validateModId('RubyMod') !== null)
 check('rejects reserved mod id', validateModId('minecraft') !== null)
 check('accepts rubytools', validateModId('rubytools') === null)
@@ -32,7 +24,7 @@ check('accepts com.example.rubytools', validatePackage('com.example.rubytools') 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcfa-'))
 const target = path.join(tmp, 'rubytools')
 
-console.log('scaffold')
+section('scaffold')
 const res = scaffoldProject({
   targetDir: target,
   modId: 'rubytools',
@@ -79,10 +71,9 @@ check('gradle wrapper copied', fs.existsSync(path.join(target, 'gradlew')) && fs
 check('workflow copied', fs.existsSync(path.join(target, '.github/workflows/build.yml')))
 check('no example java left', !fs.existsSync(path.join(target, 'src/main/java/com/example')))
 
-console.log('overwrite protection')
+section('overwrite protection')
 const again = scaffoldProject({ targetDir: target, modId: 'rubytools', modName: 'X', group: 'com.x.y', modVersion: '1.0.0' })
 check('refuses non-empty dir without overwrite', again.ok === false, JSON.stringify(again))
 
 fs.rmSync(tmp, { recursive: true, force: true })
-console.log(failures ? `\n${failures} check(s) failed` : '\nall scaffold checks passed')
-process.exit(failures ? 1 : 0)
+finish('scaffold')

@@ -5,21 +5,13 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-
-let failures = 0
-function check(name, cond, detail) {
-  if (cond) console.log(`  ok   ${name}`)
-  else {
-    failures++
-    console.log(`  FAIL ${name}${detail ? `\n       ${detail}` : ''}`)
-  }
-}
+import { check, section, finish } from './helpers.mjs'
 
 const { installerUrl, installerFileName, ensureLauncherProfiles, isNeoForgeInstalled } = await import('../out-test/main/game/neoforge.js')
 const { neoVirtualArgs } = await import('../out-test/main/game/client.js')
 const { libraryAllowed, libraryTarget } = await import('../out-test/main/game/mojang.js')
 
-console.log('installer naming')
+section('installer naming')
 check('installer url points at the neoforged maven', installerUrl('21.1.265') === 'https://maven.neoforged.net/releases/net/neoforged/neoforge/21.1.265/neoforge-21.1.265-installer.jar', installerUrl('21.1.265'))
 check('installer filename', installerFileName('21.1.265') === 'neoforge-21.1.265-installer.jar')
 
@@ -34,13 +26,13 @@ const before = fs.readFileSync(path.join(mcDir, 'launcher_profiles.json'), 'utf8
 ensureLauncherProfiles(mcDir)
 check('does not clobber an existing profile file', fs.readFileSync(path.join(mcDir, 'launcher_profiles.json'), 'utf8') === before)
 
-console.log('loader detection')
+section('loader detection')
 check('reports not installed for empty dir', isNeoForgeInstalled(mcDir, '21.1.265') === false)
 fs.mkdirSync(path.join(mcDir, 'versions', 'neoforge-21.1.265'), { recursive: true })
 fs.writeFileSync(path.join(mcDir, 'versions', 'neoforge-21.1.265', 'neoforge-21.1.265.json'), '{}')
 check('reports installed when version json exists', isNeoForgeInstalled(mcDir, '21.1.265') === true)
 
-console.log('neoforge argument expansion')
+section('neoforge argument expansion')
 const neoJson = {
   id: 'neoforge-21.1.265',
   mainClass: 'cpw.mods.bootstraplauncher.BootstrapLauncher',
@@ -71,7 +63,7 @@ const osFiltered = args.jvm.filter((a) => a.startsWith('-Dwin=true') || a.starts
 check('applies exactly one os rule', osFiltered.length === 1, osFiltered.join(' '))
 check('picks the host os rule', osFiltered[0] === (process.platform === 'win32' ? '-Dwin=true' : '-Dlinux=true'), process.platform)
 
-console.log('vanilla library rules')
+section('vanilla library rules')
 check('allow by default with no rules', libraryAllowed({ name: 'x' }) === true)
 check('windows-only rule on non-windows', libraryAllowed({ name: 'x', rules: [{ action: 'allow', os: { name: 'windows' } }] }) === (process.platform === 'win32'))
 const hostOs = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'osx' : 'linux'
@@ -93,5 +85,4 @@ check(
 )
 
 fs.rmSync(tmp, { recursive: true, force: true })
-console.log(failures ? `\n${failures} check(s) failed` : '\nall neoforge checks passed')
-process.exit(failures ? 1 : 0)
+finish('neoforge')

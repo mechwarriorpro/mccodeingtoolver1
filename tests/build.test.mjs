@@ -4,32 +4,24 @@
  * folder replacement) without needing a JDK.
  */
 
-// Any uncaught error is reported with a stack so CI annotations carry the cause.
-process.on('uncaughtException', (err) => {
-  const msg = `${err && err.stack ? err.stack : err}`.replace(/%/g, '%25').replace(/\r?\n/g, ' | ').slice(0, 1200)
-  console.log(`::error title=build.test.mjs crash::${msg}`)
-  process.exit(1)
-})
-
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { check, section, finish } from './helpers.mjs'
+
+// Any uncaught error is reported so CI annotations carry the cause.
+process.on('uncaughtException', (err) => {
+  const msg = `${err && err.stack ? err.stack : err}`.replace(/%/g, '%25').replace(/\r?\n/g, ' | ').slice(0, 600)
+  console.log(`::error title=build.test.mjs crash::${msg}`)
+  process.exit(1)
+})
 const { extractErrors, findBuiltJar, gradlewPath } = await import('../out-test/main/build/gradle.js')
 const { readJarInfo, installJar } = await import('../out-test/main/mod/jar.js')
 
 async function main() {
 
-let failures = 0
-function check(name, cond, detail) {
-  if (cond) console.log(`  ok   ${name}`)
-  else {
-    failures++
-    console.log(`  FAIL ${name}${detail ? `\n       ${detail}` : ''}`)
-  }
-}
 
-
-console.log('javac error extraction')
+section('javac error extraction')
 const log = `
 > Task :compileJava
 /home/me/mod/src/main/java/com/x/RubyItem.java:21: error: cannot find symbol
@@ -47,7 +39,7 @@ check('captures both javac errors', errors.filter((l) => /error:/.test(l)).lengt
 check('captures symbol context', errors.some((l) => /symbol:\s+variable RUBY/.test(l)), JSON.stringify(errors))
 check('captures failed task', errors.some((l) => /compileJava FAILED/.test(l)))
 
-console.log('built jar discovery')
+section('built jar discovery')
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcfa-build-'))
 const libs = path.join(tmp, 'build', 'libs')
 fs.mkdirSync(libs, { recursive: true })
@@ -56,7 +48,7 @@ fs.writeFileSync(path.join(libs, 'rubytools-1.0.0-javadoc.jar'), 'x')
 fs.writeFileSync(path.join(libs, 'rubytools-1.0.0.jar'), 'x')
 check('ignores sources/javadoc jars', findBuiltJar(tmp)?.endsWith('rubytools-1.0.0.jar'), findBuiltJar(tmp))
 
-console.log('gradlew resolution')
+section('gradlew resolution')
 const gw = gradlewPath(tmp, true)
 check('falls back to gradle when no wrapper', gw.cmd === 'gradle')
 fs.writeFileSync(path.join(tmp, 'gradlew'), '#!/bin/sh\n')
@@ -107,8 +99,7 @@ check('removes previous build of same mod', !fs.existsSync(oldJar))
 check('leaves other mods alone', fs.existsSync(path.join(instance, 'mods', 'jei-1.21.1.jar')))
 
 fs.rmSync(tmp, { recursive: true, force: true })
-console.log(failures ? `\n${failures} check(s) failed` : '\nall build checks passed')
-process.exit(failures ? 1 : 0)
+finish('build')
 }
 
 main().catch((err) => {
