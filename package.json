@@ -15,7 +15,8 @@
     "dist:win": "npm run build && electron-builder --win --publish never",
     "dist:dir": "npm run build && electron-builder --dir --publish never",
     "postinstall": "node scripts/patch-electron-shim.mjs",
-    "test": "node scripts/test.mjs"
+    "test": "node scripts/test.mjs",
+    "pack:win": "npm run build && electron-builder --win --publish never"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.77",

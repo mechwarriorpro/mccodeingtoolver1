@@ -35,10 +35,13 @@ export default { app, shell, screen, nativeImage }
 )
 
 console.log('compiling testable modules…')
+// Call tsc's JS entry point with the current node binary: `npx` is npx.cmd on Windows
+// and execFileSync cannot launch it without a shell.
+const tscBin = path.join(root, 'node_modules', 'typescript', 'bin', 'tsc')
 execFileSync(
-  'npx',
+  process.execPath,
   [
-    'tsc',
+    tscBin,
     ...sources,
     '--outDir',
     outDir,
