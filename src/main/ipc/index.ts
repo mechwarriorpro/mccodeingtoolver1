@@ -764,7 +764,12 @@ export function registerIpc(): void {
     const cfg = loadConfig()
     const key = opts.apiKey && !opts.apiKey.startsWith('••') ? opts.apiKey : cfg.apiKey
     if (requiresKey(opts.provider) && !key) return { ok: false, error: 'Paste an API key first.' }
-    const base = PROVIDERS.find((p) => p.id === opts.provider)?.baseUrl || 'https://api.anthropic.com'
+    // Honour a base-URL override: testing the default endpoint when the user
+    // pointed the agent at a proxy would report a false pass.
+    const base =
+      (opts.provider === (cfg.provider || 'anthropic') ? effectiveBaseUrl() : '') ||
+      PROVIDERS.find((p) => p.id === opts.provider)?.baseUrl ||
+      'https://api.anthropic.com'
     const url = `${base.replace(/\/+$/, '')}/v1/messages`
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), 45_000)
