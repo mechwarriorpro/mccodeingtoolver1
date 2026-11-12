@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { loadConfig, effectiveApiKey, effectiveBaseUrl } from '../config'
 import { runLocalBuild } from '../build/gradle'
+import { readProps } from '../mod/props'
 import { resolveJava, resolveToolJava } from '../util/exec'
 import { installJar, copyExtraMods, readJarInfo } from '../mod/jar'
 import { buildTechnicPackZip, detectTechnicInstances, launchTechnic } from '../game/technic'
@@ -630,18 +631,7 @@ export function createAgentTools(ctx: ToolContext) {
   return createSdkMcpServer({ name: 'mcfrogeagent', version: '1.0.0', tools })
 }
 
-export function readProps(file: string): Record<string, string> {
-  const out: Record<string, string> = {}
-  try {
-    for (const line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
-      const m = line.match(/^\s*([A-Za-z0-9_.-]+)\s*=\s*(.*)\s*$/)
-      if (m && !line.trim().startsWith('#')) out[m[1]] = m[2].replace(/^["']|["']$/g, '')
-    }
-  } catch {
-    /* ignore */
-  }
-  return out
-}
+export { readProps } from '../mod/props'
 
 function countFiles(dir: string): number {
   let n = 0

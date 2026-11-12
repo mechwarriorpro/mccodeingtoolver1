@@ -1,4 +1,6 @@
 import fs from 'node:fs'
+import { readProps } from '../mod/props'
+import { javaForVersion, resolveEra } from '../versions/eras'
 import path from 'node:path'
 import { app } from 'electron'
 import { run } from '../util/exec'
@@ -109,10 +111,30 @@ async function canPush(ctx: GithubContext, owner: string, repo: string): Promise
   return true
 }
 
+/**
+ * Choose the JDK for the CI workflow from the project it is building.
+ *
+ * This used to hard-code 21, which is right for the app's own 1.21.1 projects
+ * and wrong for every old one: a 1.12.2 Forge project runs on Java 8 and cannot
+ * build on 21 at all. The workflow is derived from the same rule as the local
+ * build, so the two never disagree about what "build this project" means.
+ */
+export function workflowJava(dir: string): { java: number; gradle: string } {
+  const props = readProps(path.join(dir, 'gradle.properties'))
+  const mcVersion = props.minecraft_version ?? props.mc_version ?? props.minecraftVersion ?? ''
+  const loaderRaw = (props.loader ?? props.mod_loader ?? '').toLowerCase()
+  const loader = loaderRaw.includes('neoforge') ? 'neoforge' : loaderRaw.includes('fabric') ? 'fabric' : 'forge'
+  if (!mcVersion) return { java: 17, gradle: '8.x' }
+  const era = resolveEra(loader, mcVersion)
+  const java = era ? javaForVersion(loader, mcVersion, era) : 8
+  return { java, gradle: era?.gradle ?? '8.x' }
+}
+
 export function ensureWorkflow(dir: string, modId: string): string {
   const wfDir = path.join(dir, '.github', 'workflows')
   fs.mkdirSync(wfDir, { recursive: true })
   const file = path.join(wfDir, 'build.yml')
+  const jdk = workflowJava(dir)
   const body = `name: Build
 
 on:
@@ -131,10 +153,10 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      - name: Setup JDK 21
+      - name: Setup JDK ${jdk.java}
         uses: actions/setup-java@v4
         with:
-          java-version: '21'
+          java-version: '${jdk.java}'
           distribution: 'temurin'
 
       - name: Setup Gradle

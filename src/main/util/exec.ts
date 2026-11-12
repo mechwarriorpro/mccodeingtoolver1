@@ -36,8 +36,19 @@ export function run(cmd: string, args: string[], opts: RunOptions = {}): Promise
       windowsVerbatimArguments: false
     }
     try {
+      // A .bat/.cmd must go through cmd.exe, and the quoting has to be ours:
+      // `shell: true` does not quote the command, so any path containing a
+      // space ("…\\MC Forge Agent\\…") is split at the space.
       const needsShell = isWin && /\.(bat|cmd)$/i.test(cmd)
-      child = (needsShell ? spawn(`"${cmd}"`, args, { ...spawnOpts, shell: true }) : spawn(cmd, args, spawnOpts)) as ChildProcessWithoutNullStreams
+      if (needsShell) {
+        const inner = [`"${cmd}"`, ...args.map((a) => (/[\s"&|<>^]/.test(a) ? `"${a.replace(/"/g, '""')}"` : a))].join(' ')
+        child = spawn(process.env.COMSPEC || 'cmd.exe', ['/d', '/s', '/c', `"${inner}"`], {
+          ...spawnOpts,
+          windowsVerbatimArguments: true
+        }) as ChildProcessWithoutNullStreams
+      } else {
+        child = spawn(cmd, args, spawnOpts) as ChildProcessWithoutNullStreams
+      }
     } catch (err) {
       reject(err)
       return
@@ -404,6 +415,63 @@ export function resolveToolJava(configured?: string): { path: string | null; ver
   const res = pick(configured, 17, 'the reference decompiler')
   if ('path' in res) return { path: res.path, version: res.probe.version }
   return { path: null, error: res.error }
+}
+
+/**
+ * Pick the JDK for a Gradle build of a *specific Minecraft version*.
+ *
+ * `findJava()` hard-codes Java 21 because the app's own launcher targets 1.21.1.
+ * That is right for launching the game and wrong for building: a 1.12.2 project
+ * needs Java 8 and simply cannot run on 21, and a 1.20.1 project needs 17.
+ *
+ * The second half matters for an in-place upgrade. A 1.12.2 project being moved
+ * to 1.21.1 still has to run Gradle itself (Gradle 4.x, Java 8-era) to do the
+ * first build. So the runtime JDK may be *newer* than the target, as long as it
+ * is not newer than the Gradle version under it can cope with — practically,
+ * a Java 8 target runs fine on 8 or 17, but never on 21.
+ */
+export function resolveBuildJava(
+  configured: string | undefined,
+  targetJava: number,
+  projectName = 'this project'
+): { path: string | null; version?: string; error?: string } {
+  // The newest runtime each target tolerates. Gradle 4.x (used by 1.12.2) breaks
+  // on 17+, and a 1.17-era Gradle breaks on 21.
+  const maxRuntime = targetJava >= 21 ? 99 : targetJava >= 17 ? 17 : 8
+  const candidates = javaCandidates(configured).filter((c) => {
+    if (c.path === 'java') return true
+    try {
+      return fs.existsSync(c.path) && fs.statSync(c.path).isFile()
+    } catch {
+      return false
+    }
+  })
+  const rejected: string[] = []
+  for (const candidate of [...candidates].sort((a, b) => a.rank - b.rank)) {
+    const probed = probeJava(candidate.path)
+    if (!probed) {
+      rejected.push(`${candidate.path} (not a working java)`)
+      continue
+    }
+    // "18+ can target 8" is only true within what the build tool supports, which
+    // maxRuntime encodes; below 8 nothing is sane.
+    if (probed.major >= 8 && probed.major <= maxRuntime) {
+      return { path: candidate.path, version: String(probed.major) }
+    }
+    if (probed.major > maxRuntime) {
+      rejected.push(`${candidate.path} (Java ${probed.major} — this project's Gradle cannot run on it)`)
+    } else {
+      rejected.push(`${candidate.path} (Java ${probed.major}${candidate.configured ? ', set in Settings' : ''})`)
+    }
+  }
+  const want = targetJava >= 21 ? 'Java 21' : targetJava >= 17 ? 'Java 17+' : 'Java 8'
+  return {
+    path: null,
+    error:
+      `${want} is required to build ${projectName}, but none was found.` +
+      (rejected.length ? ` Tried: ${rejected.slice(0, 6).join('; ')}.` : '') +
+      ` Install it from https://adoptium.net and set java.exe in Settings.`
+  }
 }
 
 /** Version string of one specific executable, or null. */

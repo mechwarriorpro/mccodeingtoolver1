@@ -61,7 +61,7 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.4.4 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.4.5 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
 > v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
 > decompiler picking a Java it could not run.
@@ -76,6 +76,9 @@ Settings or from GitHub's settings at any time.
 > way to run it, and says plainly when there is not.
 > **v0.4.4** retries transient provider failures instead of losing the turn, and turns SDK stack traces
 > into sentences that say what to do.
+> **v0.4.5** fixes builds failing in project paths containing spaces (including this app's own
+> `MC Forge Agent` folder), and picks the JDK from the project's Minecraft version instead of
+> always demanding Java 21.
 >
 > From 0.3.0 on, the app updates itself: once you have it installed, new versions arrive
 > through GitHub releases without downloading the installer again.
@@ -361,7 +364,37 @@ log lines are shown under the reply while a build runs. Nothing needs a refresh,
 if a stream is interrupted — the app writes each completed block to the stored message, so the final
 transcript is complete even when the live text was cut short.
 
+## Upgrading an old mod to 1.21.1
+
+A fork of a 1.12.2 project is a **1.12.2 Gradle project**, even though the goal is
+1.21.1. That distinction matters for the toolchain, and the app now handles it:
+
+- **Java comes from the project, not the app.** The launcher targets 1.21.1 and
+  wants Java 21, but a 1.12.2 build needs Java 8 — asking for 21 made every
+  build of an old fork fail before Gradle started. 1.12.2 → 8, 1.20.1 → 17,
+  1.21.1 → 21, read from `gradle.properties`.
+- **A half-finished upgrade is detected.** Once the agent rewrites the sources
+  for 1.21.1 but `gradle.properties` still says 1.12.2, the build uses the newer
+  Java the *code* needs and logs:
+
+  > sources are already Java 21 but gradle.properties still says 1.12.2 — finish the upgrade
+
+  Building 1.21.1 sources with Java 8 would fail on the first `record` or `var`.
+- **CI follows the same rule.** The generated workflow used to hard-code JDK 21,
+  so an old project could build locally and fail in GitHub Actions. It now picks
+  the same version the local build does.
+- **Finish the upgrade properly**: update `minecraft_version`, the `loader`
+  entry and the Gradle wrapper together, then delete `build/` — a stale
+  `build.gradle` referencing ForgeGradle will fail even with the right JDK.
+
 ## Troubleshooting
+
+### `'C:\Users\…\MC' is not recognized as an internal or external command`
+
+Fixed in 0.4.5. `shell: true` does not make Node quote the command, so a project
+in a path with spaces — including this app's own `MC Forge Agent` data folder —
+was split at the space and cmd.exe tried to run the first fragment as a command.
+Builds now hand cmd.exe a properly quoted command line.
 
 ### `EPERM: operation not permitted, symlink …`
 
