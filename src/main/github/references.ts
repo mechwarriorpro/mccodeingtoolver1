@@ -391,7 +391,7 @@ export async function decompileJar(jarPath: string, destDir: string, opts: Decom
         ? versionError
         : javaFiles
           ? `The decompiler exited with code ${lastCode} but wrote ${javaFiles} file(s); some classes failed.`
-          : `The decompiler exited with code ${lastCode}. ${lastOutput.split(/\r?\n/).slice(-6).join(' ')}`,
+          : `The decompiler exited with code ${lastCode}. ${summariseDecompilerFailure(lastOutput)}`,
       durationMs: Date.now() - started
     }
   }
@@ -412,6 +412,27 @@ export async function decompileJar(jarPath: string, destDir: string, opts: Decom
  * nothing about Java versions; this says exactly which java is too old.
  * Pure, so it is testable without a JVM.
  */
+/**
+ * Condense a decompiler failure into one readable line. Vineflower prints a Java
+ * stack trace for a bad class, and pasting fourteen `\tat …` lines into the UI
+ * tells the user nothing. The stack trace is still in the log.
+ */
+export function summariseDecompilerFailure(output: string): string {
+  const lines = output
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+  const isFrame = (l: string): boolean => /^at\s/.test(l) || /^\.\.\.\s*\d+ more/.test(l)
+  // Count first, then drop them: filtering first is how the count became 0.
+  const extra = lines.filter(isFrame).length
+  // The exception's own message is the first line that is not a stack frame.
+  const meaningful = lines.filter((l) => !isFrame(l))
+  const exception = meaningful.find((l) => /Exception|Error|error:|Caused by/i.test(l))
+  const first = exception ?? meaningful[0] ?? 'no output'
+  const trimmed = first.replace(/^Exception in thread "main"\s*/, '').slice(0, 300)
+  return extra ? `${trimmed} (${extra} stack frame(s) in the log)` : trimmed
+}
+
 export function translateDecompilerError(output: string, javaPath: string): string | null {
   const unsupported = output.match(/class file version (\d+)[\s\S]*?up to (\d+)/)
   if (!unsupported) return null

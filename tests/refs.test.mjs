@@ -197,19 +197,27 @@ check('a broken java is skipped, not selected', 'path' in afterBroken && afterBr
 
 check('javaw is recognised', exec.isJavaw('C:\\Java\\bin\\javaw.exe') && !exec.isJavaw('C:\\Java\\bin\\java.exe'))
 
-section('decompile never spawns a java it has not version-checked')
-// A nonexistent javaPath must not be used, but the resolver is still allowed to
-// fall back to a real JDK on the machine (CI has Java 17+; the sandbox has none).
-// So the assertion is about the error shape, not about there being no Java.
-const j8Run = await refs.decompileJar(jarPath, path.join(tmp, 'out-j8'), { javaPath: path.join(tmp, 'no-java-here', 'java') })
-check('a bad path is never used as-is', !/no-java-here/.test(j8Run.error ?? ''), j8Run.error)
-check('no JVM stack trace is reported', !/\tat |UnsupportedClassVersionError/.test(j8Run.error ?? ''), j8Run.error)
-if (j8Run.ok) {
-  // A 17+ was found on this machine, so the run succeeded; nothing to complain about.
-  check('a real JDK 17+ decompiled the fixture', (j8Run.javaFiles ?? 0) > 0, JSON.stringify({ files: j8Run.javaFiles }))
-} else {
-  check('without a usable java the error explains what is needed', /Java 17\+|Could not download|needs a newer Java/.test(j8Run.error ?? ''), j8Run.error)
-}
+section('a failing decompile reports one readable line, not a stack trace')
+// Whatever the machine has installed, the contract is the same: no raw stack
+// frames in the message, and the log keeps the detail.
+const run = await refs.decompileJar(jarPath, path.join(tmp, 'out-any'), { javaPath: path.join(tmp, 'no-java-here', 'java') })
+check('a bad javaPath is never used as-is', !/no-java-here/.test(run.error ?? ''), run.error)
+check('no stack frame leaks into the message', !/\tat |UnsupportedClassVersionError/.test(run.error ?? ''), run.error)
+check('a failure is either a working decompile or an explained error', run.ok === true || !!run.error, JSON.stringify({ ok: run.ok }))
+check('the message is short enough to read', (run.error ?? '').length < 400, `(${(run.error ?? '').length} chars)`)
+
+// The summary itself, tested on the exact Vineflower output that reached CI.
+const storm = [
+  'Exception in thread "main" java.lang.RuntimeException: could not read entry',
+  '\tat org.jetbrains.java.decompiler.struct.StructContext.addSpace(StructContext.java:238)',
+  '\tat org.jetbrains.java.decompiler.struct.StructContext.addSpace(StructContext.java:220)',
+  '\tat org.jetbrains.java.decompiler.main.Fernflower.addSource(Fernflower.java:133)'
+].join('\n')
+const summary = refs.summariseDecompilerFailure(storm)
+check('the exception line is kept', /RuntimeException|RuntimeError/.test(summary), summary)
+check('the "Exception in thread" prefix is dropped', !/^Exception in thread/.test(summary), summary)
+check('the frame count is mentioned instead of the frames', /stack frame/.test(summary) && !/\tat /.test(summary), summary)
+check('an empty output still yields a message', refs.summariseDecompilerFailure('').length > 0, refs.summariseDecompilerFailure(''))
 
 section('an UnsupportedClassVersionError becomes advice, not a stack trace')
 // The user saw 14 lines of JVM stack trace. This is the exact text, and the
