@@ -165,7 +165,7 @@ export function readGameLog(tailLines = 200): { logPath?: string; text: string; 
   const raw = fs.readFileSync(logPath, 'utf8')
   const lines = raw.split(/\r?\n/)
   let crash: string | undefined
-  const crashDir = path.join(app_userGameDir(), 'crash-reports')
+  const crashDir = gameCrashDir()
   try {
     const files = fs
       .readdirSync(crashDir)
@@ -181,8 +181,9 @@ export function readGameLog(tailLines = 200): { logPath?: string; text: string; 
   return { logPath, text: lines.slice(-tailLines).join('\n'), crash }
 }
 
-function app_userGameDir(): string {
-  return path.join(process.cwd(), 'run')
+/** Crash reports land next to the game dir (bundled runClient uses ./run). */
+function gameCrashDir(): string {
+  return path.join(process.cwd(), 'run', 'crash-reports')
 }
 
 export function waitForTitleScreen(timeoutSec: number): Promise<boolean> {

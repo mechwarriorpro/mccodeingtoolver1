@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { app, nativeImage, screen } from 'electron'
+import { app, nativeImage } from 'electron'
 import { run } from '../util/exec'
 import { screenshotsDir } from '../config'
 
@@ -139,8 +139,7 @@ async function captureLinux(outPath: string): Promise<boolean> {
 /** Full virtual desktop grab using Electron (no external tools required). */
 async function captureDesktop(outPath: string): Promise<boolean> {
   try {
-    const display = screen.getPrimaryDisplay()
-    const img = await captureViaElectron(display.bounds)
+    const img = await captureViaElectron()
     if (!img) return false
     fs.writeFileSync(outPath, img)
     return true
@@ -149,29 +148,24 @@ async function captureDesktop(outPath: string): Promise<boolean> {
   }
 }
 
-async function captureViaElectron(_bounds: Electron.Rectangle): Promise<Buffer | null> {
-  // desktopCapturer lives in the main process and needs a hidden window to render into;
-  // the renderer hosts the actual <video> capture, so we ask it over IPC instead.
-  const { getMainWindow } = await import('../ipc/windows')
-  const win = getMainWindow()
-  if (!win) return null
+/**
+ * Fallback: grab the whole primary screen with Electron's desktopCapturer.
+ * This needs no user gesture and works even when the OS window enumeration fails.
+ */
+async function captureViaElectron(): Promise<Buffer | null> {
   try {
-    const dataUrl = await win.webContents.executeJavaScript(
-      `(async () => {
-        const stream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-        const track = stream.getVideoTracks()[0];
-        const v = document.createElement('video');
-        v.srcObject = stream; await v.play();
-        await new Promise(r => setTimeout(r, 400));
-        const c = document.createElement('canvas');
-        c.width = v.videoWidth; c.height = v.videoHeight;
-        c.getContext('2d').drawImage(v, 0, 0);
-        track.stop();
-        return c.toDataURL('image/png');
-      })()`
-    )
-    const base64 = String(dataUrl).split(',')[1]
-    return base64 ? Buffer.from(base64, 'base64') : null
+    const { desktopCapturer, screen } = await import('electron')
+    const display = screen.getPrimaryDisplay()
+    const sources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: display.size.width, height: display.size.height }
+    })
+    const best =
+      sources.find((s) => s.display_id === String(display.id)) ??
+      sources[0]
+    if (!best) return null
+    const png = best.thumbnail.toPNG()
+    return png.length ? png : null
   } catch {
     return null
   }
