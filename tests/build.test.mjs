@@ -51,13 +51,13 @@ check('ignores sources/javadoc jars', findBuiltJar(tmp)?.endsWith('rubytools-1.0
 section('gradlew resolution')
 const gw = gradlewPath(tmp, true)
 check('falls back to gradle when no wrapper', gw.cmd === 'gradle')
-fs.writeFileSync(path.join(tmp, 'gradlew'), '#!/bin/sh\n')
-// The Windows wrapper is gradlew.bat, so accept both spellings.
+// Windows resolves gradlew.bat, everything else resolves the shell script.
+const wrapperName = process.platform === 'win32' ? 'gradlew.bat' : 'gradlew'
+fs.writeFileSync(path.join(tmp, wrapperName), process.platform === 'win32' ? '@echo off\r\n' : '#!/bin/sh\n')
 const wrapperCmd = gradlewPath(tmp, true).cmd
-check('uses wrapper when present', /gradlew(\.bat)?$/.test(wrapperCmd), wrapperCmd)
+check('uses wrapper when present', wrapperCmd.endsWith(wrapperName), `${wrapperCmd} (expected ${wrapperName})`)
 check('preferWrapper=false skips wrapper', gradlewPath(tmp, false).cmd === 'gradle')
 
-console.log('jar metadata + install')
 const AdmZip = (await import('adm-zip')).default
 const jarPath = path.join(tmp, 'rubytools-1.0.0.jar')
 const zip = new AdmZip()
