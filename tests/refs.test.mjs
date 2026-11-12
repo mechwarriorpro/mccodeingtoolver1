@@ -197,14 +197,19 @@ check('a broken java is skipped, not selected', 'path' in afterBroken && afterBr
 
 check('javaw is recognised', exec.isJavaw('C:\\Java\\bin\\javaw.exe') && !exec.isJavaw('C:\\Java\\bin\\java.exe'))
 
-section('decompile refuses a java that is too old')
-// The real gate: decompileJar must not hand the jar to a Java 8 at all.
-const oldJdkDir = path.join(tmp, 'no-java-here')
-const tooOld = exec.resolveToolJava(path.join(oldJdkDir, 'java'))
-check('a nonexistent java is rejected', tooOld.path === null, JSON.stringify(tooOld))
-const j8Run = await refs.decompileJar(jarPath, path.join(tmp, 'out-j8'), { javaPath: path.join(oldJdkDir, 'java') })
-check('no java means a clear error, not a JVM trace', j8Run.ok === false && /Java 17\+|No Java/.test(j8Run.error ?? ''), j8Run.error)
-check('no JVM crash text leaks through', !/UnsupportedClassVersionError/.test(j8Run.error ?? ''), j8Run.error)
+section('decompile never spawns a java it has not version-checked')
+// A nonexistent javaPath must not be used, but the resolver is still allowed to
+// fall back to a real JDK on the machine (CI has Java 17+; the sandbox has none).
+// So the assertion is about the error shape, not about there being no Java.
+const j8Run = await refs.decompileJar(jarPath, path.join(tmp, 'out-j8'), { javaPath: path.join(tmp, 'no-java-here', 'java') })
+check('a bad path is never used as-is', !/no-java-here/.test(j8Run.error ?? ''), j8Run.error)
+check('no JVM stack trace is reported', !/\tat |UnsupportedClassVersionError/.test(j8Run.error ?? ''), j8Run.error)
+if (j8Run.ok) {
+  // A 17+ was found on this machine, so the run succeeded; nothing to complain about.
+  check('a real JDK 17+ decompiled the fixture', (j8Run.javaFiles ?? 0) > 0, JSON.stringify({ files: j8Run.javaFiles }))
+} else {
+  check('without a usable java the error explains what is needed', /Java 17\+|Could not download|needs a newer Java/.test(j8Run.error ?? ''), j8Run.error)
+}
 
 section('an UnsupportedClassVersionError becomes advice, not a stack trace')
 // The user saw 14 lines of JVM stack trace. This is the exact text, and the
