@@ -110,6 +110,11 @@ for (const t of tests) {
   }
 }
 
+// Always leave a machine-readable record of failures; CI uploads it as an artifact.
+if (failures.length) {
+  fs.writeFileSync(path.join(root, 'test-failures.json'), JSON.stringify(failures, null, 2))
+}
+
 if (failures.length && process.env.GITHUB_ACTIONS) {
   for (const f of failures) {
     const msg = f.detail.replace(/%/g, '%25').replace(/\r?\n/g, ' ').slice(0, 900)
