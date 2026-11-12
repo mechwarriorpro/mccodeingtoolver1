@@ -556,3 +556,17 @@ button.link:hover { color: var(--accent-2); }
 @media (max-width: 720px) {
   .role-row { grid-template-columns: 1fr; }
 }
+
+/* detected hardware banner */
+.local-hw {
+  border: 1px solid var(--line-2); border-radius: 10px; padding: 11px 13px;
+  background: linear-gradient(180deg, #171d25, #141a21);
+  display: flex; flex-direction: column; gap: 5px;
+}
+.local-hw-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.badge.amber { background: rgba(245, 192, 90, 0.14); color: var(--amber); }
+.bundle.suggested { border-color: rgba(110, 231, 168, 0.5); box-shadow: 0 0 0 1px rgba(110, 231, 168, 0.18) inset; }
+.bundle-flag {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--accent); font-weight: 600;
+}

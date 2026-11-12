@@ -61,7 +61,7 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.4.1 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.4.2 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
 > v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
 > decompiler picking a Java it could not run.
@@ -70,6 +70,8 @@ Settings or from GitHub's settings at any time.
 > **v0.4.0** adds free models (Z.ai, OpenRouter, local Ollama — no card) and makes the chat live.
 > **v0.4.1** installs local models from inside the app: silent Ollama install, downloadable model
 > bundles, and a model chosen per job (one model can cover several).
+> **v0.4.2** sizes those models to your actual GPU — it reads your card, suggests a bundle for its
+> VRAM, and picks a context window that fits, with explicit support for AMD cards on Vulkan.
 >
 > From 0.3.0 on, the app updates itself: once you have it installed, new versions arrive
 > through GitHub releases without downloading the installer again.
@@ -164,12 +166,18 @@ bottom, because each step depends on the one above:
 3. **Download a bundle** — the set of models covering every use case at a chosen
    quality, so you do not have to decide model by model:
 
-   | Bundle | Models | Size |
-   | --- | --- | --- |
-   | Essential | Qwen3 Coder 7B + Qwen3-VL 8B | ~11 GB |
-   | Recommended | Qwen3 Coder 30B + Qwen3-VL 8B | ~25 GB |
-   | Vision only | Qwen3-VL 8B | ~6 GB |
-   | Everything | all six catalogue models | ~59 GB |
+   | Bundle | Models | Size | For |
+   | --- | --- | --- | --- |
+   | **8 GB GPU (one model)** | Gemma 4 12B | ~8 GB | **Suggested for 8 GB cards** |
+   | Essential | Qwen3 Coder 7B + Qwen3-VL 8B | ~11 GB | 8–12 GB, two specialised models |
+   | Recommended | Qwen3 Coder 30B + Qwen3-VL 8B | ~25 GB | 16–24 GB |
+   | Vision only | Qwen3-VL 8B | ~6 GB | Keep coding in the cloud |
+   | Everything | all six catalogue models | ~59 GB | Compare them all |
+
+   The panel reads your GPU and puts the right one first, but every bundle stays
+   available. On an 8 GB card the answer is usually **one** model rather than
+   two: Gemma 4 12B is a unified multimodal model, so it codes *and* reads
+   screenshots in a single ~8 GB download.
 
    Already-installed models are skipped, and nothing is downloaded twice.
 4. **Or download one model at a time**, with live progress and a cancel button.
@@ -181,10 +189,33 @@ bottom, because each step depends on the one above:
      a model that accepts images.
    - **Background / quick tasks** — short turns and the SDK's cheap alias.
 
+   **Context length** is set next to the model folder, because it is the other
+   half of the memory budget: 32K on a 12B model is roughly 4.5 GB of cache on
+   top of the weights, which is most of an 8 GB card. The panel suggests a value
+   from your VRAM (12K at 8 GB, 32K at 16 GB, 64K at 24 GB) and lets you change
+   it. Too large and the model spills into system RAM and gets several times
+   slower — which is the usual reason "local models are unusably slow".
+
    **The same model can fill several jobs.** A large coder is usually good at
    both coding and reading screenshots, so picking it twice is allowed — and it
    is still downloaded once. The panel shows how many unique models your choices
    need and their total size, with a single button to fetch whatever is missing.
+
+#### AMD graphics cards
+
+Ollama runs AMD cards through **Vulkan**, and enables it automatically when the
+driver provides it. That matters most for **RDNA 1** cards — the RX 5500, 5600
+and 5700 series (`gfx1010`) — because AMD dropped ROCm support for them and
+Ollama closed the request as *not planned*. There is no working
+`HSA_OVERRIDE_GFX_VERSION` value for these cards; Vulkan is the path, and it
+works with no extra setup. The app sets `OLLAMA_VULKAN=1` when it starts the
+daemon so a stray `OLLAMA_VULKAN=0` cannot silently fall back to the CPU, and
+labels the card in Settings.
+
+If generation is slow on an AMD card, check which backend was chosen:
+
+    ollama ps                     # is the model on the GPU or the CPU?
+    %LOCALAPPDATA%\Programs\Ollama\ollama.exe serve   # watch the startup log
 
 The catalogue marks each model `tools` / `vision`, and the pickers only offer
 models that can actually do the job: a vision-only model is not offered for
@@ -302,8 +333,13 @@ transcript is complete even when the live text was cut short.
 
 - **Local models are a separate download.** Ollama itself is ~1 GB and the model
   weights are 5–19 GB each; none of that ships inside the 108 MB installer unless
-  you deliberately add `vendor/OllamaSetup.exe`. Local quality depends on your
-  GPU and RAM — a 30B model needs roughly 24 GB of video memory to be pleasant.
+  you deliberately add `vendor/OllamaSetup.exe`.
+- **8 GB of VRAM is the tight case.** Weights, KV cache and overhead all share
+  the card. A 12B model at Q4 is ~8 GB before any context, so on an 8 GB card use
+  one model (Gemma 4 12B) and a 12K context; a 30B model wants ~24 GB and will
+  crawl or spill to system RAM below that.
+- **RDNA 1 AMD cards are Vulkan-only.** ROCm dropped `gfx1010` (RX 5000 series);
+  do not follow guides telling you to set `HSA_OVERRIDE_GFX_VERSION`.
 - The app needs the Electron binary to run; if `npm install` cannot download it (offline / blocked
   CDN), building the installer fails even though the code is fine.
 - **Direct client launch is 1.21.1 NeoForge only.** Other versions build and install fine (the jar

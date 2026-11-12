@@ -65,6 +65,25 @@ export interface LocalInfo {
   models: LocalModelDef[]
   bundles: BundleDef[]
   roleDefs: LocalRoleDef[]
+  hardware: HardwareInfo
+  /** 0 means "choose from the GPU automatically". */
+  contextLength: number
+}
+
+export interface HardwareInfo {
+  gpus: GpuInfo[]
+  primary?: GpuInfo
+  recommendedBundle: string
+  suggestedContext: number
+}
+
+export interface GpuInfo {
+  name: string
+  vendor: 'amd' | 'nvidia' | 'intel' | 'unknown'
+  vramGb?: number
+  /** RDNA 1 card, which ROCm dropped; Ollama uses Vulkan instead. */
+  needsVulkan: boolean
+  note?: string
 }
 
 export interface InstallProgress {
@@ -240,6 +259,7 @@ export interface McfApi {
     pullBundle: (opts: { bundle?: string; models?: string[] }) => Promise<{ ok: boolean; done?: string[]; error?: string }>
     cancelPull: () => Promise<{ cancelled: boolean; model?: string }>
     setRoles: (roles: { agent?: string[]; vision?: string[]; quick?: string[] }) => Promise<{ ok: boolean; roles?: Record<string, string[]>; error?: string }>
+    setContext: (tokens: number) => Promise<{ ok: boolean; contextLength?: number; restartNeeded?: boolean; error?: string }>
     onInstallProgress: (cb: (p: InstallProgress) => void) => () => void
     onPullProgress: (cb: (p: PullProgress) => void) => () => void
     onBundleProgress: (cb: (p: BundleProgress) => void) => () => void

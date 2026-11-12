@@ -14,6 +14,8 @@ export interface LocalSettings {
   installDir: string
   /** We started the daemon with OLLAMA_MODELS, so the app owns its lifetime. */
   managed: boolean
+  /** Context window in tokens; 0 means "pick from the GPU's VRAM". */
+  contextLength: number
 }
 
 export interface AppConfig {

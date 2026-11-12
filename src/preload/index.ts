@@ -54,6 +54,7 @@ const api = {
     pullBundle: (opts: unknown) => ipcRenderer.invoke('local:pullBundle', opts),
     cancelPull: () => ipcRenderer.invoke('local:cancelPull'),
     setRoles: (roles: unknown) => ipcRenderer.invoke('local:setRoles', roles),
+    setContext: (tokens: number) => ipcRenderer.invoke('local:setContext', tokens),
     onInstallProgress: (cb: (p: unknown) => void) => on('local:install-progress', cb),
     onPullProgress: (cb: (p: unknown) => void) => on('local:pull-progress', cb),
     onBundleProgress: (cb: (p: unknown) => void) => on('local:bundle-progress', cb)

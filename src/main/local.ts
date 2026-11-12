@@ -24,7 +24,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
-import { spawn, type ChildProcess } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
 import { app } from 'electron'
 
 export type LocalRole = 'agent' | 'vision' | 'quick'
@@ -129,8 +129,8 @@ export const LOCAL_MODELS: LocalModelDef[] = [
     sizeGb: 8,
     tools: true,
     vision: true,
-    suits: ['vision', 'agent'],
-    note: 'Handles both images and code in one download, if you would rather pull one model instead of two.'
+    suits: ['agent', 'vision'],
+    note: 'One download for every job: it codes and reads images. The best pick for an 8 GB card — it needs about 8 GB at Q4, so keep the context modest.'
   },
   {
     id: 'llama3.2-vision:11b',
@@ -143,7 +143,7 @@ export const LOCAL_MODELS: LocalModelDef[] = [
   }
 ]
 
-export type BundleId = 'essential' | 'recommended' | 'vision' | 'max'
+export type BundleId = 'compact' | 'essential' | 'recommended' | 'vision' | 'max'
 
 export interface BundleDef {
   id: BundleId
@@ -162,6 +162,13 @@ export interface BundleDef {
  * `max` is the only one that pulls all six.
  */
 export const BUNDLES: BundleDef[] = [
+  {
+    id: 'compact',
+    label: '8 GB GPU (one model)',
+    summary: 'Gemma 4 12B alone. Codes and reads screenshots, so one 8 GB download covers every job.',
+    models: ['gemma4:12b'],
+    covers: ['agent', 'vision', 'quick']
+  },
   {
     id: 'essential',
     label: 'Essential',
@@ -206,8 +213,16 @@ export function bundleSizeGb(modelIds: string[]): number {
   return unique.reduce((sum, id) => sum + (modelById(id)?.sizeGb ?? 0), 0)
 }
 
+/**
+ * Whether a bundle can fill a role.
+ *
+ * This asks about *capability* (`roleFit`), not preference (`suits`): a bundle
+ * promising to cover the quick tasks is making a statement about what will
+ * work, and a model that can call tools will work there whether or not it is
+ * the model you would have chosen.
+ */
 export function bundleCoversBundle(b: BundleDef, role: LocalRole): boolean {
-  return b.models.some((id) => modelById(id)?.suits.includes(role) ?? false)
+  return b.models.some((id) => roleFit(id, role).ok)
 }
 
 /**
@@ -399,6 +414,102 @@ export function parseOllamaList(text: string): { id: string; sizeGb: number }[] 
   return out
 }
 
+// ------------------------------------------------------------------- hardware
+
+export interface GpuInfo {
+  name: string
+  vendor: 'amd' | 'nvidia' | 'intel' | 'unknown'
+  /** Adapter memory reported by the driver, in GB. */
+  vramGb?: number
+  /**
+   * True when Ollama should reach this card through Vulkan rather than ROCm.
+   * RDNA 1 (RX 5000 series, gfx1010) has no ROCm support — AMD dropped it and
+   * Ollama's maintainers closed the request as not planned — so Vulkan is the
+   * only accelerated path. Ollama enables Vulkan by default when the driver
+   * provides it, which is why this still works with no extra setup.
+   */
+  needsVulkan: boolean
+  /** A sentence the user can act on, shown in Settings. */
+  note?: string
+}
+
+/** RDNA 1 cards share gfx1010 and were dropped by ROCm 6.x. */
+const RDNA1 = /\b(rx ?5[567]0\d|rx ?5500|\b5500 ?xt\b|\b5600 ?xt\b|\b5700 ?xt\b|rx ?5700)\b/i
+
+/**
+ * Read the installed GPUs without a native module.
+ *
+ * `wmic` is deprecated and absent on newer Windows, so PowerShell's CIM query
+ * comes first, with wmic as a fallback. Both are best-effort: no GPU information
+ * must never block local models, only make the advice less specific.
+ */
+export function detectGpus(): GpuInfo[] {
+  if (process.platform !== 'win32') return []
+  const run = (cmd: string, args: string[]): string => {
+    try {
+      return execFileSync(cmd, args, { encoding: 'utf8', timeout: 8000, windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] })
+    } catch {
+      return ''
+    }
+  }
+  let raw = run('powershell', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    'Get-CimInstance Win32_VideoController | ForEach-Object { "$($_.Name)|$($_.AdapterRAM)" }'
+  ])
+  if (!raw.trim()) {
+    raw = run('wmic', ['path', 'win32_VideoController', 'get', 'name,AdapterRAM', '/format:csv'])
+  }
+  const out: GpuInfo[] = []
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim()
+    if (!trimmed || /^name\b|^name,/i.test(trimmed) || /^Node,/i.test(trimmed)) continue
+    // wmic CSV is Node,AdapterRAM,Name; the PowerShell pipe form is Name|Bytes.
+    let name = ''
+    let bytes = 0
+    if (trimmed.includes('|')) {
+      const [n, b] = trimmed.split('|')
+      name = (n ?? '').trim()
+      bytes = Number(b) || 0
+    } else {
+      const parts = trimmed.split(',')
+      if (parts.length < 3) continue
+      bytes = Number(parts[1]) || 0
+      name = (parts[2] ?? '').trim()
+    }
+    if (!name || /microsoft basic|remote|virtual/i.test(name)) continue
+    const vendor: GpuInfo['vendor'] = /amde|radeon|\bamd\b|ati /i.test(name)
+      ? 'amd'
+      : /nvidia|geforce|quadro|rtx|gtx/i.test(name)
+        ? 'nvidia'
+        : /intel|arc|iris|uhd/i.test(name)
+          ? 'intel'
+          : 'unknown'
+    // AdapterRAM is a signed 32-bit value in WMI and wraps at 4 GB on cards
+    // larger than that, so a low number is a floor, not the true size.
+    const vramGb = bytes > 0 ? Math.round((bytes / 1e9) * 10) / 10 : undefined
+    const amdRdna1 = vendor === 'amd' && RDNA1.test(name)
+    out.push({
+      name,
+      vendor,
+      vramGb,
+      needsVulkan: amdRdna1,
+      note: amdRdna1
+        ? 'RDNA 1 card: AMD dropped ROCm for it, so Ollama runs it through Vulkan, which is enabled by default. If generation is slow, check the backend in the daemon log.'
+        : undefined
+    })
+  }
+  return out
+}
+
+/** The discrete card worth sizing models for: the largest reported, ignoring integrated GPUs. */
+export function primaryGpu(gpus: GpuInfo[]): GpuInfo | undefined {
+  const discrete = gpus.filter((g) => !/intel|iris|uhd/i.test(g.name) || /arc/i.test(g.name))
+  const pool = discrete.length ? discrete : gpus
+  return [...pool].sort((a, b) => (b.vramGb ?? 0) - (a.vramGb ?? 0))[0]
+}
+
 /** The run command for a model, used for the "already installed" check. */
 export function ollamaPullArgs(modelId: string): string[] {
   return ['pull', modelId]
@@ -408,14 +519,40 @@ export function ollamaPullArgs(modelId: string): string[] {
  * Env for the daemon that makes it put weights where the user asked, plus
  * settings that materially help an agent loop on consumer hardware.
  */
-export function ollamaServeEnv(modelsDir: string): Record<string, string> {
+/** Context defaults, chosen by VRAM class rather than one fixed number. */
+export const CONTEXT_CHOICES = [
+  { tokens: 8192, label: '8K — smallest memory use', forGb: 8 },
+  { tokens: 12288, label: '12K — balanced for 8 GB cards', forGb: 8 },
+  { tokens: 16384, label: '16K — needs a little growth room', forGb: 12 },
+  { tokens: 32768, label: '32K — comfortable on 16 GB or more', forGb: 16 },
+  { tokens: 65536, label: '64K — 24 GB cards', forGb: 24 }
+] as const
+
+/**
+ * A KV cache is not free: on a 12B model roughly 0.14 GB per 1k tokens. The
+ * agent needs a few thousand tokens for its system prompt and tools, but asking
+ * for 32k on an 8 GB card spends ~4.5 GB of VRAM on cache alone and pushes the
+ * model into system RAM, where it runs several times slower.
+ */
+export function contextForVram(vramGb: number | undefined): number {
+  if (vramGb === undefined) return 16384
+  if (vramGb <= 8) return 12288
+  if (vramGb <= 12) return 16384
+  if (vramGb <= 16) return 32768
+  return 65536
+}
+
+export function ollamaServeEnv(modelsDir: string, contextLength = 32768): Record<string, string> {
   return {
     OLLAMA_MODELS: modelsDir,
-    // The agent sends big system prompts; the default 4k context truncates them
-    // and the model then "forgets" its tools.
-    OLLAMA_CONTEXT_LENGTH: '32768',
-    // Keep the model resident between turns; reloading 19 GB costs a minute.
-    OLLAMA_KEEP_ALIVE: '30m'
+    // The agent sends a large system prompt; Ollama's 4k default truncates it and
+    // the model then "forgets" its tools. The exact size is a memory trade-off.
+    OLLAMA_CONTEXT_LENGTH: String(contextLength),
+    // Keep the model resident between turns; reloading costs tens of seconds.
+    OLLAMA_KEEP_ALIVE: '30m',
+    // AMD cards (including RDNA 1, which ROCm dropped) run through Vulkan. It is
+    // on by default when available; being explicit survives a stray OLLAMA_VULKAN=0.
+    OLLAMA_VULKAN: '1'
   }
 }
 
@@ -532,9 +669,10 @@ export async function installOllama(opts: {
 }
 
 /** Start the daemon ourselves with the right env, if the app has to. */
-export function startOllamaServe(exe: string, modelsDir: string): ChildProcess | null {
+export function startOllamaServe(exe: string, modelsDir: string, contextLength?: number): ChildProcess | null {
   try {
-    const env = { ...process.env, ...ollamaServeEnv(modelsDir) }
+    const ctx = contextLength ?? contextForVram(undefined)
+    const env = { ...process.env, ...ollamaServeEnv(modelsDir, ctx) }
     const child = spawn(exe, ['serve'], { env, stdio: 'ignore', detached: false, windowsHide: true })
     child.on('error', () => undefined)
     return child

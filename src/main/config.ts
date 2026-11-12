@@ -24,7 +24,8 @@ const defaultConfig: AppConfig = {
     modelsDir: '',
     roles: { agent: [], vision: [], quick: [] },
     installDir: '',
-    managed: false
+    managed: false,
+    contextLength: 0
   },
   game: {
     instances: [],

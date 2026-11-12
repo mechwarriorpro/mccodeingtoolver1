@@ -92,6 +92,27 @@ export default function LocalModelsPanel({ onToast }: { onToast: (m: string, kin
 
       {error ? <div className="local-error">{error}</div> : null}
 
+      {/* Detected hardware decides which bundle is suggested and how much
+          context the daemon asks for, so it is stated rather than assumed. */}
+      {info.hardware?.primary ? (
+        <div className="local-hw">
+          <div className="local-hw-main">
+            <strong>{info.hardware.primary.name}</strong>
+            {info.hardware.primary.vramGb ? (
+              <span className="badge">{info.hardware.primary.vramGb} GB VRAM</span>
+            ) : null}
+            {info.hardware.primary.needsVulkan ? <span className="badge amber">Vulkan, not ROCm</span> : null}
+          </div>
+          {info.hardware.primary.note ? <div className="hint">{info.hardware.primary.note}</div> : null}
+          <div className="hint">
+            Suggested for this card: <strong>{info.bundles.find((b) => b.id === info.hardware.recommendedBundle)?.label}</strong>
+            {info.hardware.primary.vramGb && info.hardware.primary.vramGb <= 9
+              ? ' — one 8 GB model that covers coding and screenshots, rather than two.'
+              : ''}
+          </div>
+        </div>
+      ) : null}
+
       {/* 1 — install ------------------------------------------------------- */}
       {!info.installed ? (
         <div className="local-step">
@@ -202,6 +223,39 @@ export default function LocalModelsPanel({ onToast }: { onToast: (m: string, kin
         </div>
       </div>
 
+      {/* Context length is a VRAM trade-off, not a preference: 32K on a 12B
+          model costs ~4.5 GB of cache, which is most of an 8 GB card. */}
+      <div className="local-step">
+        <div className="local-step-title">
+          <span className="step-num">2b</span> Conversation memory (context)
+        </div>
+        <div className="hint">
+          How much of the conversation the model can hold. Bigger is better for long agent runs but costs video
+          memory, and a model that no longer fits on the card runs in system RAM — several times slower.
+          {info.hardware?.suggestedContext ? ` Suggested for your card: ${Math.round(info.hardware.suggestedContext / 1024)}K.` : ''}
+        </div>
+        <div className="row" style={{ marginTop: 6 }}>
+          <select
+            value={String(info.contextLength || info.hardware?.suggestedContext || 12288)}
+            onChange={async (e) => {
+              const res = await api.local.setContext(Number(e.target.value))
+              if (!res.ok) setError(res.error ?? 'Could not save that')
+              else {
+                onToast(res.restartNeeded ? 'Saved — restart Ollama to apply' : 'Context updated')
+                await refresh()
+              }
+            }}
+          >
+            {[8192, 12288, 16384, 32768, 65536].map((n) => (
+              <option key={n} value={n}>
+                {n / 1024}K tokens
+                {n === info.hardware?.suggestedContext ? ' — suggested' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
       {/* 3 — bundles -------------------------------------------------------- */}
       <div className="local-step">
         <div className="local-step-title">
@@ -217,11 +271,15 @@ export default function LocalModelsPanel({ onToast }: { onToast: (m: string, kin
             const missing = b.models.filter((id) => !has(id))
             const complete = missing.length === 0
             return (
-              <div key={b.id} className={`bundle ${complete ? 'complete' : ''}`}>
+              <div
+                key={b.id}
+                className={`bundle ${complete ? 'complete' : ''} ${b.id === info.hardware?.recommendedBundle ? 'suggested' : ''}`}
+              >
                 <div className="bundle-top">
                   <strong>{b.label}</strong>
                   <span className="badge">{Math.round(totalGb)} GB</span>
                 </div>
+                {b.id === info.hardware?.recommendedBundle ? <div className="bundle-flag">Suggested for your GPU</div> : null}
                 <div className="bundle-summary">{b.summary}</div>
                 <div className="bundle-models">
                   {b.models.map((id) => (

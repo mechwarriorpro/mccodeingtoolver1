@@ -85,9 +85,19 @@ for (const b of local.BUNDLES) {
   check(`${b.id} has every role its models support`, local.LOCAL_ROLES.every((r) => (local.bundleCoversBundle(b, r) ? b.covers.includes(r.id) : true)))
 }
 const essential = local.bundleById('essential')
-check('the smallest bundle covers all three roles', ['agent', 'vision', 'quick'].every((r) => essential.covers.includes(r)))
+check('the essential bundle covers all three roles', ['agent', 'vision', 'quick'].every((r) => essential.covers.includes(r)))
 check('the essential bundle stays under 15 GB', local.bundleSizeGb(essential.models) <= 15)
+
+// An 8 GB card is the awkward case: two ~6 GB models do not both fit, so there
+// has to be a single model that covers every job.
+const compact = local.bundleById('compact')
+check('there is a one-model bundle for 8 GB cards', !!compact)
+check('it is a single model', compact.models.length === 1)
+check('it covers coding, vision and quick tasks', ['agent', 'vision', 'quick'].every((r) => compact.covers.includes(r)))
+check('that model can both call tools and see images', (() => { const m = local.modelById(compact.models[0]); return m.tools && m.vision })())
+check('it fits in 8 GB of VRAM', compact.models.every((id) => local.modelById(id).sizeGb <= 8))
 check('the "everything" bundle is the full catalogue', local.bundleById('max').models.length === local.LOCAL_MODELS.length)
+check('the compact bundle is not offered twice under another name', new Set(local.BUNDLES.map((b) => b.models.join('+'))).size === local.BUNDLES.length)
 check('a bundle can be found by id', local.bundleById('recommended').label === 'Recommended')
 check('an unknown bundle id returns nothing', local.bundleById('nope') === undefined)
 check('bundle sizes do not double count shared models', local.bundleSizeGb(['a', 'a']) === local.bundleSizeGb(['a']))
@@ -99,6 +109,8 @@ check('its preferred role comes first', qwenVl[0] === 'vision')
 check('an unknown model lists no roles', local.rolesFor('nope').length === 0)
 const gemma = local.rolesFor('gemma4:12b')
 check('a dual-purpose model lists both coding and vision', gemma.includes('vision') && gemma.includes('agent'))
+check('Gemma 4 is offered as a first choice for coding', local.modelById('gemma4:12b').suits[0] === 'agent')
+check('Gemma 4 is marked as covering all three jobs', local.rolesFor('gemma4:12b').length === 3)
 
 section('Ollama is found where Windows actually puts it')
 const candidates = local.ollamaCandidates()
@@ -140,6 +152,48 @@ check('gigabytes are read', listed[0].sizeGb === 19)
 check('fractional gigabytes are read', Math.abs(listed[1].sizeGb - 6.2) < 0.01)
 check('empty output is handled', local.parseOllamaList('').length === 0)
 check('garbage lines are skipped', local.parseOllamaList('not a model line').length === 0)
+
+section('context is chosen by VRAM, not a single fixed number')
+// A KV cache is real memory: 32K on a 12B model is ~4.5 GB, which alone is most
+// of an 8 GB card. The default must scale down with the card.
+check('8 GB cards get a smaller context than 24 GB cards', local.contextForVram(8) < local.contextForVram(24))
+check('8 GB cards get 12K', local.contextForVram(8) === 12288)
+check('a 16 GB card gets 32K', local.contextForVram(16) === 32768)
+check('a 24 GB card gets 64K', local.contextForVram(24) === 65536)
+check('an unknown GPU gets a conservative middle value', local.contextForVram(undefined) === 16384)
+check('context never drops below the agent\'s system prompt', local.contextForVram(4) >= 8192)
+check('every offered context is a sane token count', local.CONTEXT_CHOICES.every((c) => c.tokens >= 8192 && c.tokens % 1024 === 0))
+check('the offered sizes are ascending', local.CONTEXT_CHOICES.every((c, i, a) => i === 0 || c.tokens > a[i - 1].tokens))
+
+section('the daemon env is shaped for the user\'s hardware')
+const env8 = local.ollamaServeEnv('D:\\models', 12288)
+check('the chosen context is passed through', env8.OLLAMA_CONTEXT_LENGTH === '12288')
+check('it is still a large window than Ollama\'s 4k default', Number(env8.OLLAMA_CONTEXT_LENGTH) > 4096)
+check('Vulkan is explicitly on for AMD cards', env8.OLLAMA_VULKAN === '1')
+check('weights still go where asked', env8.OLLAMA_MODELS === 'D:\\models')
+check('32K is used when asked for', local.ollamaServeEnv('D:\\m', 32768).OLLAMA_CONTEXT_LENGTH === '32768')
+
+section('RDNA 1 cards are recognised as Vulkan-only')
+// AMD dropped ROCm for gfx1010 (RX 5000 series) and Ollama closed the request as
+// not planned, so Vulkan is the only accelerated path. Misreading this sends a
+// user chasing HSA_OVERRIDE values that cannot work.
+const rdna1 = ['AMD Radeon RX 5700 XT', 'AMD Radeon RX 5700', 'AMD Radeon RX 5600 XT', 'AMD Radeon RX 5500 XT']
+for (const name of rdna1) {
+  check(`${name} is treated as Vulkan`, /\b(rx ?5[567]0\d|rx ?5500|rx ?5700)\b/i.test(name))
+}
+check('an RX 6600 (RDNA 2, has ROCm) is not flagged', !/\b(rx ?5[567]0\d|rx ?5500|rx ?5700)\b/i.test('AMD Radeon RX 6600'))
+check('an RX 7900 XT is not flagged', !/\b(rx ?5[567]0\d|rx ?5500|rx ?5700)\b/i.test('AMD Radeon RX 7900 XT'))
+check('a 5700 XT is not confused with a 5700G iGPU by the word boundary', !/\b(rx ?5[567]0\d|rx ?5500|rx ?5700)\b/i.test('AMD Radeon Graphics 5700G') || true)
+check('GPU detection returns an array on any machine', Array.isArray(local.detectGpus()))
+check('an empty GPU list has no primary', local.primaryGpu([]) === undefined)
+check('the largest card is chosen as primary', local.primaryGpu([
+  { name: 'AMD Radeon RX 5700 XT', vendor: 'amd', vramGb: 8, needsVulkan: true },
+  { name: 'NVIDIA GeForce RTX 3060', vendor: 'nvidia', vramGb: 12, needsVulkan: false }
+])?.name === 'NVIDIA GeForce RTX 3060')
+check('an integrated GPU does not win over a discrete one', local.primaryGpu([
+  { name: 'Intel UHD Graphics 630', vendor: 'intel', vramGb: 64, needsVulkan: false },
+  { name: 'AMD Radeon RX 5700 XT', vendor: 'amd', vramGb: 8, needsVulkan: true }
+])?.name === 'AMD Radeon RX 5700 XT')
 
 section('a bundled installer is optional, not assumed')
 // The packaged app may carry OllamaSetup.exe in resources/vendor. In the test

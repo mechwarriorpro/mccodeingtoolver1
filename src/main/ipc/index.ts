@@ -59,16 +59,20 @@ import { resolveEra } from '../versions/eras'
 import { resolveVisionModel } from '../game/vision'
 import {
   BUNDLES,
+  CONTEXT_CHOICES,
   LOCAL_MODELS,
   LOCAL_ROLES,
   bundleById,
   cancelPull,
+  contextForVram,
+  detectGpus,
   defaultModelsDir,
   findOllama,
   freeSpaceGb,
   hasBundledInstaller,
   installInProgress,
   installOllama,
+  primaryGpu,
   probeOllama,
   pullModel,
   roleFit,
@@ -790,7 +794,21 @@ export function registerIpc(): void {
       roles: cfg.local?.roles ?? { agent: [], vision: [], quick: [] },
       models: LOCAL_MODELS,
       bundles: BUNDLES,
-      roleDefs: LOCAL_ROLES
+      roleDefs: LOCAL_ROLES,
+      // Hardware drives two decisions: which bundle to suggest, and how much
+      // context the daemon asks for. Both are guesses, so both are overridable.
+      hardware: (() => {
+        const gpus = detectGpus()
+        const primary = primaryGpu(gpus)
+        const vramGb = primary?.vramGb
+        return {
+          gpus,
+          primary,
+          recommendedBundle: recommendBundle(vramGb),
+          suggestedContext: contextForVram(vramGb)
+        }
+      })(),
+      contextLength: cfg.local?.contextLength || 0
     }
   })
 
@@ -818,7 +836,7 @@ export function registerIpc(): void {
       if (dir) {
         const exe = res.path ?? findOllama()
         if (exe && !(await probeOllama()).running) {
-          startOllamaServe(exe, dir)
+          startOllamaServe(exe, dir, loadConfig().local?.contextLength || contextForVram(primaryGpu(detectGpus())?.vramGb))
           await delay(1500)
         }
       }
@@ -854,10 +872,29 @@ export function registerIpc(): void {
           // Not running under that name; the serve call below handles it.
         }
         await delay(800)
-        startOllamaServe(exe, dir || defaultModelsDir())
+        startOllamaServe(exe, dir || defaultModelsDir(), loadConfig().local?.contextLength || undefined)
       }
     }
     return { ok: true, modelsDir: dir || defaultModelsDir(), restartNeeded: !!exe && !cfg.local?.managed }
+  })
+
+  /** Choose how large a context the daemon asks for. Restarts a managed daemon. */
+  ipcMain.handle('local:setContext', async (_e, tokens: number) => {
+    const allowed = CONTEXT_CHOICES.map((c) => c.tokens) as number[]
+    if (!allowed.includes(tokens)) return { ok: false, error: 'That context size is not offered.' }
+    const cfg = loadConfig()
+    saveConfig({ ...cfg, local: { ...cfg.local, contextLength: tokens } })
+    const exe = findOllama()
+    if (exe && cfg.local?.managed) {
+      try {
+        execFileSync('taskkill', ['/F', '/IM', 'ollama.exe'], { stdio: 'ignore' })
+      } catch {
+        // Nothing running to stop.
+      }
+      await delay(600)
+      startOllamaServe(exe, cfg.local?.modelsDir || defaultModelsDir(), tokens)
+    }
+    return { ok: true, contextLength: tokens, restartNeeded: !!exe && !cfg.local?.managed }
   })
 
   /** Start the daemon ourselves so OLLAMA_MODELS is honoured. */
@@ -867,7 +904,8 @@ export function registerIpc(): void {
     if (!exe) return { ok: false, error: 'Ollama is not installed.' }
     const probe = await probeOllama()
     if (probe.running) return { ok: true, alreadyRunning: true }
-    startOllamaServe(exe, cfg.local?.modelsDir || defaultModelsDir())
+    const ctx = cfg.local?.contextLength || contextForVram(primaryGpu(detectGpus())?.vramGb)
+    startOllamaServe(exe, cfg.local?.modelsDir || defaultModelsDir(), ctx)
     saveConfig({ ...cfg, local: { ...cfg.local, managed: true } })
     // The daemon takes a moment to bind the port; a single retry is enough and
     // avoids a spinner that never resolves.
@@ -1516,4 +1554,19 @@ function explainProviderError(status: number, body: string): string {
 /** Small sleep used between daemon restarts. */
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
+}
+
+/**
+ * Which bundle to put first for a given amount of video memory.
+ *
+ * This is a suggestion, not a restriction: the panel still lists every bundle.
+ * The thresholds come from the weights themselves — a 12B model at Q4 is about
+ * 8 GB before any context, so an 8 GB card is the boundary case.
+ */
+function recommendBundle(vramGb: number | undefined): BundleId {
+  if (vramGb === undefined) return 'essential'
+  if (vramGb <= 8) return 'compact'
+  if (vramGb <= 12) return 'essential'
+  if (vramGb <= 20) return 'recommended'
+  return 'max'
 }
