@@ -209,7 +209,9 @@ export class AgentSession {
           instancePath: instance?.path,
           instanceKind: instance?.kind,
           githubOwner: cfg.github.owner,
-          githubRepo: cfg.github.repo
+          githubRepo: cfg.github.repo,
+          loader: detectLoader(props),
+          mcVersion: detectMcVersion(props)
         })}\n\n${coordinatorPrompt()}`
       },
       settingSources: ['user', 'project', 'local'],
@@ -369,4 +371,23 @@ function resolveBundledCli(): string {
     throw new Error(`Claude Code CLI not found. Looked in:\n${candidates.join('\n')}`)
   }
   return found
+}
+
+/* ------------------------------------------------------------------ project */
+
+/**
+ * Which loader this project targets, from gradle.properties. Older projects (and
+ * the vendored NeoForge template) only carry `neo_version`, so that is the
+ * default rather than an assumption of "neoforge always".
+ */
+export function detectLoader(props: Record<string, string>): 'neoforge' | 'forge' | 'fabric' {
+  const explicit = (props.mod_loader ?? props.loader ?? '').toLowerCase()
+  if (explicit === 'fabric' || explicit === 'forge' || explicit === 'neoforge') return explicit
+  if (props.loader_version && !props.neo_version && !props.forge_version) return 'fabric'
+  if (props.forge_version) return 'forge'
+  return 'neoforge'
+}
+
+export function detectMcVersion(props: Record<string, string>): string {
+  return props.minecraft_version || props.mc_version || props.minecraftVersion || '1.21.1'
 }

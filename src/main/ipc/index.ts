@@ -43,7 +43,18 @@ import {
   searchReference
 } from '../github/references'
 import { deleteConversation, listConversations, loadConversation, newConversationId, saveConversation } from '../store'
-import { scaffoldProject, validateModId, validatePackage, templateRoot } from '../mod/scaffold'
+import { validateModId, validatePackage, templateRoot } from '../mod/scaffold'
+import { generateProject } from '../mod/generate'
+import {
+  type Loader,
+  cachedCatalog,
+  getCatalog,
+  loadersFor,
+  loaderVersionsFor,
+  MIN_MC_VERSION,
+  selectableVersions
+} from '../versions/catalog'
+import { resolveEra } from '../versions/eras'
 import { isGradleProject, runLocalBuild, buildLogPath, findBuiltJar, gitSummary } from '../build/gradle'
 import { ghPreflight, initGithubRepo, runActionsBuild } from '../build/actions'
 import { readJarInfo, installJar } from '../mod/jar'
@@ -500,22 +511,72 @@ export function registerIpc(): void {
   })
 
   // ---------------- project ----------------
-  ipcMain.handle('project:scaffold', async (_e, opts: { parentDir: string; modId: string; modName: string; group: string; modVersion: string; author?: string; license?: string; neoVersion?: string }) => {
+  ipcMain.handle('project:scaffold', async (_e, opts: {
+    parentDir: string
+    modId: string
+    modName: string
+    group: string
+    modVersion: string
+    author?: string
+    license?: string
+    loader: Loader
+    mcVersion: string
+    loaderVersion: string
+  }) => {
     const dir = path.join(opts.parentDir, opts.modId)
-    const res = scaffoldProject({
+    const res = generateProject({
       targetDir: dir,
       modId: opts.modId,
       modName: opts.modName,
       group: opts.group,
       modVersion: opts.modVersion || '1.0.0',
-      neoVersion: opts.neoVersion || '21.1.265',
       author: opts.author,
-      license: opts.license
+      license: opts.license,
+      loader: opts.loader,
+      mcVersion: opts.mcVersion,
+      loaderVersion: opts.loaderVersion,
+      templateRoot: templateRoot()
     })
     if (!res.ok) return res
     saveConfig({ workspaceDir: dir })
     resetSession()
-    return { ok: true, dir }
+    return { ...res, dir }
+  })
+
+  /* ------------------------------------------------------------------ versions */
+
+  /** The live catalog. `force` bypasses the 24 h cache (the Refresh button). */
+  ipcMain.handle('versions:catalog', async (_e, opts: { force?: boolean; snapshots?: boolean } = {}) => {
+    const catalog = await getCatalog({ force: opts.force })
+    return {
+      ok: true,
+      fetchedAt: catalog.fetchedAt,
+      errors: catalog.errors,
+      minVersion: MIN_MC_VERSION,
+      versions: selectableVersions(catalog, { snapshots: opts.snapshots }).map((v) => ({
+        id: v.id,
+        type: v.type,
+        releasedAt: v.releasedAt,
+        loaders: loadersFor(catalog, v.id)
+      }))
+    }
+  })
+
+  /** Loader builds that support one Minecraft version, newest first. */
+  ipcMain.handle('versions:loaders', async (_e, opts: { mcVersion: string; loader: Loader }) => {
+    const catalog = await getCatalog()
+    return {
+      ok: true,
+      versions: loaderVersionsFor(catalog, opts.loader, opts.mcVersion).map((l) => l.version),
+      loaders: loadersFor(catalog, opts.mcVersion)
+    }
+  })
+
+  /** Everything the Setup dialog needs for one pick: era label, java, buildable. */
+  ipcMain.handle('versions:era', (_e, opts: { loader: Loader; mcVersion: string }) => {
+    const era = resolveEra(opts.loader, opts.mcVersion)
+    if (!era) return { ok: false, error: 'No build toolchain for that combination.' }
+    return { ok: true, era: { id: era.id, label: era.label, buildable: era.buildable, java: era.java, notes: era.notes } }
   })
 
   ipcMain.handle('project:validate', (_e, opts: { modId: string; group: string }) => ({

@@ -18,6 +18,9 @@ const sources = [
   'src/main/agent/tools.ts',
   'src/main/game/technic.ts',
   'src/main/mod/jar.ts',
+  'src/main/mod/generate.ts',
+  'src/main/versions/catalog.ts',
+  'src/main/versions/eras.ts',
   'src/main/util/exec.ts'
 ]
 

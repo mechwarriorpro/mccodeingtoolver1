@@ -1,3 +1,4 @@
+
 import type {
   AppConfig,
   Conversation,
@@ -12,6 +13,16 @@ import type {
   ScreenshotInfo,
   ToolTrace
 } from '../../../shared/types'
+
+export type Loader = 'neoforge' | 'forge' | 'fabric'
+
+export interface VersionChoice {
+  id: string
+  type: 'release' | 'snapshot' | 'old_beta' | 'old_alpha'
+  releasedAt: string
+  /** Loaders with a build for this Minecraft version. */
+  loaders: Loader[]
+}
 
 export interface ProjectSummary {
   open: boolean
@@ -59,6 +70,25 @@ export interface McfApi {
     check: (javaPath: string) => Promise<{ ok: boolean; version?: string; major?: number; suitsGame?: boolean; suitsTools?: boolean; error?: string; cleared?: boolean }>
     clearCache: () => Promise<{ ok: boolean }>
   }
+  versions: {
+    catalog: (opts?: { force?: boolean; snapshots?: boolean }) => Promise<{
+      ok: boolean
+      fetchedAt: number
+      errors: string[]
+      minVersion: string
+      versions: VersionChoice[]
+    }>
+    loaders: (opts: { mcVersion: string; loader: Loader }) => Promise<{
+      ok: boolean
+      versions: string[]
+      loaders: Loader[]
+    }>
+    era: (opts: { loader: Loader; mcVersion: string }) => Promise<{
+      ok: boolean
+      era?: { id: string; label: string; buildable: boolean; java: number; notes: string[] }
+      error?: string
+    }>
+  }
   project: {
     scaffold: (opts: {
       parentDir: string
@@ -68,8 +98,13 @@ export interface McfApi {
       modVersion: string
       author?: string
       license?: string
-      neoVersion?: string
-    }) => Promise<{ ok: true; dir: string } | { ok: false; error: string }>
+      loader: Loader
+      mcVersion: string
+      loaderVersion: string
+    }) => Promise<
+      | { ok: true; dir: string; era?: { id: string; label: string; buildable: boolean; notes: string[] } }
+      | { ok: false; error: string }
+    >
     validate: (opts: { modId: string; group: string }) => Promise<{ modId: string | null; group: string | null }>
     summary: () => Promise<ProjectSummary>
     readFile: (rel: string) => Promise<{ ok: boolean; text?: string; error?: string }>

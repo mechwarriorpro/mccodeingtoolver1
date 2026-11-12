@@ -74,7 +74,11 @@ const mustTrack = [
   'src/main/github/oauth.ts',
   'src/main/github/references.ts',
   'src/renderer/src/components/GithubLogin.tsx',
-  'src/renderer/src/components/ReferencePanel.tsx'
+  'src/renderer/src/components/ReferencePanel.tsx',
+  // added with multi-loader / all-versions support
+  'src/main/versions/catalog.ts',
+  'src/main/versions/eras.ts',
+  'src/main/mod/generate.ts'
 ]
 const tracked = new Set(lines(git(['ls-files'])))
 const missing = mustTrack.filter((f) => !tracked.has(f) && fs.existsSync(path.join(root, f)))

@@ -1,3 +1,6 @@
+import type { Loader } from '../versions/catalog'
+import { resolveEra } from '../versions/eras'
+
 /**
  * System prompt appended to Claude Code's preset prompt.
  * Everything here is specific to the app: the tools available, the build/test loop,
@@ -15,6 +18,10 @@ export function buildSystemPrompt(opts: {
   /** Decompiled reference mods already available in the project. */
   references?: { title: string; slug: string; version: string; licence?: string }[]
   githubSignedIn?: boolean
+  /** Which loader the project targets, read from gradle.properties. */
+  loader?: Loader
+  /** The project's Minecraft version, read from gradle.properties. */
+  mcVersion?: string
 }): string {
   const autonomyRules =
     opts.autonomy === 'auto'
@@ -23,16 +30,23 @@ export function buildSystemPrompt(opts: {
         ? `The user reviews every file edit and every shell command before it runs. Propose changes normally; do not fake or bypass the permission system.`
         : `Edits are auto-approved. Shell commands are auto-approved only for safe read/build operations (ls, git status, gradle build, gh run view...). For anything risky or destructive you will be asked. If you are unsure how to proceed on a design decision, ask the user instead of guessing.`
 
+  const loader = opts.loader ?? 'neoforge'
+  const mc = opts.mcVersion ?? '1.21.1'
+  const era = resolveEra(loader, mc)
+  const loaderName = loader === 'neoforge' ? 'NeoForge' : loader === 'forge' ? 'Forge' : 'Fabric'
+  const javaMajor = opts.javaVersion ? (opts.javaVersion.match(/^(\d+)/)?.[1] ?? opts.javaVersion) : null
+
   return `# Environment
 
-You are driving **MC Forge Agent**, a desktop tool that writes and tests Minecraft **1.21.1 NeoForge** mods.
+You are driving **MC Forge Agent**, a desktop tool that writes and tests Minecraft mods.
 The user is a mod developer, not necessarily a Java expert. Be concise and practical.
 
 - Mod id: \`${opts.modId || '(not set yet)'}\`
 - Project folder (your working directory): \`${opts.workspaceDir}\`
+- Target platform: **Minecraft ${mc}, ${loaderName}**${era ? ` (${era.label})` : ''}
 - Test instance: ${opts.instancePath ? `\`${opts.instancePath}\` (${opts.instanceKind})` : '(none configured yet)'}
 - GitHub: ${opts.githubOwner ? `${opts.githubOwner}/${opts.githubRepo}` : '(not configured)'}${opts.githubSignedIn ? '' : ' — the user signs in from Settings > GitHub (the app has its own token; the GitHub CLI is optional)'}
-- Java 21 detected: ${opts.javaVersion ?? 'unknown'}
+- Java detected: ${javaMajor ?? 'unknown'}${era && Number(javaMajor) !== era.java ? ` (this project targets Java ${era.java} — tell the user if they need to switch JDK)` : ''}
 
 # Autonomy
 
@@ -79,21 +93,9 @@ The project may contain \`reference/<slug>/\` folders: decompiled third-party mo
 
 Never claim a build succeeded without checking the returned exit code / errors. Never invent logs.
 
-# Minecraft 1.21.1 / NeoForge rules (get these right the first time)
+# ${loaderName} ${mc} rules (get these right the first time)
 
-- Minecraft **1.21.1**, NeoForge **21.1.x**, **Java 21**, Gradle via the bundled wrapper, ModDevGradle plugin (\`net.neoforged.moddev\`).
-- Packages: \`net.minecraft.*\`, \`net.neoforged.*\`. Mojang mappings (official names, e.g. \`net.minecraft.world.item.Item\`).
-- Registration uses \`DeferredRegister\` / \`DeferredItem\` / \`DeferredBlock\`; register the deferred register on the **mod event bus**.
-- Items: \`Item.Properties\`; food is \`new Item.Properties().food(new FoodProperties.Builder().nutrition(4).saturationModifier(0.3f).build())\`. In 1.21.1 the component system replaced some old NBT APIs (\`DataComponents\`, not \`ItemStack.setTag\`).
-- Blocks: \`BlockBehaviour.Properties.of()\`; use \`BlockItem\` and add to a creative tab with \`BuildCreativeModeTabContentsEvent\`.
-- Client-only code must live behind \`@Mod(value = MODID, dist = Dist.CLIENT)\` / \`@EventBusSubscriber(value = Dist.CLIENT)\` or \`FMLEnvironment.dist\`. Never reference \`net.minecraft.client.*\` from common code.
-- Networking: \`RegisterPayloadHandlersEvent\` with \`CustomPacketPayload\` (not the old \`SimpleChannel\`).
-- Config: \`ModConfigSpec\` + \`modContainer.registerConfig(ModConfig.Type.COMMON, SPEC)\`.
-- Data/resources live in \`src/main/resources/assets/<modid>/...\` and \`data/<modid>/...\`; lang keys in \`assets/<modid>/lang/en_us.json\`.
-- \`src/main/templates/META-INF/neoforge.mods.toml\` is the metadata template; \`gradle.properties\` drives \`mod_id\`, \`mod_name\`, \`mod_version\`.
-- Do not add dependencies to \`build.gradle\` unless needed; if you do, keep them in the ModDevGradle style (\`implementation\`/\`compileOnly\`), and say why.
-- Avoid \`@SubscribeEvent\` static methods on a class that is not annotated with \`@EventBusSubscriber\`.
-- 1.21.1 has no \`ItemStack.getOrCreateTag()\` — use data components (\`DataComponents.CUSTOM_DATA\`) or your own \`AttachmentType\`.
+${eraRules(loader, mc, era)}
 
 # Style
 
@@ -101,4 +103,87 @@ Never claim a build succeeded without checking the returned exit code / errors. 
 - Comment only where the "why" is non-obvious.
 - After a successful test, tell the user exactly what to look for in-game.
 `
+}
+
+/**
+ * The loader/version specific half of the prompt.
+ *
+ * The rules genuinely differ per era: 1.21 uses DeferredRegister + data
+ * components, 1.12 uses GameRegistry + `@Mod`, 1.7 uses cpw FML. Telling the
+ * model "1.21.1 rules" for a 1.12.2 project is worse than telling it nothing,
+ * because it confidently writes APIs that do not exist there.
+ */
+function eraRules(loader: Loader, mc: string, era: ReturnType<typeof resolveEra>): string {
+  if (!era) return '- No build toolchain is known for this combination. Ask the user before writing loader APIs.'
+  const common = era.notes?.length ? `${era.notes.map((n) => `- ${n}`).join('\n')}\n` : ''
+  if (era.loaders.includes('fabric') && loader === 'fabric') return fabricRules(mc, era.java, common)
+  return neoForgeRules(loader, mc, era, common)
+}
+
+function fabricRules(mc: string, java: number, notes: string): string {
+  const modern = modernJava(mc, '1.20.5')
+  return `${notes}- Fabric, Minecraft ${mc}, Java ${java}, Fabric Loom + the bundled Gradle wrapper.
+- Mappings are **yarn** unless the project uses Mojang mappings. Class names follow yarn: \`net.minecraft.item.Item\`, \`net.minecraft.block.Block\`, \`net.minecraft.util.Identifier\` (not \`ResourceLocation\`), \`MinecraftClient\`, \`ServerPlayerEntity\`, \`ItemStack\`.
+- Read \`gradle.properties\` for \`yarn_mappings\`, \`loader_version\` and, when present, \`fabric_version\`. Do not invent a Fabric API version; if \`fabric_version\` is absent the project has no Fabric API and you should use vanilla APIs or ask the user.
+- Registration is plain static fields plus \`Registry.register(Registries.ITEM, Identifier.of(MOD_ID, "name"), ITEM)\`. There is no DeferredRegister unless you add it.
+- Entrypoints live in \`fabric.mod.json\`: \`"main": ["<group>.<ModClass>"]\` implementing \`ModInitializer\`; client-only code goes in \`"client"\` implementing \`ClientModInitializer\`.
+- Events are \`ServerLifecycleEvents\`, \`PlayerBlockBreakEvents\`, \`UseBlockCallback\` etc from Fabric API — only if \`fabric_version\` is set. Otherwise, mixins are the escape hatch; put them in \`<modid>.mixins.json\` and keep the injection minimal.
+- ${modern ? '1.20.5+ uses the component system and \`DataComponentTypes\`; \`ItemStack.getNbt()\` does not exist.' : mc >= '1.17' ? '1.17+ split client and server code: never reference \`net.minecraft.client.*\` from a class loaded on a server.' : 'Pre-1.17 has no split-source sets: guard client classes with \`FabricLoader.getInstance().getEnvironmentType()\`.'}
+- \`fabric.mod.json\` is the metadata file (there is no \`mods.toml\`); resources go in \`src/main/resources/assets/<modid>/...\` and \`data/<modid>/...\`.`
+}
+
+function neoForgeRules(loader: Loader, mc: string, era: { java: number; buildable: boolean }, notes: string): string {
+  const neo = loader === 'neoforge'
+  const loaderName = neo ? 'NeoForge' : 'Forge'
+  const java = era.java
+  const head = `${notes}- ${loaderName}, Minecraft ${mc}, Java ${java}, Gradle wrapper as generated.${era.buildable ? '' : '\n- **This era cannot be built by Gradle in the app.** Write code and explain changes, but do not promise a build; tell the user this version is edited/reference only.'}`
+
+  if (modernJava(mc, '1.20.5')) {
+    return `${head}
+- ${neo ? 'ModDevGradle (`net.neoforged.moddev`)' : 'ForgeGradle 6 (`net.minecraftforge.gradle`)'} is already configured; do not restructure \`build.gradle\`.
+- Mappings are Mojang official: \`net.minecraft.world.item.Item\`, \`net.minecraft.resources.ResourceLocation\`, \`Level\` (not \`World\`), \`ServerPlayer\` (not \`EntityPlayerMP\`).
+- Registration: ${neo ? '`DeferredRegister.Items` / `DeferredBlock` / `DeferredRegister<...>`, registered on the **mod event bus** (`modEventBus.addListener` or the \`@Mod\` constructor).' : '`DeferredRegister<Item>` from `net.minecraftforge.registries` on the **mod bus**; `IEventBus` from the \`FMLJavaModLoadingContext\`/constructor.'}
+- ${neo ? 'Metadata is `src/main/templates/META-INF/neoforge.mods.toml`;' : 'Metadata is `src/main/resources/META-INF/mods.toml`;'} \`gradle.properties\` drives \`mod_id\`/\`mod_name\`/\`mod_version\`.
+- 1.20.5+ replaced NBT with **data components** (\`DataComponents\`), and \`Item.Properties#food\` takes a \`FoodProperties\` built from \`new FoodProperties.Builder()\`. \`ItemStack.getOrCreateTag()\` does not exist — use \`DataComponents.CUSTOM_DATA\` or an attachment type.
+- Networking is \`RegisterPayloadHandlersEvent\` + \`CustomPacketPayload\`; the old \`SimpleChannel\` is gone.
+- Client-only code must be dist-guarded: ${neo ? '`@EventBusSubscriber(value = Dist.CLIENT)` / `@Mod(dist = Dist.CLIENT)`' : '`@Mod.EventBusSubscriber(value = Dist.CLIENT)` / `DistExecutor`'}; never touch \`net.minecraft.client.*\` from common code.`
+  }
+
+  if (modernJava(mc, '1.18')) {
+    return `${head}
+- Mappings are Mojang official; \`Level\`, \`ResourceLocation\`, \`Item.Properties\` (tab is \`ItemGroup\` on Forge).
+- Registration uses \`DeferredRegister\` on the mod event bus. ${neo ? 'NeoForge did not exist before 1.20.2 — for a NeoForge pick this far back the loader is really Forge-compatible; say so before proceeding.' : ''}
+- Blocks: \`BlockBehaviour.Properties.of(Material.STONE)\` ${mc >= '1.19' ? '(1.19+ uses `BlockBehaviour.Properties`)' : ''}.
+- Item stacks still use NBT: \`stack.getOrCreateTag()\` is correct here; \`getTag()\` may return null.
+- Networking uses \`SimpleChannel\` (\`NetworkRegistry.newSimpleChannel\` on 1.18/1.19, \`ChannelBuilder\` on 1.17).`
+  }
+
+  if (modernJava(mc, '1.13')) {
+    return `${head}
+- Mappings are ${loader === 'forge' ? '**SRG names** unless the project sets `official` mappings' : 'MCP/Forge names'}: \`net.minecraft.item.Item\`, \`net.minecraft.world.World\`, \`net.minecraft.util.ResourceLocation\`, \`EntityPlayer\`, \`BlockPos\`, \`ItemStack\`.
+- Registration: \`RegistryEvent.Register<Item>\` (or \`DeferredRegister\` on 1.14+) via \`@Mod.EventBusSubscriber(modid = MOD_ID, bus = Mod.EventBusSubscriber.Bus.MOD)\`; the mod class is \`@Mod(MOD_ID)\`.
+- \`CreativeModeTab\` (1.16.5+) replaced \`ItemGroup\` on Forge; on 1.13-1.15 it is still \`ItemGroup\`.
+- \`Block.Properties\` (1.14+, \`net.minecraft.block.Block.Properties\`) vs \`Block.Properties.create\` on 1.13 — read an existing class in the project before writing a block.
+- Networking is \`SimpleChannel\`/\`SimpleImpl\`, and the metadata file is \`mods.toml\` (1.13+) or \`mcmod.info\` (1.12 and older).`
+  }
+
+  return `${head}
+- Pre-1.13 Forge: class names are **MCP names** — \`net.minecraft.item.Item\`, \`net.minecraft.world.World\`, \`net.minecraft.util.math.BlockPos\`, \`net.minecraft.entity.player.EntityPlayer\`, \`net.minecraft.item.ItemStack\`, \`net.minecraft.creativetab.CreativeTabs\`.
+- The mod class is \`@Mod(modid = MOD_ID, name = ..., version = ...)\` with \`@EventHandler\` for \`FMLPreInitializationEvent\`/\`FMLInitializationEvent\`.
+- Registration is \`GameRegistry.register(...)\` with a \`setRegistryName(...)\`; there is no \`DeferredRegister\` and no \`Register<Item>\` event.
+- Metadata is \`mcmod.info\` (JSON), not \`mods.toml\`; textures live in \`src/main/resources/assets/<modid>/textures/...\` with \`textures/items/\` and \`textures/blocks/\` (not \`item/\`/\`block/\`).
+- Language files are \`assets/<modid>/lang/en_US.lang\` with \`item.modid.name.name=Display Name\` syntax, not \`en_us.json\`.
+- Java ${era.java}: no \`var\`, no records, no switch expressions. Write the Java level the build file asks for.`
+}
+
+/** True when `mc` is at least `since` (dotted numeric compare). */
+function modernJava(mc: string, since: string): boolean {
+  const p = (v: string): number[] => v.split(/[.-]/).map((x) => Number(x) || 0)
+  const a = p(mc)
+  const b = p(since)
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] ?? 0) - (b[i] ?? 0)
+    if (d) return d > 0
+  }
+  return true
 }

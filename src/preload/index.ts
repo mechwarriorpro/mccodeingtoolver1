@@ -44,6 +44,12 @@ const api = {
     clearCache: () => ipcRenderer.invoke('java:clearCache')
   },
 
+  versions: {
+    catalog: (opts?: unknown) => ipcRenderer.invoke('versions:catalog', opts),
+    loaders: (opts: unknown) => ipcRenderer.invoke('versions:loaders', opts),
+    era: (opts: unknown) => ipcRenderer.invoke('versions:era', opts)
+  },
+
   project: {
     scaffold: (opts: unknown) => ipcRenderer.invoke('project:scaffold', opts),
     validate: (opts: unknown) => ipcRenderer.invoke('project:validate', opts),
