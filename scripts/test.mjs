@@ -25,6 +25,8 @@ const sources = [
   'src/main/mod/scaffold.ts',
   'src/main/github/references.ts',
   'src/main/mod/fork.ts',
+  'src/main/mod/props.ts',
+  'src/main/mod/port.ts',
   'src/main/game/clip.ts',
   'src/main/learn.ts',
   'src/main/agent/engine.ts',

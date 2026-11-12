@@ -107,6 +107,14 @@ const api = {
     writeFile: (opts: unknown) => ipcRenderer.invoke('fork:writeFile', opts)
   },
 
+  /** Updating an existing project to another version or loader. */
+  port: {
+    detect: (dir: string) => ipcRenderer.invoke('port:detect', dir),
+    plan: (opts: unknown) => ipcRenderer.invoke('port:plan', opts),
+    report: (opts: unknown) => ipcRenderer.invoke('port:report', opts),
+    convert: (opts: unknown) => ipcRenderer.invoke('port:convert', opts)
+  },
+
   versions: {
     catalog: (opts?: unknown) => ipcRenderer.invoke('versions:catalog', opts),
     loaders: (opts: unknown) => ipcRenderer.invoke('versions:loaders', opts),

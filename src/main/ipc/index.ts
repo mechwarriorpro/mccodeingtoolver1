@@ -108,6 +108,7 @@ import {
   suggestedTarget,
   touchFork
 } from '../mod/fork'
+import { convertProject, detectProject, migrationReport, planPort } from '../mod/port'
 import {
   checkForUpdates,
   clearUpdaterCache,
@@ -676,6 +677,67 @@ export function registerIpc(): void {
     if (!fork) return []
     return listTree(fork.dir, 800)
   })
+
+  /* ------------------------------------------------ updating / converting */
+
+  /**
+   * What is this project, really? Read from the files, not the folder name —
+   * an old 1.12.2 Forge mod is usually called something like "my-mod-1.12.2"
+   * and gets renamed the moment someone changes the target.
+   */
+  ipcMain.handle('port:detect', (_e, dir: string) => {
+    try {
+      return { ok: true, project: detectProject(dir) }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  })
+
+  ipcMain.handle('port:plan', (_e, opts: { dir: string; loader: Loader; mcVersion: string }) => {
+    try {
+      const plan = planPort(opts.dir, { loader: opts.loader, mcVersion: opts.mcVersion })
+      return { ok: true, plan }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  })
+
+  ipcMain.handle('port:report', (_e, opts: { dir: string; loader: Loader; mcVersion: string }) => {
+    try {
+      return { ok: true, text: migrationReport(planPort(opts.dir, { loader: opts.loader, mcVersion: opts.mcVersion })) }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  })
+
+  ipcMain.handle(
+    'port:convert',
+    (
+      _e,
+      opts: {
+        sourceDir: string
+        targetDir: string
+        loader: Loader
+        mcVersion: string
+        modVersion?: string
+        author?: string
+        license?: string
+        backup?: boolean
+      }
+    ) => {
+      const res = convertProject({
+        sourceDir: opts.sourceDir,
+        targetDir: opts.targetDir,
+        target: { loader: opts.loader, mcVersion: opts.mcVersion },
+        modVersion: opts.modVersion,
+        author: opts.author,
+        license: opts.license,
+        backup: opts.backup
+      })
+      if (res.ok) send('fork:list-changed')
+      return res
+    }
+  )
 
   ipcMain.handle('ref:search', (_e, opts: { query: string; id?: string; regex?: boolean }) => {
     if (!opts.query?.trim()) return { hits: [] }

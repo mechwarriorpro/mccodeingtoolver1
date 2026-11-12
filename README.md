@@ -61,7 +61,7 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.4.5 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.4.6 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
 > v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
 > decompiler picking a Java it could not run.
@@ -79,6 +79,10 @@ Settings or from GitHub's settings at any time.
 > **v0.4.5** fixes builds failing in project paths containing spaces (including this app's own
 > `MC Forge Agent` folder), and picks the JDK from the project's Minecraft version instead of
 > always demanding Java 21.
+> **v0.4.6** adds the **Update** tab: point it at an existing mod or example project and it converts
+> it to another Minecraft version, another loader, or both — regenerating the build, carrying the
+> sources and assets across, keeping the mod id, and writing `MIGRATION.md` with the API work that
+> is genuinely left. The original is never touched.
 >
 > From 0.3.0 on, the app updates itself: once you have it installed, new versions arrive
 > through GitHub releases without downloading the installer again.
@@ -335,6 +339,8 @@ src/main/
     generate.ts      project generator for any loader/version (delegates per era)
     scaffold.ts      vendored-template helpers, mod id/package validation
     fork.ts          turns a decompiled reference mod into an editable project
+    port.ts          detects a project's real version/loader, plans and runs a conversion
+    props.ts         gradle.properties reader shared by the build and the converter
     jar.ts           jar metadata (neoforge.mods.toml) and mods-folder install
   versions/
     catalog.ts       live Minecraft/loader version catalog (24 h cache, offline fallbacks)
@@ -342,7 +348,7 @@ src/main/
   update.ts          electron-updater wiring for GitHub releases
   learn.ts           mistake fingerprints, lessons and the error index
 template/neoforge-1.21.1/   vendored official MDK
-tests/                      offline tests for scaffold, build parsing, jar install
+tests/                      offline tests for scaffold, build parsing, jar install, porting
 ```
 
 ## Tests
@@ -364,10 +370,55 @@ log lines are shown under the reply while a build runs. Nothing needs a refresh,
 if a stream is interrupted — the app writes each completed block to the stored message, so the final
 transcript is complete even when the live text was cut short.
 
-## Upgrading an old mod to 1.21.1
+## Updating a mod to another version or loader
+
+The **Update** tab does the mechanical half of a migration for you. Point it at a
+finished project — an old release, one of your forks, or an example mod — pick a
+target Minecraft version and loader, and it tells you what is involved *before*
+it changes anything.
+
+It reads what the project actually is from `gradle.properties`, the build script,
+`mods.toml` and `fabric.mod.json` — not from the folder name, because an old mod is
+usually called something like `icbm-classic-1.12.2-6.4.1` and stops being true the
+moment you start.
+
+**What it does for you**
+
+- Generates a correct project for the target (build script, Gradle wrapper, the
+  JDK that version needs — 1.21.1 → 21, 1.20.1 → 17, 1.12.2 → 8).
+- Copies the Java sources from wherever they really live — `src/main/java`,
+  `src/main/kotlin`, or an Architectury-style `common/src/main/java`.
+- Copies resources, assets, lang files and textures, and drops what the new
+  loader cannot read: `mcmod.info`, `META-INF/mods.toml`, `pack.mcmeta`.
+- Keeps your `mod_id`, so existing worlds and configs keep working.
+- Writes `MIGRATION.md` into the new project listing every remaining change, and
+  `.agent/port.json` so the agent knows where the project came from.
+
+**What it will not pretend to do**
+
+A version jump is not a rename. Going from 1.12.2 to 1.21.1 crosses five distinct
+API eras, and the report names each one that applies: registration and
+`DeferredRegister`, recipes becoming data-pack JSON, `World` → `Level` and the
+MCP → Mojang mappings at 1.17, and item components replacing NBT at 1.20.5. Those
+need real edits; the app says so and then hands the work to the agent, which can
+work through `MIGRATION.md` in dependency order.
+
+Two combinations are called out rather than quietly attempted:
+
+- **Forge → Fabric** is a rewrite of every integration point — different
+  registry, different events, different networking. Estimate it as a new mod that
+  reuses the assets.
+- **Architectury** (multi-loader) projects are refused: only one loader can be
+  generated, so porting one would silently drop the other.
+
+**Nothing is destroyed.** The original folder is never written to. A `backup-…`
+copy is made inside it first, and the new project goes in a folder of its own —
+a half-migrated mod is the last thing you want to be holding the only copy of.
+
+### The toolchain rules behind it
 
 A fork of a 1.12.2 project is a **1.12.2 Gradle project**, even though the goal is
-1.21.1. That distinction matters for the toolchain, and the app now handles it:
+1.21.1. That distinction matters for the toolchain, and the app handles it:
 
 - **Java comes from the project, not the app.** The launcher targets 1.21.1 and
   wants Java 21, but a 1.12.2 build needs Java 8 — asking for 21 made every

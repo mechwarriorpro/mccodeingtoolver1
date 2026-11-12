@@ -201,6 +201,42 @@ export interface ClipRecord {
   analysis?: { at: number; model: string; text: string; frames: number }
 }
 
+export type ModuleLayout = 'neoforge' | 'forge-gradle' | 'architectury' | 'fabric' | 'unknown'
+
+/** What a project on disk actually is, read from its own files. */
+export interface DetectedProject {
+  dir: string
+  mcVersion: string | null
+  loader: Loader | 'unknown'
+  layout: ModuleLayout
+  modId: string | null
+  modName: string | null
+  group: string | null
+  version: string | null
+  sourceRoot: string
+  legacyFiles: string[]
+}
+
+export interface PortStep {
+  kind: 'build' | 'api' | 'metadata' | 'mechanical'
+  title: string
+  detail: string
+}
+
+export interface PortPlan {
+  from: DetectedProject
+  target: { loader: Loader; mcVersion: string }
+  alreadyTarget: boolean
+  majorJump: boolean
+  java: number
+  /** Things the app will do for you. */
+  automatic: string[]
+  /** Things that need a human or the agent. */
+  manual: PortStep[]
+  blockers: string[]
+  summary: string
+}
+
 export interface ForkInfo {
   id: string
   referenceId: string
@@ -363,6 +399,31 @@ export interface McfApi {
     tree: (id: string) => Promise<{ path: string; dir: boolean }[]>
     readFile: (opts: { id: string; path: string }) => Promise<{ ok: boolean; text?: string; error?: string }>
     writeFile: (opts: { id: string; path: string; text: string }) => Promise<{ ok: boolean; error?: string }>
+  }
+  port: {
+    detect: (dir: string) => Promise<{ ok: boolean; project?: DetectedProject; error?: string }>
+    plan: (opts: { dir: string; loader: Loader; mcVersion: string }) => Promise<{ ok: boolean; plan?: PortPlan; error?: string }>
+    report: (opts: { dir: string; loader: Loader; mcVersion: string }) => Promise<{ ok: boolean; text?: string; error?: string }>
+    convert: (opts: {
+      sourceDir: string
+      targetDir: string
+      loader: Loader
+      mcVersion: string
+      modVersion?: string
+      author?: string
+      license?: string
+      backup?: boolean
+    }) => Promise<{
+      ok: boolean
+      error?: string
+      plan?: PortPlan
+      dir?: string
+      reportPath?: string
+      backupPath?: string
+      copiedSources?: number
+      copiedResources?: number
+      skipped?: string[]
+    }>
   }
   versions: {
     catalog: (opts?: { force?: boolean; snapshots?: boolean }) => Promise<{

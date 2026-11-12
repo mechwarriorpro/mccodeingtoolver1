@@ -9,10 +9,11 @@ import SetupModal from './components/SetupModal'
 import SettingsModal from './components/SettingsModal'
 import ReferencePanel from './components/ReferencePanel'
 import ForkPanel from './components/ForkPanel'
+import PortPanel from './components/PortPanel'
 import ClipPanel from './components/ClipPanel'
 import LearnPanel from './components/LearnPanel'
 
-type RailTab = 'game' | 'project' | 'files' | 'refs' | 'clips' | 'learn'
+type RailTab = 'game' | 'project' | 'files' | 'refs' | 'port' | 'clips' | 'learn'
 
 export default function App(): JSX.Element {
   const [config, setConfig] = useState<(AppConfig & { apiKeySet: boolean }) | null>(null)
@@ -369,6 +370,13 @@ export default function App(): JSX.Element {
             <button className={railTab === 'refs' ? 'on' : ''} onClick={() => setRailTab('refs')}>
               References
             </button>
+            <button
+              className={railTab === 'port' ? 'on' : ''}
+              onClick={() => setRailTab('port')}
+              title="Update an existing mod to another Minecraft version or loader"
+            >
+              Update
+            </button>
             <button className={railTab === 'clips' ? 'on' : ''} onClick={() => setRailTab('clips')} title="Record gameplay and analyse it with a vision model">
               Clips
             </button>
@@ -401,6 +409,13 @@ export default function App(): JSX.Element {
                   <ForkPanel onToast={toast} onEditProject={(dir) => void afterProjectChange(dir)} />
                 </div>
               </>
+            )}
+            {railTab === 'port' && (
+              <PortPanel
+                onToast={toast}
+                onEditProject={(dir) => void afterProjectChange(dir)}
+                activeDir={project?.open ? project.dir : undefined}
+              />
             )}
             {railTab === 'learn' && (
               <div className="card">
