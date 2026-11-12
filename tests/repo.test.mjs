@@ -22,6 +22,14 @@ function git(args) {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8' }).trim()
 }
 
+/** git prints CRLF on Windows; split on any newline and drop the stray carriage returns. */
+function lines(text) {
+  return text
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+}
+
 let isRepo = true
 try {
   git(['rev-parse', '--is-inside-work-tree'])
@@ -50,7 +58,7 @@ let ignored = []
 try {
   // check-ignore prints each ignored path and exits 1 when none match
   const out = execFileSync('git', ['check-ignore', ...sourceFiles], { cwd: root, encoding: 'utf8' })
-  ignored = out.split('\n').filter(Boolean)
+  ignored = lines(out)
 } catch {
   ignored = []
 }
@@ -58,7 +66,7 @@ check('all source files are committable', ignored.length === 0, ignored.slice(0,
 
 console.log('critical modules are tracked')
 const mustTrack = ['src/main/build/gradle.ts', 'src/main/build/actions.ts', 'src/main/agent/engine.ts', 'src/main/game/client.ts']
-const tracked = new Set(git(['ls-files']).split('\n'))
+const tracked = new Set(lines(git(['ls-files'])))
 const missing = mustTrack.filter((f) => !tracked.has(f) && fs.existsSync(path.join(root, f)))
 check('build/agent/game modules tracked', missing.length === 0, missing.join(', '))
 

@@ -84,20 +84,32 @@ walk(outDir)
 // repo.test.mjs uses git directly, so it runs without the compiled modules
 const tests = fs.readdirSync(path.join(root, 'tests')).filter((f) => f.endsWith('.test.mjs'))
 let failed = 0
+const failures = []
 for (const t of tests) {
   console.log(`\n=== ${t} ===`)
   try {
     execFileSync(process.execPath, [path.join(root, 'tests', t)], { stdio: 'inherit', cwd: root })
   } catch (e) {
     failed++
-    // Surface the failing output in the CI step summary: Actions log downloads are
-    // unreliable behind proxies, but annotations always come through.
+    // Actions log downloads are unreliable behind proxies, but annotations and the
+    // step summary always come through, so report there too.
     const out = `${e.stdout ?? ''}${e.stderr ?? ''}`
-    const lines = out.split(/\r?\n/).filter((l) => /FAIL|Error|error:|not found/.test(l))
-    if (process.env.GITHUB_ACTIONS) {
-      console.log(`::error title=${t} failed::${(lines.slice(0, 6).join(' | ') || 'see step log').replace(/%/g, '%25').slice(0, 900)}`)
-    }
-    console.log(lines.slice(0, 20).join('\n') || String(e.message).slice(0, 800))
+    const interesting = out
+      .split(/\r?\n/)
+      .filter((l) => /FAIL|error|not found|Exception|\bat .*\(/.test(l))
+      .slice(0, 8)
+    failures.push({ file: t, detail: interesting.join(' | ') || String(e.message).slice(0, 300) })
+  }
+}
+
+if (failures.length && process.env.GITHUB_ACTIONS) {
+  for (const f of failures) {
+    const msg = f.detail.replace(/%/g, '%25').replace(/\r?\n/g, ' ').slice(0, 900)
+    console.log(`::error title=${f.file}::${msg}`)
+  }
+  const summary = process.env.GITHUB_STEP_SUMMARY
+  if (summary) {
+    fs.appendFileSync(summary, `\n### Test failures\n${failures.map((f) => `- **${f.file}**: ${f.detail}`).join('\n')}\n`)
   }
 }
 console.log(failed ? `\n${failed} test file(s) failed` : '\nall tests passed')
