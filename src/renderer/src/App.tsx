@@ -220,7 +220,7 @@ export default function App(): JSX.Element {
           <button className="small" style={{ flex: 1 }} onClick={() => void newConversation()}>
             + New chat
           </button>
-          <button className="small" onClick={() => setShowSetup(true)} title="Create a new NeoForge 1.21.1 mod">
+          <button className="small" onClick={() => setShowSetup(true)} title="Create a new Fabric, Forge or NeoForge project">
             New mod
           </button>
         </div>
@@ -233,7 +233,7 @@ export default function App(): JSX.Element {
               <div style={{ display: 'flex', gap: 5, marginTop: 7, flexWrap: 'wrap' }}>
                 <span className="badge">{project.props?.mod_id}</span>
                 <span className="badge">MC {project.props?.minecraft_version}</span>
-                <span className="badge">NF {project.props?.neo_version}</span>
+                <span className="badge">{loaderBadge(project.props ?? {})}</span>
               </div>
               <div style={{ display: 'flex', gap: 6, marginTop: 9 }}>
                 <button
@@ -254,7 +254,7 @@ export default function App(): JSX.Element {
             <div style={{ fontSize: 12.5, color: 'var(--muted)' }}>
               No project open.
               <button className="small" style={{ marginTop: 8, width: '100%' }} onClick={() => setShowSetup(true)}>
-                Create NeoForge 1.21.1 mod
+                Create a mod project
               </button>
               <button
                 className="small ghost"
@@ -454,4 +454,19 @@ export default function App(): JSX.Element {
       </div>
     </div>
   )
+}
+
+/**
+ * One short badge naming the loader and its version. Older projects (and the
+ * vendored 1.21.1 template) only carry `neo_version`, so that is the fallback
+ * rather than an assumption that every project is NeoForge.
+ */
+function loaderBadge(props: Record<string, string | undefined>): string {
+  const explicit = (props.mod_loader ?? '').toLowerCase()
+  const loader =
+    explicit || (props.loader_version && !props.neo_version && !props.forge_version ? 'fabric' : props.forge_version ? 'forge' : 'neoforge')
+  const version =
+    loader === 'fabric' ? props.loader_version : loader === 'forge' ? props.forge_version : props.neo_version
+  const label = loader === 'fabric' ? 'Fabric' : loader === 'forge' ? 'Forge' : 'NeoForge'
+  return version ? `${label} ${version}` : label
 }
