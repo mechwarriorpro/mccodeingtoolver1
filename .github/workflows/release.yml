@@ -71,6 +71,18 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Compile app (electron-vite)
+        run: npm run build
+
+      - name: Verify compiled entry point exists
+        shell: pwsh
+        run: |
+          if (-not (Test-Path 'out/main/index.js')) {
+            Write-Host '::error title=build::out/main/index.js missing after npm run build'
+            exit 1
+          }
+          Get-ChildItem out -Recurse -File | Measure-Object -Property Length -Sum | ForEach-Object { "out/ size: $([math]::Round($_.Sum/1KB)) KB" }
+
       - name: Package installer
         shell: pwsh
         run: |
