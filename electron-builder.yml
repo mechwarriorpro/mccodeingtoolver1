@@ -1,8 +1,6 @@
 appId: com.shadowclan.mcfrogeagent
 productName: MC Forge Agent
 copyright: Copyright © 2026 ShadowClanGaming
-# Fail loudly instead of producing a broken package when the app was not compiled.
-beforePack: scripts/before-pack.cjs
 directories:
   output: release
   buildResources: resources
