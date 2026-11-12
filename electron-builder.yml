@@ -1,0 +1,42 @@
+appId: com.shadowclan.mcfrogeagent
+productName: MC Forge Agent
+copyright: Copyright © 2026 ShadowClanGaming
+directories:
+  output: release
+  buildResources: resources
+files:
+  # Keep the default node_modules handling (production deps are collected automatically),
+  # and only strip things that must not ship.
+  - '!**/*.map'
+  - '!src/**'
+  - '!tests/**'
+  - '!scripts/**'
+  - '!template/**'
+  - '!release/**'
+  - '!out-test/**'
+  - '!**/{CHANGELOG.md,README.md,readme.md,LICENSE.md}'
+  - '!**/node_modules/**/{test,tests,__tests__,example,examples,docs}/**'
+  - '!**/*.{ts,tsbuildinfo}'
+asarUnpack:
+  # Claude Code's CLI is spawned as a child process, so the whole SDK package must be
+  # a real directory on disk (a single-entry list only matches direct children).
+  - node_modules/@anthropic-ai/claude-agent-sdk/**/*
+extraResources:
+  # Vendored official NeoForge 1.21.1 MDK used by "New mod".
+  - from: template
+    to: template
+    filter: ['**/*']
+npmRebuild: false
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: ${productName}-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: MC Forge Agent
+  deleteAppDataOnUninstall: false

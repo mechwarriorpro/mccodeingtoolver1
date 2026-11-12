@@ -1,0 +1,14 @@
+node_modules/
+out/
+out-test/
+release/
+dist/
+build/
+.test-tmp/
+*.log
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!template/**/.gitignore
+*.tsbuildinfo
