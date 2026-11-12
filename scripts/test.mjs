@@ -119,8 +119,11 @@ if (failures.length) {
 
 if (failures.length && process.env.GITHUB_ACTIONS) {
   for (const f of failures) {
-    const msg = f.detail.replace(/%/g, '%25').replace(/\r?\n/g, ' ').slice(0, 900)
-    console.log(`::error title=${f.file}::${msg}`)
+    // GitHub truncates multi-line annotation *messages* at the first line, so the
+    // useful crash text goes in the title (single line, no newlines allowed).
+    const msg = f.detail.replace(/%/g, '%25').replace(/\r?\n/g, ' ').slice(0, 400)
+    const title = `${f.file} :: ${msg}`.replace(/[:-]/g, ' ').slice(0, 240)
+    console.log(`::error title=${title}::${msg}`)
   }
   const summary = process.env.GITHUB_STEP_SUMMARY
   if (summary) {

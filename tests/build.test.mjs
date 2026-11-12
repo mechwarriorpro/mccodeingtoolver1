@@ -3,9 +3,21 @@
  * so they verify the parsing logic (javac error extraction, jar metadata, mods
  * folder replacement) without needing a JDK.
  */
+
+// Any uncaught error is reported with a stack so CI annotations carry the cause.
+process.on('uncaughtException', (err) => {
+  const msg = `${err && err.stack ? err.stack : err}`.replace(/%/g, '%25').replace(/\r?\n/g, ' | ').slice(0, 1200)
+  console.log(`::error title=build.test.mjs crash::${msg}`)
+  process.exit(1)
+})
+
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+const { extractErrors, findBuiltJar, gradlewPath } = await import('../out-test/main/build/gradle.js')
+const { readJarInfo, installJar } = await import('../out-test/main/mod/jar.js')
+
+async function main() {
 
 let failures = 0
 function check(name, cond, detail) {
@@ -16,8 +28,6 @@ function check(name, cond, detail) {
   }
 }
 
-const { extractErrors, findBuiltJar, gradlewPath } = await import('../out-test/main/build/gradle.js')
-const { readJarInfo, installJar } = await import('../out-test/main/mod/jar.js')
 
 console.log('javac error extraction')
 const log = `
@@ -99,3 +109,10 @@ check('leaves other mods alone', fs.existsSync(path.join(instance, 'mods', 'jei-
 fs.rmSync(tmp, { recursive: true, force: true })
 console.log(failures ? `\n${failures} check(s) failed` : '\nall build checks passed')
 process.exit(failures ? 1 : 0)
+}
+
+main().catch((err) => {
+  const msg = `${err && err.stack ? err.stack : err}`.replace(/%/g, '%25').replace(/\r?\n/g, ' | ').slice(0, 1200)
+  console.log(`::error title=build.test.mjs crash::${msg}`)
+  process.exit(1)
+})

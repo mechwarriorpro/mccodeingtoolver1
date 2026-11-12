@@ -50,8 +50,9 @@ jobs:
               const fs = require("fs");
               const f = JSON.parse(fs.readFileSync("test-failures.json", "utf8"));
               for (const x of f) {
-                const msg = String(x.detail || "").replace(/%/g, "%25").replace(/\r?\n/g, " ").slice(0, 700);
-                console.log(`::error title=${x.file}::${msg}`);
+                const msg = String(x.detail || "").replace(/%/g, "%25").replace(/\r?\n/g, " ").slice(0, 400);
+                const title = `${x.file} :: ${msg}`.replace(/[:-]/g, " ").slice(0, 240);
+                console.log(`::error title=${title}::${msg}`);
               }
               fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, "\n### Test failures\n" + f.map(x => `- **${x.file}**: ${x.detail}`).join("\n"));
             '
