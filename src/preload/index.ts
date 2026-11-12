@@ -44,6 +44,15 @@ const api = {
     clearCache: () => ipcRenderer.invoke('java:clearCache')
   },
 
+  providers: {
+    list: () => ipcRenderer.invoke('providers:list'),
+    models: (opts: unknown) => ipcRenderer.invoke('providers:models', opts),
+    test: (opts: unknown) => ipcRenderer.invoke('providers:test', opts),
+    openSignup: async (url: string) => {
+      await ipcRenderer.invoke('providers:openSignup', url)
+    }
+  },
+
   update: {
     state: () => ipcRenderer.invoke('update:state'),
     check: () => ipcRenderer.invoke('update:check'),

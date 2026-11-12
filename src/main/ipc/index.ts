@@ -55,6 +55,7 @@ import {
   selectableVersions
 } from '../versions/catalog'
 import { resolveEra } from '../versions/eras'
+import { KNOWN_MODELS, PROVIDERS, DEFAULT_MODELS, discoverModels, requiresKey, type ProviderId } from '../providers'
 import { clearLessons, confirmLesson, listLessons, recall, retireLesson } from '../learn'
 import {
   MAX_CLIP_MS,
@@ -206,6 +207,7 @@ export function registerIpc(): void {
   ipcMain.handle('config:set', (_e, patch: Partial<AppConfig>) => {
     // A masked key coming back from the UI must not overwrite the real one.
     if (patch.apiKey && patch.apiKey.startsWith('••')) delete patch.apiKey
+    if (patch.visionProviderKey && patch.visionProviderKey.startsWith('••')) delete patch.visionProviderKey
     const next = saveConfig(patch)
     if (patch.autonomy) session?.setAutonomy(next.autonomy)
     return { ...redactConfig(next), apiKeySet: !!effectiveApiKey() }
@@ -259,13 +261,22 @@ export function registerIpc(): void {
     const gh = await ghPreflight(cfg.github, cfg.workspaceDir).catch(() => ({ ghFound: false, authed: false, repoOk: false, identity: undefined, messages: ['gh check failed'] }))
     const instance = cfg.game.instances.find((i) => i.id === cfg.game.activeInstanceId)
     const items: EnvReport['items'] = [
-      {
-        id: 'key',
-        label: 'Anthropic API key',
-        ok: !!effectiveApiKey(),
-        detail: effectiveApiKey() ? 'Configured' : 'Missing',
-        fix: 'Paste your key in Settings (it is stored only on this machine).'
-      },
+      (() => {
+        const provider = (cfg.provider || 'anthropic') as ProviderId
+        const def = PROVIDERS.find((p) => p.id === provider)
+        const label = def?.label ?? 'AI provider'
+        const keyed = !!effectiveApiKey()
+        const needed = requiresKey(provider)
+        return {
+          id: 'key',
+          label: provider === 'anthropic' ? 'Anthropic API key' : `API key (${label})`,
+          ok: keyed || !needed,
+          detail: keyed ? 'Configured' : needed ? 'Missing' : `${label} needs no key`,
+          fix: needed
+            ? `Paste your ${label} key in Settings, or switch to a free provider (it is stored only on this machine).`
+            : ''
+        }
+      })(),
       {
         id: 'java',
         label: 'Java 21',
@@ -546,12 +557,26 @@ export function registerIpc(): void {
     if (!clip) return { ok: false, error: 'Unknown clip.' }
     if (!clip.frames.length) return { ok: false, error: 'That clip has no frames.' }
     send('clip:analysing', { id: clip.id })
+    // Vision follows the agent's provider unless Settings names its own. A
+    // model without vision on the agent side can still be paired with a
+    // vision-capable one here, which is why this is a separate pick.
+    const c = loadConfig()
+    // "provider:model" lets Settings point vision at a different provider than
+    // the agent. Without it, clip analysis uses the agent's own model.
+    const [vp, vm] = (c.visionProvider || '').split(':')
+    const provider = (vp || c.provider || 'anthropic') as ProviderId
+    const providerDef = PROVIDERS.find((p) => p.id === provider)
+    const visionKey = provider === (c.provider || 'anthropic')
+      ? effectiveApiKey()
+      : c.visionProviderKey || ''
     const res = await analyseClip({
       clip,
       goal: opts.goal,
-      model: opts.model || loadConfig().visionModel || undefined,
-      apiKey: effectiveApiKey(),
-      baseUrl: effectiveBaseUrl()
+      model: opts.model || c.visionModel || vm || undefined,
+      apiKey: visionKey,
+      baseUrl: providerDef?.baseUrl || undefined,
+      auth: provider === 'anthropic' ? 'anthropic' : 'bearer',
+      providerLabel: providerDef?.label ?? 'The AI provider'
     })
     if (res.ok && res.text) {
       attachAnalysis(clip.id, { model: res.model ?? 'vision', text: res.text, frames: res.frames ?? 0 })
@@ -705,6 +730,80 @@ export function registerIpc(): void {
     saveConfig({ workspaceDir: dir })
     resetSession()
     return { ...res, dir }
+  })
+
+  /* ----------------------------------------------------------------- providers */
+
+  /** The provider list and their bundled models, so Settings works offline. */
+  ipcMain.handle('providers:list', () => ({
+    providers: PROVIDERS,
+    models: KNOWN_MODELS,
+    defaults: DEFAULT_MODELS
+  }))
+
+  /** Open a provider's key page in the browser, so Settings can say "get a key". */
+  ipcMain.handle('providers:openSignup', async (_e, url: string) => {
+    if (!/^https:\/\//.test(url)) return { ok: false }
+    await shell.openExternal(url)
+    return { ok: true }
+  })
+
+  /** Live model list for one provider (OpenRouter's free roster, Ollama's local models). */
+  ipcMain.handle('providers:models', async (_e, opts: { provider: ProviderId; apiKey?: string }) => {
+    const cfg = loadConfig()
+    const key = opts.apiKey && !opts.apiKey.startsWith('••') ? opts.apiKey : cfg.apiKey
+    return discoverModels(opts.provider, key)
+  })
+
+  /**
+   * A real round trip through the Anthropic protocol, so the user finds out a
+   * key is wrong (or a free model is rate limited) in Settings rather than
+   * halfway through a code change.
+   */
+  ipcMain.handle('providers:test', async (_e, opts: { provider: ProviderId; model: string; apiKey?: string }) => {
+    const cfg = loadConfig()
+    const key = opts.apiKey && !opts.apiKey.startsWith('••') ? opts.apiKey : cfg.apiKey
+    if (requiresKey(opts.provider) && !key) return { ok: false, error: 'Paste an API key first.' }
+    const base = PROVIDERS.find((p) => p.id === opts.provider)?.baseUrl || 'https://api.anthropic.com'
+    const url = `${base.replace(/\/+$/, '')}/v1/messages`
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 45_000)
+    const started = Date.now()
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'content-type': 'application/json',
+          'anthropic-version': '2023-06-01',
+          ...(opts.provider === 'anthropic'
+            ? { 'x-api-key': key }
+            : { authorization: `Bearer ${key || opts.provider}` })
+        },
+        body: JSON.stringify({
+          model: opts.model,
+          max_tokens: 24,
+          messages: [{ role: 'user', content: 'Reply with the single word: ready' }]
+        })
+      })
+      const text = await res.text()
+      if (!res.ok) return { ok: false, error: explainProviderError(res.status, text) }
+      const json = JSON.parse(text) as { content?: { type: string; text?: string }[] }
+      const reply = (json.content ?? []).filter((c) => c.type === 'text').map((c) => c.text ?? '').join(' ').trim()
+      return { ok: true, reply: reply.slice(0, 120), ms: Date.now() - started }
+    } catch (e) {
+      const msg = (e as Error).message
+      return {
+        ok: false,
+        error: /abort/i.test(msg)
+          ? 'Timed out after 45 s. A free model may be busy; try again.'
+          : /fetch failed|ENOTFOUND|ECONN/i.test(msg)
+            ? 'Could not reach the provider. Check your connection' + (opts.provider === 'ollama' ? ' and that Ollama is running.' : '.')
+            : msg
+      }
+    } finally {
+      clearTimeout(timer)
+    }
   })
 
   /* ------------------------------------------------------------------- update */
@@ -1045,7 +1144,18 @@ export function registerIpc(): void {
 
   ipcMain.handle('chat:send', async (_e, payload: { text: string; attachments?: { path: string; name: string; kind: string; mediaType?: string }[] }) => {
     const cfg = loadConfig()
-    if (!effectiveApiKey()) return { ok: false, error: 'Set your Anthropic API key in Settings first.' }
+    // Only providers that actually need a key are gated. Local Ollama runs
+    // keyless, and blocking it here would make the free path unreachable.
+    const provider = (cfg.provider || 'anthropic') as ProviderId
+    if (requiresKey(provider) && !effectiveApiKey()) {
+      return {
+        ok: false,
+        error:
+          provider === 'anthropic'
+            ? 'Set your Anthropic API key in Settings first, or pick a free provider.'
+            : `Set a ${PROVIDERS.find((p) => p.id === provider)?.label ?? provider} API key in Settings first.`
+      }
+    }
     if (!cfg.workspaceDir || !fs.existsSync(cfg.workspaceDir)) return { ok: false, error: 'Create or open a mod project first.' }
 
     const conv = conversation()
@@ -1182,4 +1292,19 @@ function toRefUi(mod: import('../github/references').ReferenceMod | ReferenceMod
     createdAt: m.createdAt,
     error: m.error
   }
+}
+
+/**
+ * Provider errors speak in status codes and JSON envelopes. Translate the ones a
+ * user can act on; leave the rest readable but intact.
+ */
+function explainProviderError(status: number, body: string): string {
+  const snippet = body.replace(/\s+/g, ' ').slice(0, 240)
+  if (status === 401) return 'That API key was rejected. Check it was copied whole and belongs to this provider.'
+  if (status === 402) return 'This account has no credit. Pick a free model, or add credit on the provider dashboard.'
+  if (status === 403) return 'The key is valid but not allowed to use that model.'
+  if (status === 404) return 'That model does not exist on this provider (or the base URL is wrong). Use Refresh to load the current list.'
+  if (status === 429) return 'Rate limited by the provider. Free tiers are strict; wait a minute or pick another model.'
+  if (status >= 500) return 'The provider had a server error. Try again in a moment.'
+  return `Provider returned HTTP ${status}: ${snippet}`
 }

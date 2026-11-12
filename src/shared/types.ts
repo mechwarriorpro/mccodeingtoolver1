@@ -1,8 +1,10 @@
 export type AutonomyMode = 'auto' | 'review' | 'ask'
 
 export interface AppConfig {
-  /** Anthropic API key used for the Claude Agent SDK. */
+  /** API key for the selected provider (Anthropic by default). */
   apiKey: string
+  /** Which provider the agent talks to. See src/main/providers.ts. */
+  provider: string
   /** Anthropic-compatible base URL (empty = default api.anthropic.com). */
   baseUrl: string
   /** Model id passed to the SDK. */
@@ -32,6 +34,10 @@ export interface AppConfig {
   autoUpdate: boolean
   /** Vision model used to analyse gameplay clips. Empty = built-in default. */
   visionModel: string
+  /** Provider+model used for clip analysis (empty = follow the agent's provider). */
+  visionProvider: string
+  /** Key for the vision provider, when it differs from the agent's provider. */
+  visionProviderKey: string
 
   game: {
     /** Every place we can install into: Technic instance, Prism instance, plain run dir. */

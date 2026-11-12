@@ -23,6 +23,8 @@ export function buildSystemPrompt(opts: {
   loader?: Loader
   /** The project's Minecraft version, read from gradle.properties. */
   mcVersion?: string
+  /** A warning when the session is not running on Claude, e.g. a free model. */
+  providerNote?: string
 }): string {
   const autonomyRules =
     opts.autonomy === 'auto'
@@ -48,7 +50,7 @@ The user is a mod developer, not necessarily a Java expert. Be concise and pract
 - Test instance: ${opts.instancePath ? `\`${opts.instancePath}\` (${opts.instanceKind})` : '(none configured yet)'}
 - GitHub: ${opts.githubOwner ? `${opts.githubOwner}/${opts.githubRepo}` : '(not configured)'}${opts.githubSignedIn ? '' : ' — the user signs in from Settings > GitHub (the app has its own token; the GitHub CLI is optional)'}
 - Java detected: ${javaMajor ?? 'unknown'}${era && Number(javaMajor) !== era.java ? ` (this project targets Java ${era.java} — tell the user if they need to switch JDK)` : ''}
-
+${opts.providerNote ? `\n> **Model note.** ${opts.providerNote}\n` : ''}
 # Autonomy
 
 ${autonomyRules}

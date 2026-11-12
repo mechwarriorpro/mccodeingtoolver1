@@ -14,6 +14,10 @@ interface AttachmentDraft {
 interface Props {
   messages: ChatMessage[]
   streamingText: string
+  /** Last few build/game output lines, shown under the streaming bubble. */
+  liveLines?: { line: string; source: 'build' | 'game' }[]
+  /** False when no provider key is configured, which unlocks the free-model hint. */
+  hasKey?: boolean
   status: string
   statusDetail?: string
   busy: boolean
@@ -80,6 +84,8 @@ function summarizeInput(name: string, input: Record<string, unknown>): string {
 export default function ChatPanel({
   messages,
   streamingText,
+  liveLines,
+  hasKey = true,
   status,
   statusDetail,
   busy,
@@ -195,6 +201,12 @@ export default function ChatPanel({
                 <div>• “The game crashed on launch — read the log and fix it”</div>
                 <div>• “Take a screenshot of the title screen and check the mod loaded”</div>
               </div>
+              {!hasKey && (
+                <div className="free-hint">
+                  No API key yet? Settings → Model has free models from Z.ai and OpenRouter, and Ollama runs locally
+                  for no cost at all. The agent's tools and the live output below work the same way.
+                </div>
+              )}
             </div>
           )}
 
@@ -236,6 +248,19 @@ export default function ChatPanel({
               </div>
             )
           })}
+
+          {/* Live build/game output, inline: a build can take a minute and the
+              chat should show it is doing something without a tab switch. */}
+          {busy && (liveLines?.length ?? 0) > 0 && (
+            <div className="live-lines">
+              {liveLines!.map((l, i) => (
+                <div key={i} className={`live-line ${l.source}`}>
+                  <span className="src">{l.source === 'build' ? 'build' : 'game'}</span>
+                  {l.line}
+                </div>
+              ))}
+            </div>
+          )}
 
           {lastAssistant && busy && streamingText && lastAssistant.id !== messages[messages.length - 1]?.id && (
             <div className="msg assistant">

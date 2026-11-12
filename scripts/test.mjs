@@ -26,6 +26,7 @@ const sources = [
   'src/main/mod/fork.ts',
   'src/main/game/clip.ts',
   'src/main/learn.ts',
+  'src/main/providers.ts',
   'src/main/util/exec.ts'
 ]
 

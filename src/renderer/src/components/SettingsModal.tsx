@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { AppConfig, GameInstance } from '../../../shared/types'
-import { api, type UpdateState } from '../lib/api'
+import { api, type ProviderDef, type ProviderModel, type UpdateState } from '../lib/api'
 import GithubLogin from './GithubLogin'
 
 interface Props {
@@ -12,13 +12,6 @@ interface Props {
   onOpenReferences?: () => void
 }
 
-const MODELS = [
-  'claude-sonnet-4-5-20250929',
-  'claude-opus-4-1-20250805',
-  'claude-haiku-4-5-20251001',
-  'claude-3-7-sonnet-latest'
-]
-
 export default function SettingsModal({ config, onClose, onSaved, onToast, onOpenReferences }: Props): JSX.Element {
   const [tab, setTab] = useState<'model' | 'github' | 'game' | 'updates'>('model')
   const [draft, setDraft] = useState(config)
@@ -27,8 +20,23 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
   const [saving, setSaving] = useState(false)
   const [java, setJava] = useState<{ game: { path: string | null; version?: string; error?: string }; tools: { path: string | null; version?: string; error?: string }; split: boolean } | null>(null)
   const [javaCheck, setJavaCheck] = useState<{ ok: boolean; version?: string; major?: number; error?: string; cleared?: boolean } | null>(null)
+  const [providers, setProviders] = useState<ProviderDef[]>([])
+  const [models, setModels] = useState<Record<string, ProviderModel[]>>({})
+  const [defaults, setDefaults] = useState<Record<string, string>>({})
+  const [modelSource, setModelSource] = useState<string>('')
+  const [loadingModels, setLoadingModels] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [test, setTest] = useState<{ ok: boolean; message: string } | null>(null)
   const [update, setUpdate] = useState<(UpdateState & { versionLabel?: string }) | null>(null)
   const [checking, setChecking] = useState(false)
+
+  useEffect(() => {
+    void api.providers.list().then((r) => {
+      setProviders(r.providers)
+      setModels(r.models)
+      setDefaults(r.defaults)
+    })
+  }, [])
 
   useEffect(() => {
     void api.update.state().then(setUpdate)
@@ -39,6 +47,10 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
     void api.instance.detect().then(setDetected)
     void api.java.status().then(setJava)
   }, [])
+
+  const providerId = draft.provider || 'anthropic'
+  const currentProvider = providers.find((p) => p.id === providerId)
+  const selectedModel = (models[providerId] ?? []).find((m) => m.id === draft.model)
 
   async function checkJava(path: string): Promise<void> {
     setJavaCheck(null)
@@ -91,30 +103,192 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
         {tab === 'model' && (
           <>
             <div className="field">
-              <label>Anthropic API key {config.apiKeySet ? <span className="badge green">set</span> : <span className="badge red">missing</span>}</label>
-              <input type="password" value={apiKey} placeholder={config.apiKeySet ? '•••••••• (leave blank to keep)' : 'sk-ant-…'} onChange={(e) => setApiKey(e.target.value)} />
-              <div className="hint">Used by the Claude Agent SDK. Env var ANTHROPIC_API_KEY also works.</div>
-            </div>
-            <div className="field">
-              <label>Model</label>
-              <select value={MODELS.includes(draft.model) ? draft.model : 'custom'} onChange={(e) => set('model', e.target.value === 'custom' ? '' : e.target.value)}>
-                {MODELS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
+              <label>Provider</label>
+              <select
+                value={draft.provider || 'anthropic'}
+                onChange={(e) => {
+                  // Switching provider must switch the model with it, or the SDK
+                  // asks a free provider for "claude-sonnet-..." and gets a 404.
+                  const next = e.target.value
+                  set('provider', next)
+                  set('model', defaults[next] ?? '')
+                  setApiKey('')
+                  setTest(null)
+                  setModelSource('')
+                }}
+              >
+                {providers.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.label}
+                    {p.local ? ' (free, local)' : ''}
                   </option>
                 ))}
-                <option value="custom">custom…</option>
               </select>
-              {!MODELS.includes(draft.model) && <input style={{ marginTop: 8 }} value={draft.model} onChange={(e) => set('model', e.target.value)} placeholder="model id" />}
+              {currentProvider ? <div className="hint">{currentProvider.note}</div> : null}
             </div>
+
+            <div className="field">
+              <label>
+                {currentProvider?.label ?? 'Provider'} API key{' '}
+                {config.apiKeySet ? <span className="badge green">set</span> : currentProvider?.keyOptional ? <span className="badge">not needed</span> : <span className="badge red">missing</span>}
+              </label>
+              <div className="row">
+                <input
+                  type="password"
+                  value={apiKey}
+                  placeholder={config.apiKeySet ? '•••••••• (leave blank to keep)' : currentProvider?.id === 'anthropic' ? 'sk-ant-…' : 'paste the key from the provider'}
+                  onChange={(e) => setApiKey(e.target.value)}
+                />
+                {currentProvider ? (
+                  <button className="small" onClick={() => void api.providers.openSignup(currentProvider.signupUrl)}>
+                    Get a key
+                  </button>
+                ) : null}
+              </div>
+              <div className="hint">
+                Stored locally; it never leaves the main process. Switching provider keeps the old key until you save a new one.
+              </div>
+            </div>
+
+            <div className="field">
+              <div className="row" style={{ justifyContent: 'space-between', marginBottom: 5 }}>
+                <label style={{ margin: 0 }}>Model</label>
+                <div className="row" style={{ gap: 8 }}>
+                  <button
+                    className="small ghost"
+                    disabled={loadingModels}
+                    onClick={async () => {
+                      setLoadingModels(true)
+                      setTest(null)
+                      try {
+                        const res = await api.providers.models({ provider: draft.provider || 'anthropic', apiKey })
+                        setModels((m) => ({ ...m, [draft.provider || 'anthropic']: res.models }))
+                        setModelSource(res.error ?? (res.source === 'live' ? `Live list: ${res.models.length} free models.` : 'Bundled list.'))
+                      } finally {
+                        setLoadingModels(false)
+                      }
+                    }}
+                  >
+                    {loadingModels ? 'Refreshing…' : 'Refresh free models'}
+                  </button>
+                </div>
+              </div>
+              <select value={draft.model} onChange={(e) => set('model', e.target.value)}>
+                {(models[draft.provider || 'anthropic'] ?? []).map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                    {m.free ? ' — free' : ''}
+                    {m.vision ? ' · vision' : ''}
+                    {m.tools ? '' : ' · no tools'}
+                  </option>
+                ))}
+                {!(models[draft.provider || 'anthropic'] ?? []).some((m) => m.id === draft.model) ? (
+                  <option value={draft.model}>{draft.model || '(no model selected)'}</option>
+                ) : null}
+              </select>
+              <input
+                style={{ marginTop: 6 }}
+                value={draft.model}
+                onChange={(e) => set('model', e.target.value)}
+                placeholder="or type any model id"
+              />
+              {selectedModel ? (
+                <div className="hint">
+                  {selectedModel.limits ? `${selectedModel.limits} · ` : ''}
+                  {selectedModel.context ? `context ${selectedModel.context} · ` : ''}
+                  {selectedModel.tools ? 'tool calling' : 'no tool calling — cannot edit files'}
+                  {selectedModel.vision ? ', vision' : ', no vision (screenshots will not be read)'}
+                </div>
+              ) : null}
+              {modelSource ? <div className="hint">{modelSource}</div> : null}
+            </div>
+
+            <div className="row" style={{ marginBottom: 12 }}>
+              <button
+                className="small"
+                disabled={testing}
+                onClick={async () => {
+                  setTesting(true)
+                  setTest(null)
+                  try {
+                    const res = await api.providers.test({ provider: draft.provider || 'anthropic', model: draft.model, apiKey })
+                    setTest(
+                      res.ok
+                        ? { ok: true, message: `Connected — “${res.reply}” in ${((res.ms ?? 0) / 1000).toFixed(1)}s` }
+                        : { ok: false, message: res.error ?? 'Test failed' }
+                    )
+                  } finally {
+                    setTesting(false)
+                  }
+                }}
+              >
+                {testing ? 'Testing…' : 'Test connection'}
+              </button>
+              {test ? (
+                <span className="hint" style={{ margin: 0, color: test.ok ? 'var(--accent)' : 'var(--red)' }}>
+                  {test.message}
+                </span>
+              ) : null}
+            </div>
+
             <div className="two-col">
+              <div className="field">
+                <label>Vision model for screenshots and clips</label>
+                <select
+                  value={draft.visionProvider || ''}
+                  onChange={(e) => {
+                    const next = e.target.value
+                    set('visionProvider', next)
+                    const [pid] = next.split(':')
+                    if (pid && pid !== providerId) set('visionModel', (models[pid] ?? []).find((m) => m.vision)?.id ?? '')
+                  }}
+                >
+                  <option value="">Same as the agent's provider and model</option>
+                  {providers
+                    .filter((p) => p.id !== providerId)
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.label}
+                      </option>
+                    ))}
+                </select>
+                {draft.visionProvider ? (
+                  <>
+                    <input
+                      style={{ marginTop: 6 }}
+                      value={draft.visionModel}
+                      onChange={(e) => set('visionModel', e.target.value)}
+                      placeholder={(models[draft.visionProvider.split(':')[0]] ?? []).find((m) => m.vision)?.id ?? 'vision-capable model id'}
+                    />
+                    <input
+                      style={{ marginTop: 6 }}
+                      type="password"
+                      value={draft.visionProviderKey === '••••••••' ? '' : draft.visionProviderKey}
+                      onChange={(e) => set('visionProviderKey', e.target.value)}
+                      placeholder="key for that provider"
+                    />
+                  </>
+                ) : null}
+                <div className="hint">
+                  Clips and screenshots need a model that accepts images. A free vision model here keeps the agent's
+                  coding model free of image costs.
+                </div>
+              </div>
               <div className="field">
                 <label>Per-run budget (USD, 0 = uncapped)</label>
                 <input type="number" min={0} step={0.5} value={draft.maxBudgetUsd} onChange={(e) => set('maxBudgetUsd', Number(e.target.value))} />
+                <div className="hint">Only applies to paid models; a free tier cannot overspend.</div>
               </div>
-              <div className="field">
-                <label>Base URL (optional, for proxies)</label>
-                <input value={draft.baseUrl} onChange={(e) => set('baseUrl', e.target.value)} placeholder="https://api.anthropic.com" />
+            </div>
+            <div className="field">
+              <label>Base URL override (optional)</label>
+              <input
+                value={draft.baseUrl}
+                onChange={(e) => set('baseUrl', e.target.value)}
+                placeholder={currentProvider?.baseUrl || 'https://api.anthropic.com'}
+              />
+              <div className="hint">
+                Leave blank to use the provider's own endpoint. Set this only for a proxy or a self-hosted gateway.
               </div>
             </div>
             <div className="field">

@@ -7,6 +7,7 @@ import type { AutonomyMode, PermissionPrompt, ToolTrace } from '../../shared/typ
 import { AsyncQueue } from '../util/async'
 import { buildAgents, coordinatorPrompt } from './orchestrator'
 import { buildSystemPrompt } from './prompt'
+import { providerEnv, providerCaveats, providerById, type ProviderId } from '../providers'
 import { createAgentTools, readProps } from './tools'
 import { listReferences } from '../github/references'
 
@@ -181,15 +182,21 @@ export class AgentSession {
 
     const apiKey = effectiveApiKey()
     const baseUrl = effectiveBaseUrl()
+    const provider = (cfg.provider || 'anthropic') as ProviderId
+    const model = cfg.model || ''
     // The SDK spawns the Claude Code CLI with a JS runtime. In a packaged build there is
     // no system Node, but the Electron binary itself can run as Node when this is set.
     const isElectronRuntime = !!process.versions.electron
     const env: Record<string, string | undefined> = {
       ...process.env,
-      ANTHROPIC_API_KEY: apiKey || undefined,
       CLAUDE_CODE_ENTRYPOINT: 'mcfrogeagent',
       ...(isElectronRuntime && !process.env.CLAUDE_CODE_PATH ? { ELECTRON_RUN_AS_NODE: '1' } : {})
     }
+    // The provider decides auth and model aliases. `providerEnv` empties
+    // ANTHROPIC_API_KEY for third parties so a paid Anthropic key is never sent
+    // to another host, and forces the model alias so free models are not asked
+    // for as "claude-sonnet-...".
+    Object.assign(env, providerEnv(provider, apiKey, model))
     if (baseUrl) env.ANTHROPIC_BASE_URL = baseUrl
 
     return {
@@ -211,7 +218,8 @@ export class AgentSession {
           githubOwner: cfg.github.owner,
           githubRepo: cfg.github.repo,
           loader: detectLoader(props),
-          mcVersion: detectMcVersion(props)
+          mcVersion: detectMcVersion(props),
+          providerNote: providerCaveats(provider, cfg.model || providerById(provider).label).join(' ')
         })}\n\n${coordinatorPrompt()}`
       },
       settingSources: ['user', 'project', 'local'],

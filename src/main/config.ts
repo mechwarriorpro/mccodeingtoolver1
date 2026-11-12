@@ -2,9 +2,11 @@ import { app } from 'electron'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { AppConfig } from '../shared/types'
+import { providerBaseUrl } from './providers'
 
 const defaultConfig: AppConfig = {
   apiKey: '',
+  provider: 'anthropic',
   baseUrl: '',
   model: 'claude-sonnet-4-5-20250929',
   maxBudgetUsd: 5,
@@ -16,6 +18,8 @@ const defaultConfig: AppConfig = {
   preferWrapper: true,
   autoUpdate: true,
   visionModel: '',
+  visionProvider: '',
+  visionProviderKey: '',
   game: {
     instances: [],
     activeInstanceId: '',
@@ -92,19 +96,40 @@ export function saveConfig(patch: Partial<AppConfig>): AppConfig {
   return next
 }
 
+/**
+ * The key for the selected provider.
+ *
+ * A non-Anthropic key is never read from ANTHROPIC_API_KEY: that variable means
+ * "Anthropic" and reusing it for a third party would be both confusing and a
+ * way to send the wrong credential. Providers that need no key (Ollama) get an
+ * empty string on purpose.
+ */
 export function effectiveApiKey(): string {
   const cfg = loadConfig()
-  return (cfg.apiKey || process.env.ANTHROPIC_API_KEY || '').trim()
+  if ((cfg.provider || 'anthropic') === 'anthropic') {
+    return (cfg.apiKey || process.env.ANTHROPIC_API_KEY || '').trim()
+  }
+  return (cfg.apiKey || '').trim()
 }
 
+/**
+ * A base URL set explicitly in Settings always wins. Otherwise the provider
+ * decides; an empty result means "leave the SDK's default Anthropic endpoint".
+ */
 export function effectiveBaseUrl(): string {
   const cfg = loadConfig()
-  return (cfg.baseUrl || process.env.ANTHROPIC_BASE_URL || '').trim()
+  if (cfg.baseUrl) return cfg.baseUrl.trim()
+  const provider = (cfg.provider || 'anthropic') as Parameters<typeof providerBaseUrl>[0]
+  return providerBaseUrl(provider) || (process.env.ANTHROPIC_BASE_URL || '').trim()
 }
 
 /** Never let the API key leave the main process. */
 export function redactConfig(cfg: AppConfig): AppConfig {
-  return { ...cfg, apiKey: cfg.apiKey ? '••••••••' : '' }
+  return {
+    ...cfg,
+    apiKey: cfg.apiKey ? '••••••••' : '',
+    visionProviderKey: cfg.visionProviderKey ? '••••••••' : ''
+  }
 }
 
 export function defaultUserConfig(): AppConfig {

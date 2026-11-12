@@ -74,10 +74,20 @@ export default function App(): JSX.Element {
   // ---------------- events ----------------
   useEffect(() => {
     const offs = [
+      // The user's message is echoed by main *after* it is persisted. Without
+      // this the turn only appeared after a reload, because the renderer never
+      // added it locally.
+      api.events.onUserMessage((p) => {
+        const msg = p as { id: string; role: 'user'; text: string; createdAt: number; attachments?: unknown }
+        setMessages((msgs) => (msgs.some((m) => m.id === msg.id) ? msgs : [...msgs, msg as never]))
+        setBusy(true)
+      }),
       api.events.onAgentText((p) => setStreaming((s) => s + p.text)),
       api.events.onAgentBlock((p) => {
-        // Authoritative complete block from the SDK: store it and clear the scratch buffer.
-        setStreaming('')
+        // Authoritative complete block from the SDK: store it. The streaming
+        // buffer is deliberately NOT cleared here — it is the live view of the
+        // whole run, and clearing it mid-run made earlier blocks disappear from
+        // the screen until the next delta arrived.
         setMessages((msgs) => {
           const copy = [...msgs]
           const lastIdx = [...copy].reverse().findIndex((m) => m.role === 'assistant')
@@ -88,9 +98,12 @@ export default function App(): JSX.Element {
           return copy
         })
       }),
-      api.events.onAssistantStart(() => {
-        setStreaming('')
+      api.events.onAssistantStart((p) => {
+        // Do NOT clear the stream buffer here: deltas for the first tokens can
+        // arrive before this event, and clearing would swallow them mid-word.
+        const msg = p as { id: string; role: 'assistant'; text: string; createdAt: number }
         setBusy(true)
+        setMessages((msgs) => (msgs.some((m) => m.id === msg.id) ? msgs : [...msgs, { ...msg, tools: [] } as never]))
       }),
       api.events.onStatus((p) => {
         setStatus(p.status)
@@ -120,14 +133,20 @@ export default function App(): JSX.Element {
       api.events.onPermission((p) => setPermission(p)),
       api.events.onPermissionResolved(() => setPermission(null)),
       api.events.onResult((p) => {
+        // End of run: drop the live buffer and show what main persisted.
         setStreaming('')
         setBusy(false)
         setMessages((msgs) => {
           const copy = [...msgs]
           const lastIdx = [...copy].reverse().findIndex((m) => m.role === 'assistant')
-          if (lastIdx !== -1 && p.text) {
+          if (lastIdx !== -1) {
             const idx = copy.length - 1 - lastIdx
-            copy[idx] = { ...copy[idx], text: p.text, costUsd: p.costUsd, error: p.isError ? p.text : undefined }
+            const existing = copy[idx].text
+            // The persisted message is authoritative (main appended every block).
+            // Only fall back to the result text when nothing was stored, so an
+            // error summary cannot overwrite the answer that is already on screen.
+            const text = existing || p.text
+            copy[idx] = { ...copy[idx], text, costUsd: p.costUsd, error: p.isError ? p.text : undefined }
           }
           return copy
         })
@@ -161,6 +180,8 @@ export default function App(): JSX.Element {
 
   // ---------------- actions ----------------
   async function send(text: string, attachments: { path: string; name: string; kind: string; mediaType?: string }[]): Promise<void> {
+    // Clear here, where the turn genuinely starts, rather than on a stream event.
+    setStreaming('')
     setBusy(true)
     setStatus('thinking')
     const res = await api.chat.send({ text, attachments })
@@ -309,6 +330,8 @@ export default function App(): JSX.Element {
         <ChatPanel
           messages={messages}
           streamingText={streaming}
+          liveLines={consoleLines.slice(-4)}
+          hasKey={config.apiKeySet || config.provider === 'ollama'}
           status={status}
           statusDetail={statusDetail}
           busy={busy}

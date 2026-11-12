@@ -106,8 +106,9 @@ release, and verifies the asset exists before finishing.
 
 ## First run
 
-1. **Settings → Model** — paste your API key. It stays in the main process; the renderer only ever
-   sees a masked value.
+1. **Settings → Model** — choose a provider and paste its key. It stays in the main process; the
+   renderer only ever sees a masked value. **You do not need to pay to try this** — see
+   [Free models](#free-models-no-card-needed) below.
 2. **New project** — pick a loader (Fabric, Forge or NeoForge), a Minecraft version (1.2.5 → latest;
    the list is refreshed from Mojang, Fabric and Forge), then a folder, name, mod id (e.g. `rubytools`)
    and package (e.g. `com.you.rubytools`). That generates a real, buildable project for that version.
@@ -116,6 +117,32 @@ release, and verifies the asset exists before finishing.
 4. **Settings → GitHub** — **Sign in with GitHub** (a code appears; type it at
    github.com/login/device), then owner/repo/branch and `Create repo & push`.
 5. Ask for a feature.
+
+### Free models (no card needed)
+
+The agent is a client for the **Anthropic Messages API**, not for Anthropic's servers. Anywhere that
+speaks that protocol works, so Settings → Model can point the same agent at free models. The tools,
+the build loop and the screenshots all behave identically; only the model behind them changes.
+
+| Provider | Model to start with | Cost | Needs a card? |
+| --- | --- | --- | --- |
+| **Z.ai** | `glm-4.7-flash` | free tier | no |
+| **OpenRouter** | `qwen/qwen3-coder:free` (coding) or `nvidia/nemotron-3.5-super-vl:free` (vision) | free tier | no |
+| **Ollama** | `qwen3-coder` | free forever, local | no — no account at all |
+| Anthropic | Claude Sonnet 4.5 | paid | yes |
+
+- **Refresh free models** asks OpenRouter for its current `:free` roster, because that list rotates.
+  **Test connection** does a real round trip, so a bad key fails in Settings rather than mid-edit.
+- Each model is labelled with what it can do. A model **without tool calling cannot edit files** — the
+  app says so instead of letting a run fail halfway. **Vision** is only needed for clips and screenshots.
+- Vision has its own picker: keep a free vision model for clip analysis while the agent writes code
+  with something else.
+- Free tiers are rate limited. OpenRouter is roughly **20 requests/minute and 50/day**, which a long
+  build-fix loop can exhaust; the app reports 429s plainly. Z.ai's Flash models are free but throttled.
+  Ollama has no limits at all, but quality depends on your hardware and the model you pull.
+- The Anthropic key path is untouched. Switching back to Anthropic restores the original behaviour, and
+  a key belonging to one provider is never sent to another (the agent clears `ANTHROPIC_API_KEY` for
+  third parties and uses a bearer token instead).
 
 ### Reference mods (read how other mods do it)
 
@@ -214,6 +241,14 @@ npm run typecheck # main + renderer
 New projects for 1.21.1 NeoForge use the unmodified official MDK build script. Every other
 combination gets a generated build file for its era, which the tests check for the right plugin,
 Java level, loader version property and metadata file.
+
+## Live chat
+
+The conversation updates as it happens: your message appears the moment you press send, the reply
+streams token by token, tool calls and their results appear inline, and the last few build or game
+log lines are shown under the reply while a build runs. Nothing needs a refresh, and nothing is lost
+if a stream is interrupted — the app writes each completed block to the stored message, so the final
+transcript is complete even when the live text was cut short.
 
 ## Notes & limits
 

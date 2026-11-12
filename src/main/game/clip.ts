@@ -297,6 +297,13 @@ export interface AnalysisRequest {
   baseUrl?: string
   model?: string
   maxFrames?: number
+  /**
+   * 'anthropic' uses the x-api-key header; every Anthropic-compatible gateway
+   * (OpenRouter, Z.ai, Ollama) expects a bearer token instead.
+   */
+  auth?: 'anthropic' | 'bearer'
+  /** Shown in errors so a rate limit names the provider that imposed it. */
+  providerLabel?: string
 }
 
 export interface AnalysisResult {
@@ -369,13 +376,14 @@ export async function analyseClip(req: AnalysisRequest): Promise<AnalysisResult>
   if (!images.length) return { ok: false, error: 'Every frame was too large to send. Capture at a smaller window size.' }
 
   const base = (req.baseUrl || 'https://api.anthropic.com').replace(/\/+$/, '')
+  const bearer = req.auth === 'bearer'
   try {
     const res = await fetch(`${base}/v1/messages`, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        'x-api-key': req.apiKey,
-        'anthropic-version': '2023-06-01'
+        'anthropic-version': '2023-06-01',
+        ...(bearer ? { authorization: `Bearer ${req.apiKey || 'local'}` } : { 'x-api-key': req.apiKey })
       },
       body: JSON.stringify({
         model,
@@ -390,7 +398,7 @@ export async function analyseClip(req: AnalysisRequest): Promise<AnalysisResult>
     })
     if (!res.ok) {
       const body = await res.text()
-      return { ok: false, error: translateAnalysisError(res.status, body) }
+      return { ok: false, error: translateAnalysisError(res.status, body, req.providerLabel) }
     }
     const json = (await res.json()) as { content?: { type: string; text?: string }[] }
     const text = (json.content ?? [])
@@ -407,13 +415,14 @@ export async function analyseClip(req: AnalysisRequest): Promise<AnalysisResult>
 }
 
 /** Turn the API's error body into something a mod developer can act on. */
-export function translateAnalysisError(status: number, body: string): string {
-  if (status === 401) return 'The Anthropic API key was rejected. Check it in Settings.'
-  if (status === 403) return 'This API key is not allowed to use that model.'
-  if (status === 404) return 'The vision model was not found. Pick a different model in Settings.'
+export function translateAnalysisError(status: number, body: string, providerLabel = 'The AI provider'): string {
+  if (status === 401) return `The ${providerLabel} API key was rejected. Check it in Settings.`
+  if (status === 402) return `${providerLabel} has no credit on this account. Pick a free model in Settings.`
+  if (status === 403) return `This ${providerLabel} key is not allowed to use that model.`
+  if (status === 404) return `The vision model was not found on ${providerLabel}. Pick a different model in Settings.`
   if (status === 413) return 'The frames were too large to send. Capture at a smaller window size.'
-  if (status === 429) return 'Rate limited by the Anthropic API. Try again in a minute.'
-  if (status >= 500) return 'The Anthropic API had a server error. Try again.'
+  if (status === 429) return `Rate limited by ${providerLabel}. Free tiers are strict; try again in a minute.`
+  if (status >= 500) return `${providerLabel} had a server error. Try again.`
   const short = body.replace(/\s+/g, ' ').slice(0, 300)
   return `Vision analysis failed (HTTP ${status}): ${short}`
 }

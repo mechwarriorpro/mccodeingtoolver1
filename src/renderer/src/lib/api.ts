@@ -24,6 +24,29 @@ export interface VersionChoice {
   loaders: Loader[]
 }
 
+export interface ProviderDef {
+  id: string
+  label: string
+  signupUrl: string
+  keyOptional?: boolean
+  local?: boolean
+  baseUrl: string
+  note: string
+}
+
+export interface ProviderModel {
+  id: string
+  label: string
+  /** No payment needed: a free tier, or local. */
+  free: boolean
+  /** Can drive the agent (tool calling). */
+  tools: boolean
+  /** Accepts screenshots and clip frames. */
+  vision: boolean
+  limits?: string
+  context?: string
+}
+
 export interface Lesson {
   id: string
   fingerprint: string
@@ -139,6 +162,26 @@ export interface McfApi {
     }>
     check: (javaPath: string) => Promise<{ ok: boolean; version?: string; major?: number; suitsGame?: boolean; suitsTools?: boolean; error?: string; cleared?: boolean }>
     clearCache: () => Promise<{ ok: boolean }>
+  }
+  providers: {
+    list: () => Promise<{
+      providers: ProviderDef[]
+      models: Record<string, ProviderModel[]>
+      defaults: Record<string, string>
+    }>
+    models: (opts: { provider: string; apiKey?: string }) => Promise<{
+      ok: boolean
+      models: ProviderModel[]
+      source: 'live' | 'known'
+      error?: string
+    }>
+    test: (opts: { provider: string; model: string; apiKey?: string }) => Promise<{
+      ok: boolean
+      reply?: string
+      ms?: number
+      error?: string
+    }>
+    openSignup: (url: string) => Promise<void>
   }
   update: {
     state: () => Promise<UpdateState & { versionLabel: string }>
