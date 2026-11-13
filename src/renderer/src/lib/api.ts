@@ -746,6 +746,8 @@ export interface McfApi {
     summary: () => Promise<ProjectSummary>
     readFile: (rel: string) => Promise<{ ok: boolean; text?: string; error?: string }>
     writeFile: (rel: string, content: string) => Promise<{ ok: boolean; error?: string }>
+    /** Make a folder the active project (empty = back to the scaffolded one). */
+    activate: (dir: string) => Promise<{ ok: boolean; dir?: string; error?: string }>
   }
   shell: { openPath: (p: string) => Promise<string> }
   dialog: {
@@ -761,6 +763,14 @@ export interface McfApi {
     actions: () => Promise<{ ok: boolean; code: number | null; logPath: string; jarPath?: string; errors: string[]; durationMs: number }>
     preflight: () => Promise<{ ghFound: boolean; authed: boolean; repoOk: boolean; messages: string[] }>
     initRepo: (isPrivate: boolean) => Promise<{ ok: boolean; url?: string; error?: string }>
+    /** Whether the open folder can be pushed, and what is missing if not. */
+    repoState: () => Promise<{
+      ok: boolean
+      dir?: string
+      state: 'no-repo' | 'no-origin' | 'ready'
+      message: string | null
+      suggestion?: string
+    }>
     openLog: (p: string) => Promise<void>
   }
   instance: {

@@ -61,7 +61,7 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.4.14 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.4.15 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
 > v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
 > decompiler picking a Java it could not run.
@@ -88,6 +88,13 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.4.15** makes **Build on GitHub** work on a project that has never been pushed — which is every project
+> made by decompiling a mod. It said "Not a git repository. Create one first (Settings > GitHub)", which was
+> wrong twice: the app can create the repository itself, and Settings is where you sign in. It now creates the
+> repo and a first commit (writing `.gitignore` rules first, so the decompiled tree, the jars and the gradle
+> cache stay out of it), infers owner and repo from your account and folder name when those are blank, and
+> offers the whole thing as a button in the Build tab. Opening a fork now actually makes it the active project,
+> so the build and the agent act on the folder you are looking at instead of the old one.
 > **v0.4.14** fixes builds dying with `ERROR: JAVA_HOME is set to an invalid directory: .` — when the only
 > Java it could find was `java` on PATH, it exported `dirname(dirname('java'))`, which is `.`. It now resolves
 > the real executable, exports the folder above `bin`, and if it cannot, leaves your `JAVA_HOME` alone instead

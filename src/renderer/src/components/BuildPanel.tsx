@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import type { AppConfig } from '../../../shared/types'
 import type { ProjectSummary } from '../lib/api'
 import { api } from '../lib/api'
@@ -15,6 +15,40 @@ export default function BuildPanel({ project, config, onRefreshProject, onOpenIm
   const [busy, setBusy] = useState<string | null>(null)
   const [result, setResult] = useState<{ ok: boolean; jarPath?: string; errors: string[]; logPath: string; seconds?: number } | null>(null)
   const [openFile, setOpenFile] = useState<{ path: string; text: string } | null>(null)
+  /**
+   * Whether this folder can be pushed at all, and the one action that would make
+   * it possible. Read from the folder itself rather than assumed: the Build tab
+   * used to let you press "Build on GitHub" on a project with no git repository
+   * and only then say so.
+   */
+  const [repo, setRepo] = useState<{ state: 'no-repo' | 'no-origin' | 'ready'; message: string | null; suggestion?: string } | null>(null)
+  const [settingUp, setSettingUp] = useState(false)
+
+  const refreshRepo = useCallback(async () => {
+    try {
+      setRepo(await api.build.repoState())
+    } catch {
+      setRepo(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    void refreshRepo()
+  }, [refreshRepo, project?.dir])
+
+  async function setUpRepo(isPrivate: boolean): Promise<void> {
+    setSettingUp(true)
+    try {
+      const res = await api.build.initRepo(isPrivate)
+      onToast(res.ok ? `Pushed to ${res.url}` : res.error ?? 'Could not set up the repository', res.ok ? 'ok' : 'err')
+      if (res.ok) {
+        await refreshRepo()
+        onRefreshProject()
+      }
+    } finally {
+      setSettingUp(false)
+    }
+  }
 
   async function build(mode: 'local' | 'actions'): Promise<void> {
     setBusy(mode)
@@ -78,7 +112,35 @@ export default function BuildPanel({ project, config, onRefreshProject, onOpenIm
         <div className="field" style={{ marginTop: 10, marginBottom: 0 }}>
           <div className="hint">
             Local build runs <code>./gradlew build</code> with your JDK 21. GitHub build commits, pushes, runs the workflow and downloads the jar artifact.
+            {project?.dir ? (
+              <>
+                {' '}Both act on <code>{project.dir}</code>.
+              </>
+            ) : null}
           </div>
+          {repo && repo.state !== 'ready' && (
+            <div className="card" style={{ marginTop: 8, marginBottom: 0 }}>
+              <b>{repo.state === 'no-repo' ? 'Not a git repository yet' : 'No GitHub remote yet'}</b>
+              <p className="muted small" style={{ marginTop: 4 }}>
+                {repo.state === 'no-repo'
+                  ? 'This folder has never been pushed anywhere. That is normal for a project made by decompiling a mod — GitHub build needs a repository to push to, and one can be created now.'
+                  : 'The repository exists locally but does not point at GitHub. An origin can be added from your Settings.'}
+              </p>
+              <div className="row wrap" style={{ marginTop: 6 }}>
+                <button className="small primary" disabled={settingUp} onClick={() => void setUpRepo(false)}>
+                  {settingUp ? 'Setting up…' : 'Create public repo and push'}
+                </button>
+                <button className="small" disabled={settingUp} onClick={() => void setUpRepo(true)}>
+                  Private
+                </button>
+              </div>
+              {repo.suggestion && (
+                <p className="muted small" style={{ marginTop: 6 }}>
+                  Suggested name: <code>{repo.suggestion}</code> — change the repo in Settings → GitHub.
+                </p>
+              )}
+            </div>
+          )}
         </div>
         {result && (
           <div style={{ marginTop: 10 }}>
@@ -156,7 +218,10 @@ export default function BuildPanel({ project, config, onRefreshProject, onOpenIm
           onClick={() =>
             void api.build
               .preflight()
-              .then((r) => onToast(r.messages.length ? r.messages.join(' · ') : 'GitHub CLI ready', r.ghFound && r.authed && r.repoOk ? 'ok' : 'err'))
+              .then((r) => {
+                onToast(r.messages.length ? r.messages.join(' · ') : 'GitHub ready', r.authed && r.repoOk ? 'ok' : 'err')
+                void refreshRepo()
+              })
           }
         >
           Test connection

@@ -5,6 +5,8 @@ import { api, type ProjectSummary } from '../lib/api'
 interface Props {
   project: ProjectSummary | null
   onToast: (text: string, kind?: 'ok' | 'err') => void
+  /** Follow the fork that was just opened, so the build and agent act on it. */
+  onOpenProject?: (dir: string) => void
 }
 
 const VINEFLOWER_VERSION = '1.12.0'
@@ -21,7 +23,7 @@ function mb(bytes: number): string {
  * Reference sources are never compiled into the user's mod and the folder is
  * git-ignored, so they cannot leak into a release.
  */
-export default function ReferencePanel({ project, onToast }: Props): JSX.Element {
+export default function ReferencePanel({ project, onToast, onOpenProject }: Props): JSX.Element {
   const [mods, setMods] = useState<ReferenceModUi[]>([])
   const [repo, setRepo] = useState('')
   const [releases, setReleases] = useState<ReleaseOption[] | null>(null)
@@ -168,7 +170,12 @@ export default function ReferencePanel({ project, onToast }: Props): JSX.Element
         return
       }
       setLines((l) => [...l, `Forked ${m.title} as a ${target} project at ${res.fork?.dir}`])
-      if (res.fork) await api.forks.open(res.fork.id)
+      if (res.fork) {
+        const opened = await api.forks.open(res.fork.id)
+        // Open means open: the Build tab and the agent should now be working in
+        // this fork, not in whatever was there before.
+        if (opened.ok && opened.dir) onOpenProject?.(opened.dir)
+      }
       onToast(res.warning ? `Fork created — ${res.warning}` : `Fork created as a ${target} project`, res.warning ? 'err' : 'ok')
     } finally {
       setBusy('')

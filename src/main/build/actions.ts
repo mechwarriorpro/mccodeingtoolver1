@@ -4,6 +4,7 @@ import { javaForVersion, resolveEra } from '../versions/eras'
 import path from 'node:path'
 import { app } from 'electron'
 import { run } from '../util/exec'
+import { ensureForkGitignore, repoState, suggestRepoName } from './repo'
 import { authToken, fetchUser, readAuth } from '../github/oauth'
 import type { BuildResult } from './gradle'
 
@@ -264,16 +265,45 @@ export async function runActionsBuild(
   }
 
   ensureWorkflow(dir, modId)
-  push(`[actions] repo=${cfg.owner}/${cfg.repo} branch=${cfg.branch || '(current)'}`)
+  const ctxEarly = await githubContext()
+  if (!ctxEarly.token) return fail('Not signed in to GitHub. Sign in from Settings > GitHub.')
+  const target = resolveGithubTarget(cfg, dir, ctxEarly.login)
+  if (target.inferred) {
+    push(`[actions] using ${target.owner}/${target.repo} (inferred from the signed-in account and the folder name)`)
+  }
+  if (!target.owner || !target.repo) {
+    return fail('Set the GitHub owner and repo in Settings > GitHub, or sign in so the account can be used.')
+  }
+  // Create the repository before touching git: pressing "Build on GitHub" on a
+  // project that has never been pushed is a normal thing to do, not a setup error.
+  // A repository created as a side effect of a build is public by default, which
+  // is what the app's own settings say; the explicit setup action asks.
+  const ensured = await ensureGithubRepo(ctxEarly, target.owner, target.repo, false, push)
+  if (!ensured.ok) return fail(ensured.error ?? 'Could not create the GitHub repository.')
+  push(`[actions] repo=${target.owner}/${target.repo} branch=${cfg.branch || '(current)'}`)
 
-  // 1. Make sure the repo exists and has a remote
+  // 1. Make the folder a repository on a remote that points at the GitHub repo.
+  //
+  // This used to fail with "Not a git repository. Create one first (Settings >
+  // GitHub)" — which was wrong twice: the app can create a repository itself,
+  // and Settings is where you sign in, not where git repositories are made. A
+  // project made by decompiling a mod has exactly this shape: real sources,
+  // buildable, never pushed anywhere.
   const remotes = await git(['remote'], dir)
-  if (remotes.code !== 0) return fail('Not a git repository. Create one first (Settings > GitHub).')
-  if (!remotes.out.split(/\s+/).includes('origin')) {
-    const url = `https://github.com/${cfg.owner}/${cfg.repo}.git`
+  const state = repoState(dir, remotes.code === 0 ? remotes.out.split(/\s+/).filter(Boolean) : null)
+  if (state.state === 'no-repo') {
+    push(`[actions] ${dir} is not a git repository; creating one`)
+    // Ignore rules first: the first commit of a decompiled-mod fork would
+    // otherwise carry the reference jar, the gradle cache and the run dirs.
+    ensureForkGitignore(dir)
+    const init = await git(['init', '-b', cfg.branch || 'main'], dir)
+    if (init.code !== 0) return fail(`git init failed: ${init.err || init.out}`)
+  }
+  if (state.state !== 'ready') {
+    const url = `https://github.com/${target.owner}/${target.repo}.git`
     push(`[actions] adding remote origin ${url}`)
     const add = await git(['remote', 'add', 'origin', url], dir)
-    if (add.code !== 0) return fail(`git remote add failed: ${add.err}`)
+    if (add.code !== 0) return fail(`git remote add failed: ${add.err || add.out}`)
   }
 
   // 2. Commit anything the agent changed
@@ -294,10 +324,11 @@ export async function runActionsBuild(
 
   // 3. Push
   const branchRes = await git(['rev-parse', '--abbrev-ref', 'HEAD'], dir)
-  const branch = cfg.branch || branchRes.out || 'main'
+  // A git repo created moments ago has no branch in `cfg`, and `rev-parse` on an
+  // empty repository answers "HEAD" with a non-zero status. Fall back to main.
+  const branch = cfg.branch || (branchRes.code === 0 ? branchRes.out : '') || 'main'
   push(`[actions] pushing ${branch}`)
-  const ctx = await githubContext()
-  if (!ctx.token) return fail('Not signed in to GitHub. Sign in from Settings > GitHub.')
+  const ctx = ctxEarly
   const pushRes = await gitPush(ctx, dir, ['push', '-u', 'origin', `HEAD:${branch}`])
   if (pushRes.code !== 0) return fail(`git push failed: ${simplifyGitError(pushRes.err || pushRes.out, ctx)}`)
 
@@ -306,7 +337,7 @@ export async function runActionsBuild(
 
   // 4. Trigger the workflow and find the run for this commit
   push('[actions] dispatching workflow')
-  const dispatch = await ghApi(ctx, `/repos/${cfg.owner}/${cfg.repo}/actions/workflows/build.yml/dispatches`, {
+  const dispatch = await ghApi(ctx, `/repos/${target.owner}/${target.repo}/actions/workflows/build.yml/dispatches`, {
     method: 'POST',
     body: JSON.stringify({ ref: branch })
   })
@@ -319,7 +350,7 @@ export async function runActionsBuild(
   for (let attempt = 0; attempt < 20 && !runId; attempt++) {
     await sleep(4000)
     if (signal?.aborted) return fail('cancelled')
-    const list = await ghApi(ctx, `/repos/${cfg.owner}/${cfg.repo}/actions/workflows/build.yml/runs?branch=${encodeURIComponent(branch)}&per_page=10`)
+    const list = await ghApi(ctx, `/repos/${target.owner}/${target.repo}/actions/workflows/build.yml/runs?branch=${encodeURIComponent(branch)}&per_page=10`)
     if (!list.ok) {
       push(`[actions] listing runs failed: ${list.status} ${list.text.slice(0, 160)}`)
       continue
@@ -345,7 +376,7 @@ export async function runActionsBuild(
   while (Date.now() < deadline) {
     if (signal?.aborted) return fail('cancelled', runUrl)
     await sleep(8000)
-    const view = await ghApi(ctx, `/repos/${cfg.owner}/${cfg.repo}/actions/runs/${runId}`)
+    const view = await ghApi(ctx, `/repos/${target.owner}/${target.repo}/actions/runs/${runId}`)
     if (!view.ok) {
       push(`[actions] polling run failed: ${view.status}`)
       continue
@@ -361,7 +392,7 @@ export async function runActionsBuild(
   if (!conclusion) return fail('Timed out waiting for the workflow to finish.', runUrl)
 
   if (conclusion !== 'success') {
-    const jobs = await ghApi(ctx, `/repos/${cfg.owner}/${cfg.repo}/actions/runs/${runId}/jobs`)
+    const jobs = await ghApi(ctx, `/repos/${target.owner}/${target.repo}/actions/runs/${runId}/jobs`)
     const failed = ((jobs.data?.jobs ?? []) as { id: number; name: string; conclusion: string; steps?: { name: string; conclusion: string }[] }[]).filter(
       (j) => j.conclusion && j.conclusion !== 'success'
     )
@@ -369,7 +400,7 @@ export async function runActionsBuild(
       const badSteps = (job.steps ?? []).filter((st) => st.conclusion && !['success', 'skipped'].includes(st.conclusion))
       push(`[actions] job "${job.name}" ${job.conclusion}; failing steps: ${badSteps.map((st) => st.name).join(', ') || '(none reported)'}`)
     }
-    const tail = await fetchFailedLogTail(ctx, cfg.owner, cfg.repo, runId, failed.map((j) => j.id), push)
+    const tail = await fetchFailedLogTail(ctx, target.owner, target.repo, runId, failed.map((j) => j.id), push)
     return {
       ok: false,
       code: 1,
@@ -383,7 +414,7 @@ export async function runActionsBuild(
   // 6. Download the jar artifact through the REST API
   const dlDir = path.join(dir, '.agent', 'artifacts', String(runId))
   fs.mkdirSync(dlDir, { recursive: true })
-  const artifacts = await ghApi(ctx, `/repos/${cfg.owner}/${cfg.repo}/actions/runs/${runId}/artifacts`)
+  const artifacts = await ghApi(ctx, `/repos/${target.owner}/${target.repo}/actions/runs/${runId}/artifacts`)
   if (!artifacts.ok) return fail(`listing artifacts failed: ${artifacts.status}`, runUrl)
   const list = (artifacts.data?.artifacts ?? []) as { id: number; name: string; archive_download_url: string; expired: boolean }[]
   const artifact = list.find((a) => /jar/i.test(a.name)) ?? list[0]
@@ -431,49 +462,95 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms))
 }
 
+/**
+ * Fill in an owner and repo that were never set.
+ *
+ * A scaffolded project usually has both, because the user typed them when they
+ * created it. A fork of a decompiled mod does not: it was never created *for*
+ * GitHub. The signed-in account is the obvious owner and the folder name is a
+ * serviceable repo name, so the build proceeds instead of asking for settings
+ * the app can infer.
+ */
+export function resolveGithubTarget(
+  cfg: GhConfig,
+  dir: string,
+  login?: string
+): { owner: string; repo: string; inferred: boolean } {
+  const owner = (cfg.owner || login || '').trim()
+  const repo = (cfg.repo || suggestRepoName(path.basename(dir))).trim()
+  return { owner, repo, inferred: !cfg.owner || !cfg.repo }
+}
+
+/**
+ * Make sure `owner/repo` exists on GitHub, creating it when it does not.
+ *
+ * Shared by the build and by the explicit "create a repo" action: pressing
+ * **Build on GitHub** should not require a separate setup step first. Returns an
+ * error string rather than throwing, because the caller already knows how to
+ * report a failure in the build log.
+ */
+async function ensureGithubRepo(
+  ctx: GithubContext,
+  owner: string,
+  repo: string,
+  isPrivate: boolean,
+  push: (line: string) => void
+): Promise<{ ok: boolean; error?: string }> {
+  if (!owner || !repo) return { ok: false, error: 'Set the GitHub owner and repo in Settings → GitHub.' }
+  const exists = await ghApi(ctx, `/repos/${owner}/${repo}`)
+  if (exists.ok) return { ok: true }
+  if (exists.status !== 404) {
+    return { ok: false, error: `Cannot check ${owner}/${repo}: ${exists.status} ${exists.text.slice(0, 160)}` }
+  }
+  push(`[github] creating ${owner}/${repo}`)
+  const create = await ghApi(ctx, '/user/repos', {
+    method: 'POST',
+    body: JSON.stringify({
+      name: repo,
+      private: isPrivate,
+      description: 'Minecraft mod (MC Forge Agent)',
+      has_issues: true,
+      has_wiki: false
+    })
+  })
+  if (!create.ok) {
+    return { ok: false, error: `repo create failed: ${create.status} ${create.data?.message ?? create.text.slice(0, 200)}` }
+  }
+  push(`[github] created ${create.data?.full_name ?? `${owner}/${repo}`}`)
+  return { ok: true }
+}
+
 /** Create the GitHub repo (if needed) and push the current project. */
 export async function initGithubRepo(cfg: GhConfig, dir: string, isPrivate: boolean, onLine: (l: string) => void): Promise<{ ok: boolean; url?: string; error?: string }> {
   const push = onLine
-  if (!cfg.owner || !cfg.repo) return { ok: false, error: 'Owner and repo are required.' }
+  // A fork made from a decompiled mod arrives with no owner/repo filled in far
+  // more often than a scaffolded project does. The signed-in account is the
+  // owner in that case, and the mod id is a serviceable repo name, so this asks
+  // "owner and repo are required" far less often than it needs to.
   const ctx = await githubContext()
   if (!ctx.token) return { ok: false, error: 'Sign in to GitHub first (Settings > GitHub).' }
-
-  const exists = await ghApi(ctx, `/repos/${cfg.owner}/${cfg.repo}`)
-  if (!exists.ok && exists.status !== 404) {
-    return { ok: false, error: `Cannot check ${cfg.owner}/${cfg.repo}: ${exists.status} ${exists.text.slice(0, 160)}` }
-  }
-  if (exists.status === 404) {
-    push(`[github] creating ${cfg.owner}/${cfg.repo}`)
-    // `gh repo create owner/name` targets the signed-in user; the API takes the
-    // name and lets the account decide, which matches this behaviour.
-    const create = await ghApi(ctx, '/user/repos', {
-      method: 'POST',
-      body: JSON.stringify({
-        name: cfg.repo,
-        private: isPrivate,
-        description: 'Minecraft 1.21.1 NeoForge mod (MC Forge Agent)',
-        has_issues: true,
-        has_wiki: false
-      })
-    })
-    if (!create.ok) return { ok: false, error: `repo create failed: ${create.status} ${create.data?.message ?? create.text.slice(0, 200)}` }
-    push(`[github] created ${create.data?.full_name ?? `${cfg.owner}/${cfg.repo}`}`)
-  }
+  const resolved = resolveGithubTarget(cfg, dir, ctx.login)
+  if (resolved.inferred) push(`[github] using ${resolved.owner}/${resolved.repo} (from the signed-in account and the folder name)`)
+  const target = { ...cfg, owner: resolved.owner, repo: resolved.repo }
+  const ensured = await ensureGithubRepo(ctx, target.owner, target.repo, isPrivate, push)
+  if (!ensured.ok) return { ok: false, error: ensured.error ?? 'Could not create the repository.' }
 
   if (!fs.existsSync(path.join(dir, '.git'))) {
-    const init = await run('git', ['init', '-b', cfg.branch || 'main'], { cwd: dir, timeoutMs: 60000 })
+    // Before the first commit, so the decompiled tree and its jars never enter it.
+    ensureForkGitignore(dir)
+    const init = await run('git', ['init', '-b', target.branch || 'main'], { cwd: dir, timeoutMs: 60000 })
     if (init.code !== 0) return { ok: false, error: init.stderr.trim() }
   }
   const remotes = await run('git', ['remote'], { cwd: dir })
   if (!remotes.stdout.split(/\s+/).includes('origin')) {
-    await run('git', ['remote', 'add', 'origin', `https://github.com/${cfg.owner}/${cfg.repo}.git`], { cwd: dir })
+    await run('git', ['remote', 'add', 'origin', `https://github.com/${target.owner}/${target.repo}.git`], { cwd: dir })
   }
   await run('git', ['add', '-A'], { cwd: dir })
   await run('git', ['-c', 'user.name=MC Forge Agent', '-c', 'user.email=agent@localhost', 'commit', '-m', 'Initial mod project (MC Forge Agent)'], { cwd: dir })
-  const branch = cfg.branch || 'main'
+  const branch = target.branch || 'main'
   const pushed = await gitPush(ctx, dir, ['push', '-u', 'origin', `HEAD:${branch}`])
   if (pushed.code !== 0) return { ok: false, error: simplifyGitError(pushed.err || pushed.out, ctx) }
-  return { ok: true, url: `https://github.com/${cfg.owner}/${cfg.repo}` }
+  return { ok: true, url: `https://github.com/${target.owner}/${target.repo}` }
 }
 
 /** Turn git's auth failures into something a user can act on. */

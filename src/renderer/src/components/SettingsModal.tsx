@@ -543,7 +543,11 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
               </div>
               <div className="field">
                 <label>Repository</label>
-                <input value={draft.github.repo} onChange={(e) => set('github', { ...draft.github, repo: e.target.value })} placeholder="ruby-tools" />
+                <input
+                  value={draft.github.repo}
+                  onChange={(e) => set('github', { ...draft.github, repo: e.target.value })}
+                  placeholder="empty = your mod's folder name"
+                />
               </div>
             </div>
             <div className="field">
@@ -571,6 +575,10 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
               >
                 Create repo & push
               </button>
+              <div className="hint" style={{ flexBasis: '100%', marginTop: 4 }}>
+                Owner and repo can be left empty: the signed-in account becomes the owner and the project folder becomes
+                the repo name. A project made by decompiling a mod has never been pushed, and this creates it.
+              </div>
               {onOpenReferences && (
                 <button className="small ghost" onClick={onOpenReferences}>
                   Reference mods (decompiler)…

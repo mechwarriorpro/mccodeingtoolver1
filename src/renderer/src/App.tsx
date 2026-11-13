@@ -359,8 +359,17 @@ export default function App(): JSX.Element {
     await api.chat.autonomy(mode)
   }
 
+  /**
+   * Point the app at a project.
+   *
+   * This used to set `workspaceDir`, which is the project the mod was scaffolded
+   * *into*. Switching to a fork therefore forgot where the real project lived, and
+   * any screen still reading `workspaceDir` — the build, the agent — acted on the
+   * fork instead. `activeDir` says "what is open"; `workspaceDir` keeps saying
+   * "where this mod was made", and builds prefer the former.
+   */
   async function afterProjectChange(dir: string): Promise<void> {
-    const saved = await api.config.set({ workspaceDir: dir })
+    const saved = await api.config.set({ activeDir: dir })
     setConfig(saved)
     await refreshProject()
     setConsoleLines([])
@@ -405,6 +414,11 @@ export default function App(): JSX.Element {
             <>
               <div style={{ fontWeight: 600, marginBottom: 2 }}>{project.props?.mod_name}</div>
               <div style={{ fontSize: 11.5, color: 'var(--dim)', wordBreak: 'break-all' }}>{project.dir}</div>
+              {config?.activeDir && config.activeDir !== config.workspaceDir ? (
+                <div className="badge amber" style={{ marginTop: 6 }} title="Builds and the agent act on this folder">
+                  active: fork{config.workspaceDir ? ' · project is elsewhere' : ''}
+                </div>
+              ) : null}
               <div style={{ display: 'flex', gap: 5, marginTop: 7, flexWrap: 'wrap' }}>
                 <span className="badge">{project.props?.mod_id}</span>
                 <span className="badge">MC {project.props?.minecraft_version}</span>
@@ -423,6 +437,15 @@ export default function App(): JSX.Element {
                 <button className="small ghost" onClick={() => void api.game.openFolder()}>
                   Folder
                 </button>
+                {config?.activeDir && config.activeDir !== config.workspaceDir ? (
+                  <button
+                    className="small ghost"
+                    title="Go back to the project this mod was created in"
+                    onClick={() => void afterProjectChange('')}
+                  >
+                    Original project
+                  </button>
+                ) : null}
               </div>
             </>
           ) : (
@@ -554,7 +577,7 @@ export default function App(): JSX.Element {
               <>
                 <div className="card">
                   <h4>Reference mods</h4>
-                  <ReferencePanel project={project} onToast={toast} />
+                  <ReferencePanel project={project} onToast={toast} onOpenProject={(dir) => void afterProjectChange(dir)} />
                 </div>
                 <div className="card">
                   <h4>Editable forks</h4>

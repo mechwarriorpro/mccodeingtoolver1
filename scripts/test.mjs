@@ -16,6 +16,7 @@ const sources = [
   'src/main/mod/scaffold.ts',
   'src/main/build/gradle.ts',
   'src/main/build/actions.ts',
+  'src/main/build/repo.ts',
   'src/main/agent/tools.ts',
   'src/main/game/technic.ts',
   'src/main/mod/jar.ts',

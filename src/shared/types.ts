@@ -72,6 +72,16 @@ export interface AppConfig {
 
   /** Absolute path to the mod project folder on disk. */
   workspaceDir: string
+  /**
+   * The project currently on screen, when it is not `workspaceDir`.
+   *
+   * Opening a fork of a decompiled mod sets this, because a fork lives in its own
+   * folder under userData and is not the workspace a mod was scaffolded into.
+   * Builds read this first: pushing `workspaceDir` while the Build tab shows a
+   * fork is how "Not a git repository" appeared for a project that was open.
+   * Empty means "same as workspaceDir".
+   */
+  activeDir: string
 
   github: {
     owner: string

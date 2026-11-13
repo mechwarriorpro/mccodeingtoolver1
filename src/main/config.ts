@@ -31,6 +31,7 @@ const defaultConfig: AppConfig = {
   evolveMaxHeapMb: 1024,
   autonomy: 'review',
   workspaceDir: '',
+  activeDir: '',
   github: { owner: '', repo: '', branch: '' },
   javaPath: '',
   decompilerJar: '',
@@ -101,6 +102,26 @@ function deepMerge<T>(base: T, patch: unknown): T {
     out[key] = current && typeof current === 'object' && !Array.isArray(current) ? deepMerge(current, value) : value
   }
   return out as T
+}
+
+/**
+ * The folder the user is actually working in.
+ *
+ * `workspaceDir` was the only answer for a long time, and it is the wrong one
+ * once a fork from a decompiled mod is open: the fork lives under userData, in
+ * its own generated project, so a build that read `workspaceDir` acted on a
+ * different folder from the one on screen and reported "Not a git repository".
+ * Every build and project action goes through this now.
+ */
+export function activeProjectDir(cfg: AppConfig): string {
+  const active = (cfg.activeDir ?? '').trim()
+  if (!active) return cfg.workspaceDir
+  try {
+    if (fs.existsSync(active)) return active
+  } catch {
+    /* fall through to the workspace */
+  }
+  return cfg.workspaceDir
 }
 
 export function loadConfig(): AppConfig {

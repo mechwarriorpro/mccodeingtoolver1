@@ -17,7 +17,7 @@ import {
   setDiagLogPath,
   type DiagLevel
 } from '../diag'
-import { effectiveApiKey, effectiveBaseUrl, loadConfig, redactConfig, saveConfig, screenshotsDir, attachmentsDir } from '../config'
+import { activeProjectDir, effectiveApiKey, effectiveBaseUrl, loadConfig, redactConfig, saveConfig, screenshotsDir, attachmentsDir } from '../config'
 import type {
   AppConfig,
   ChatMessage,
@@ -150,6 +150,7 @@ import {
 } from '../update'
 import { isGradleProject, runLocalBuild, buildLogPath, findBuiltJar, gitSummary } from '../build/gradle'
 import { ghPreflight, initGithubRepo, runActionsBuild } from '../build/actions'
+import { repoState, suggestRepoName } from '../build/repo'
 import { readJarInfo, installJar } from '../mod/jar'
 import { detectTechnicInstances, buildTechnicPackZip, launchTechnic } from '../game/technic'
 import { gameStatus, launchDevClient, onGameLog, onGameStatus, readGameLog, stopGame } from '../game/launcher'
@@ -1260,10 +1261,30 @@ export function registerIpc(): void {
     return rest
   })
 
+  /**
+   * Open a fork as the project everything else acts on.
+   *
+   * It used to return the path and nothing else, so the agent, the build and the
+   * project summary all kept pointing at whatever `workspaceDir` was — which is
+   * how "Build on GitHub" could be pressed for a fork and act on a different
+   * folder, then report that the folder was not a git repository.
+   */
   ipcMain.handle('fork:open', (_e, id: string) => {
     const fork = getFork(id)
     if (!fork) return { ok: false, error: 'Unknown fork.' }
+    if (!fs.existsSync(fork.dir)) return { ok: false, error: `The fork folder is gone: ${fork.dir}` }
+    saveConfig({ activeDir: fork.dir })
+    resetSession()
     return { ok: true, dir: fork.dir }
+  })
+
+  /** Go back to the project the mod was scaffolded into. */
+  ipcMain.handle('project:activate', (_e, dir: string) => {
+    const target = (dir ?? '').trim()
+    if (target && !fs.existsSync(target)) return { ok: false, error: `No such folder: ${target}` }
+    saveConfig({ activeDir: target })
+    resetSession()
+    return { ok: true, dir: target || loadConfig().workspaceDir }
   })
 
   /** Read/write inside a fork, used by the reference panel's editor. */
@@ -1852,7 +1873,7 @@ export function registerIpc(): void {
 
   ipcMain.handle('project:summary', async () => {
     const cfg = loadConfig()
-    const ws = cfg.workspaceDir
+    const ws = activeProjectDir(cfg)
     if (!ws || !fs.existsSync(ws)) return { open: false }
     const props = parseProps(path.join(ws, 'gradle.properties'))
     const git = await gitSummary(ws).catch(() => ({ dirty: [], branch: null, remote: null }))
@@ -1895,9 +1916,10 @@ export function registerIpc(): void {
   // ---------------- build ----------------
   ipcMain.handle('build:local', async (_e, opts: { task?: 'build' | 'compileJava' } = {}) => {
     const cfg = loadConfig()
-    if (!cfg.workspaceDir) return { ok: false, error: 'No project open.' }
+    const dir = activeProjectDir(cfg)
+    if (!dir) return { ok: false, error: 'No project open.' }
     const res = await runLocalBuild({
-      workspaceDir: cfg.workspaceDir,
+      workspaceDir: dir,
       mode: 'local',
       javaPath: cfg.javaPath,
       preferWrapper: cfg.preferWrapper,
@@ -1910,23 +1932,51 @@ export function registerIpc(): void {
 
   ipcMain.handle('build:actions', async () => {
     const cfg = loadConfig()
-    if (!cfg.workspaceDir) return { ok: false, error: 'No project open.' }
-    const res = await runActionsBuild(cfg.github, cfg.workspaceDir, parseProps(path.join(cfg.workspaceDir, 'gradle.properties')).mod_id ?? 'mod', (line) =>
+    const dir = activeProjectDir(cfg)
+    if (!dir) return { ok: false, error: 'No project open.' }
+    const res = await runActionsBuild(cfg.github, dir, parseProps(path.join(dir, 'gradle.properties')).mod_id ?? 'mod', (line) =>
       send('build:line', { line })
     )
     send('build:done', res)
     return res
   })
 
-  ipcMain.handle('build:preflight', async () => ghPreflight(loadConfig().github, loadConfig().workspaceDir))
+  ipcMain.handle('build:preflight', async () => {
+    const cfg = loadConfig()
+    return ghPreflight(cfg.github, activeProjectDir(cfg))
+  })
   ipcMain.handle('build:logPath', () => buildLogPath())
   ipcMain.handle('build:openLog', async (_e, p: string) => {
     await shell.openPath(p)
   })
+  /**
+   * Whether the open project could be pushed, and what is missing if not.
+   *
+   * The Build tab asks this before offering "Build on GitHub", so the answer to a
+   * project that has no repository is a button that makes one — not a failure
+   * from four steps into a push.
+   */
+  ipcMain.handle('build:repoState', async () => {
+    const cfg = loadConfig()
+    const dir = activeProjectDir(cfg)
+    if (!dir) return { ok: false, state: 'no-repo' as const, message: 'No project open.', dir: '' }
+    const remotes = await run('git', ['remote'], { cwd: dir, timeoutMs: 20000 }).catch(() => null)
+    const check = repoState(dir, remotes && remotes.code === 0 ? remotes.stdout.split(/\s+/).filter(Boolean) : null)
+    const modId = parseProps(path.join(dir, 'gradle.properties')).mod_id ?? ''
+    return {
+      ok: true,
+      ...check,
+      // A repo name only matters when there is no remote yet; show what would be
+      // created rather than making the user guess.
+      suggestion: check.state === 'ready' ? undefined : suggestRepoName(cfg.github.repo || modId || 'minecraft-mod')
+    }
+  })
+
   ipcMain.handle('build:initRepo', async (_e, isPrivate: boolean) => {
     const cfg = loadConfig()
-    if (!cfg.workspaceDir) return { ok: false, error: 'No project open.' }
-    const res = await initGithubRepo(cfg.github, cfg.workspaceDir, isPrivate, (line) => send('build:line', { line }))
+    const dir = activeProjectDir(cfg)
+    if (!dir) return { ok: false, error: 'No project open.' }
+    const res = await initGithubRepo(cfg.github, dir, isPrivate, (line) => send('build:line', { line }))
     return res
   })
 

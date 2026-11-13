@@ -165,7 +165,9 @@ const api = {
     validate: (opts: unknown) => ipcRenderer.invoke('project:validate', opts),
     summary: () => ipcRenderer.invoke('project:summary'),
     readFile: (rel: string) => ipcRenderer.invoke('project:readFile', rel),
-    writeFile: (rel: string, content: string) => ipcRenderer.invoke('project:writeFile', rel, content)
+    writeFile: (rel: string, content: string) => ipcRenderer.invoke('project:writeFile', rel, content),
+    /** Make a folder the active project (empty = back to the scaffolded one). */
+    activate: (dir: string) => ipcRenderer.invoke('project:activate', dir)
   },
 
   dialog: {
@@ -183,6 +185,7 @@ const api = {
     actions: () => ipcRenderer.invoke('build:actions'),
     preflight: () => ipcRenderer.invoke('build:preflight'),
     initRepo: (isPrivate: boolean) => ipcRenderer.invoke('build:initRepo', isPrivate),
+    repoState: () => ipcRenderer.invoke('build:repoState'),
     openLog: (p: string) => ipcRenderer.invoke('build:openLog', p)
   },
 
