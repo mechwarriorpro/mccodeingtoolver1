@@ -61,7 +61,7 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.4.12 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.4.13 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
 > v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
 > decompiler picking a Java it could not run.
@@ -88,6 +88,10 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.4.13** fixes the catalogue reading a 1.12.2 project as NeoForge — `gradle.properties` has no
+> `loader` line there, and the default made the app offer Veil, Iris and Sodium on a version that predates
+> all three. Below 1.13 (and below 1.20.2) the loader is now Forge, so an old project is offered OptiFine and
+> the truth. It also fixes the update check.
 > **v0.4.12** adds the **Shaders** tab: the popular shader *packs* (Complementary, BSL, Photon, Bliss,
 > Rethinking Voxels, SEUS, MakeUp…) and the *rendering engines* (Iris, Oculus, Sodium, Embeddium, Flywheel,
 > Veil, OptiFine) are two separate, selectable lists — because they are routinely mixed up, and Sodium has no

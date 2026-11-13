@@ -47,7 +47,11 @@ export default function ShaderPanel({ onToast, onSend, onRecordLook }: Props): J
   const [useCase, setUseCase] = useState<UseCase>('looks')
   const [chosen, setChosen] = useState<string[]>([])
   const [notes, setNotes] = useState<CompatibilityNote[]>([])
-  const [showUnavailable, setShowUnavailable] = useState(false)
+  /** One disclosure per tab: opening it in the pack list must not open it in the engine list. */
+  const [showUnavailable, setShowUnavailable] = useState<{ packs: boolean; engines: boolean }>({
+    packs: false,
+    engines: false
+  })
   const [tab, setTab] = useState<'recommend' | 'packs' | 'engines'>('recommend')
   const [renderer, setRenderer] = useState<RendererInfo | null>(null)
 
@@ -99,11 +103,6 @@ export default function ShaderPanel({ onToast, onSend, onRecordLook }: Props): J
       allPacks.find((p) => p.id === bare)?.name ?? allEngines.find((e) => e.id === bare)?.name ?? bare
     )
   })
-
-  const nameOf = (id: string): string => {
-    const bare = id.replace(/^engine:/, '')
-    return allPacks.find((p) => p.id === bare)?.name ?? allEngines.find((e) => e.id === bare)?.name ?? bare
-  }
 
   return (
     <div>
@@ -213,10 +212,10 @@ export default function ShaderPanel({ onToast, onSend, onRecordLook }: Props): J
 
           {unavailablePacks.length > 0 && (
             <>
-              <button className="chip" onClick={() => setShowUnavailable((v) => !v)}>
-                {showUnavailable ? 'Hide' : 'Show'} {unavailablePacks.length} that will not run here
+              <button className="chip" onClick={() => setShowUnavailable((v) => ({ ...v, packs: !v.packs }))}>
+                {showUnavailable.packs ? 'Hide' : 'Show'} {unavailablePacks.length} that will not run here
               </button>
-              {showUnavailable &&
+              {showUnavailable.packs &&
                 unavailablePacks.map((p) => (
                   <div key={p.id} className="card">
                     <div className="row wrap">
@@ -266,10 +265,10 @@ export default function ShaderPanel({ onToast, onSend, onRecordLook }: Props): J
 
           {unavailableEngines.length > 0 && (
             <>
-              <button className="chip" onClick={() => setShowUnavailable((v) => !v)}>
-                {showUnavailable ? 'Hide' : 'Show'} {unavailableEngines.length} that do not support this version
+              <button className="chip" onClick={() => setShowUnavailable((v) => ({ ...v, engines: !v.engines }))}>
+                {showUnavailable.engines ? 'Hide' : 'Show'} {unavailableEngines.length} that do not support this version
               </button>
-              {showUnavailable &&
+              {showUnavailable.engines &&
                 unavailableEngines.map((e) => (
                   <div key={e.id} className="card">
                     <div className="row wrap">
