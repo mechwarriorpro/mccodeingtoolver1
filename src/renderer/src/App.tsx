@@ -10,10 +10,11 @@ import SettingsModal from './components/SettingsModal'
 import ReferencePanel from './components/ReferencePanel'
 import ForkPanel from './components/ForkPanel'
 import PortPanel from './components/PortPanel'
+import DiagPanel from './components/DiagPanel'
 import ClipPanel from './components/ClipPanel'
 import LearnPanel from './components/LearnPanel'
 
-type RailTab = 'game' | 'project' | 'files' | 'refs' | 'port' | 'clips' | 'learn'
+type RailTab = 'game' | 'project' | 'files' | 'refs' | 'port' | 'clips' | 'learn' | 'diag'
 
 export default function App(): JSX.Element {
   const [config, setConfig] = useState<(AppConfig & { apiKeySet: boolean }) | null>(null)
@@ -22,6 +23,8 @@ export default function App(): JSX.Element {
   const [activeConv, setActiveConv] = useState<string>('')
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [streaming, setStreaming] = useState('')
+  /** Live model reasoning, cleared each turn. Shown under the bubble when on. */
+  const [thinking, setThinking] = useState('')
   /** System remarks from main (retries, warnings) shown inline in the chat. */
   const [notices, setNotices] = useState<{ id: string; text: string }[]>([])
   const [status, setStatus] = useState<string>('idle')
@@ -86,6 +89,7 @@ export default function App(): JSX.Element {
         setBusy(true)
       }),
       api.events.onAgentText((p) => setStreaming((s) => s + p.text)),
+      api.diag.onThinking((p) => setThinking((t) => (t + p.text).slice(-6000))),
       // Main's own remarks, e.g. "the provider is busy, retrying". Shown in the
       // chat so a pause never looks like a hang, but never merged into the
       // model's answer.
@@ -144,6 +148,7 @@ export default function App(): JSX.Element {
       api.events.onResult((p) => {
         // End of run: drop the live buffer and show what main persisted.
         setStreaming('')
+        setThinking('')
         setBusy(false)
         setMessages((msgs) => {
           const copy = [...msgs]
@@ -191,6 +196,7 @@ export default function App(): JSX.Element {
   async function send(text: string, attachments: { path: string; name: string; kind: string; mediaType?: string }[]): Promise<void> {
     // Clear here, where the turn genuinely starts, rather than on a stream event.
     setStreaming('')
+    setThinking('')
     setNotices([])
     setBusy(true)
     setStatus('thinking')
@@ -341,6 +347,7 @@ export default function App(): JSX.Element {
         <ChatPanel
           messages={messages}
           streamingText={streaming}
+          liveThinking={thinking}
           notices={notices}
           liveLines={consoleLines.slice(-4)}
           hasKey={config.apiKeySet || config.provider === 'ollama'}
@@ -351,7 +358,12 @@ export default function App(): JSX.Element {
           permission={permission}
           onAutonomy={(m) => void setAutonomy(m)}
           onSend={send}
-          onStop={() => void api.chat.interrupt()}
+          onStop={() => {
+            // Stopping leaves the reasoning buffer mid-thought; clear it so the
+            // next turn does not open with the previous one's thoughts.
+            setThinking('')
+            void api.chat.interrupt()
+          }}
           onPermission={(id, allow, remember) => void api.chat.permission({ id, allow, remember })}
           onOpenImage={setLightbox}
         />
@@ -382,6 +394,13 @@ export default function App(): JSX.Element {
             </button>
             <button className={railTab === 'learn' ? 'on' : ''} onClick={() => setRailTab('learn')} title="Mistakes the app has learned from">
               Lessons
+            </button>
+            <button
+              className={railTab === 'diag' ? 'on' : ''}
+              onClick={() => setRailTab('diag')}
+              title="What the agent is doing, at three levels of detail"
+            >
+              Diagnostics
             </button>
           </div>
           <div className="rail-body">
@@ -416,6 +435,12 @@ export default function App(): JSX.Element {
                 onEditProject={(dir) => void afterProjectChange(dir)}
                 activeDir={project?.open ? project.dir : undefined}
               />
+            )}
+            {railTab === 'diag' && (
+              <div className="card">
+                <h4>Diagnostics</h4>
+                <DiagPanel onToast={toast} />
+              </div>
             )}
             {railTab === 'learn' && (
               <div className="card">

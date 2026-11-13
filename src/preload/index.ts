@@ -107,6 +107,19 @@ const api = {
     writeFile: (opts: unknown) => ipcRenderer.invoke('fork:writeFile', opts)
   },
 
+  /** Three-level diagnostic output, plus the rolling log file. */
+  diag: {
+    level: () => ipcRenderer.invoke('diag:level'),
+    setLevel: (value: number) => ipcRenderer.invoke('diag:setLevel', value),
+    history: () => ipcRenderer.invoke('diag:history'),
+    clear: () => ipcRenderer.invoke('diag:clear'),
+    exportText: () => ipcRenderer.invoke('diag:exportText'),
+    logPath: () => ipcRenderer.invoke('diag:logPath'),
+    openLog: () => ipcRenderer.invoke('diag:openLog'),
+    onEntry: (cb: (p: unknown) => void) => on('diag:entry', cb),
+    onThinking: (cb: (p: unknown) => void) => on('agent:thinking', cb)
+  },
+
   /** Updating an existing project to another version or loader. */
   port: {
     detect: (dir: string) => ipcRenderer.invoke('port:detect', dir),

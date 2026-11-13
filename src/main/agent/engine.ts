@@ -10,9 +10,12 @@ import { buildSystemPrompt } from './prompt'
 import { providerEnv, providerCaveats, providerById, type ProviderId } from '../providers'
 import { createAgentTools, readProps } from './tools'
 import { listReferences } from '../github/references'
+import { log, safeJson } from '../diag'
 
 export interface EngineEvents {
   onAssistantText: (text: string) => void
+  /** Model reasoning. Only emitted when the user has enabled thinking. */
+  onThinking: (text: string) => void
   /** A complete assistant text block (authoritative, replaces streaming scratch). */
   onAssistantBlock: (text: string) => void
   onToolStart: (trace: ToolTrace) => void
@@ -20,7 +23,15 @@ export interface EngineEvents {
   onPermissionRequest: (req: PermissionPrompt) => void
   onPermissionResolved: (id: string) => void
   onStatus: (status: 'idle' | 'thinking' | 'waiting-permission' | 'error', detail?: string) => void
-  onResult: (payload: { text: string; costUsd?: number; isError?: boolean; sessionId?: string; errorText?: string }) => void
+  onResult: (payload: {
+    text: string
+    costUsd?: number
+    isError?: boolean
+    sessionId?: string
+    errorText?: string
+    /** Succeeded but the model wrote nothing. */
+    empty?: boolean
+  }) => void
   onNotice: (text: string) => void
   onOutput: (line: string, source: 'build' | 'game') => void
   onGameStatus: (status: import('../../shared/types').GameStatus) => void
@@ -70,6 +81,10 @@ export class AgentSession {
   private stopped = false
   private events: EngineEvents
   private getInstanceId: () => string
+  /** Reasoning accumulated since the last tool call or text block. */
+  private thinking = ''
+  /** Last subagent seen, so a tool call can be attributed to it. */
+  private currentAgent = ''
 
   constructor(events: EngineEvents, autonomy: AutonomyMode, sessionId: string | undefined, getInstanceId: () => string) {
     this.events = events
@@ -241,9 +256,29 @@ export class AgentSession {
     }
     if (baseUrl) env.ANTHROPIC_BASE_URL = baseUrl
 
+    // Reasoning is off unless asked for: it costs tokens, and a model that is
+    // told to think on every turn is slower with no gain for simple edits.
+    //
+    // Only Anthropic-shaped endpoints accept the thinking parameter. Sending it
+    // to Ollama or a free gateway risks a hard 400 that would end every turn, so
+    // the switch is honoured where it works and reported where it does not
+    // rather than silently doing nothing.
+    const thinkingSupported = provider === 'anthropic'
+    const thinkingOn = thinkingSupported && !!cfg.showThinking && cfg.thinkingTokens > 0
+    if (cfg.showThinking && !thinkingSupported) {
+      log(
+        'provider',
+        'warn',
+        `thinking requested but ${providerById(provider).label} does not accept the thinking parameter`,
+        { provider, model },
+        1
+      )
+    }
+
     return {
       cwd: workspace,
       model: model || undefined,
+      ...(thinkingOn ? { maxThinkingTokens: cfg.thinkingTokens } : {}),
       systemPrompt: {
         type: 'preset',
         preset: 'claude_code',
@@ -338,15 +373,31 @@ export class AgentSession {
   }
 
   private handleMessage(msg: SDKMessage): void {
+    // Level 3: the raw SDK traffic. This is what turns "it said 0" into a
+    // readable transcript, so it is logged before any interpretation below.
+    log('sdk', msg.type === 'result' ? 'info' : 'raw', `${msg.type}${'subtype' in msg ? `:${(msg as { subtype?: string }).subtype ?? ''}` : ''}`, msg, 3)
+
     switch (msg.type) {
       case 'system':
         if (msg.subtype === 'init' && msg.session_id) this.sessionId = msg.session_id
+        if (msg.subtype === 'init') {
+          log('agent', 'info', 'session started', { sessionId: msg.session_id, model: (msg as { model?: string }).model }, 2)
+        }
         break
       case 'stream_event': {
         // incremental text deltas for a live typing effect
-        const ev = msg.event as { type?: string; delta?: { type?: string; text?: string } }
-        if (ev.type === 'content_block_delta' && ev.delta?.type === 'text_delta' && ev.delta.text) {
-          this.events.onAssistantText(ev.delta.text)
+        const ev = msg.event as {
+          type?: string
+          delta?: { type?: string; text?: string; thinking?: string }
+        }
+        if (ev.type === 'content_block_delta') {
+          if (ev.delta?.type === 'text_delta' && ev.delta.text) {
+            this.events.onAssistantText(ev.delta.text)
+          } else if (ev.delta?.type === 'thinking_delta' && ev.delta.thinking) {
+            this.thinking += ev.delta.thinking
+            this.events.onThinking(ev.delta.thinking)
+            log('stream', 'raw', 'thinking delta', { chars: ev.delta.thinking.length }, 3)
+          }
         }
         break
       }
@@ -358,16 +409,31 @@ export class AgentSession {
           .filter((b) => b.type === 'text' && b.text)
           .map((b) => b.text as string)
           .join('')
+        // Reasoning that arrived as a complete block rather than as deltas.
+        const thinkingBlocks = blocks
+          .filter((b) => b.type === 'thinking' && b.text)
+          .map((b) => b.text as string)
+          .join('')
+        if (thinkingBlocks && !this.thinking) this.thinking = thinkingBlocks
+
         if (textContent) this.events.onAssistantBlock(textContent)
         for (const block of blocks) {
           if (block.type === 'tool_use' && block.id && block.name) {
-            this.events.onToolStart({
+            const name = block.name.replace('mcp__mcfrogeagent__', '')
+            const trace = {
               id: block.id,
-              name: block.name.replace('mcp__mcfrogeagent__', ''),
+              name,
               input: block.input ?? {},
-              status: 'running',
-              startedAt: Date.now()
-            })
+              status: 'running' as const,
+              startedAt: Date.now(),
+              ...(this.thinking ? { thinking: this.thinking.trim() } : {}),
+              ...(this.currentAgent ? { agent: this.currentAgent } : {})
+            }
+            // Every tool call, with its arguments — level 2.
+            log('tool', 'info', `→ ${name}`, trace.input, 2, trace.agent ? `agent=${trace.agent}` : undefined)
+            this.events.onToolStart(trace)
+            // Reasoning belongs to the call it produced, not to the next one.
+            this.thinking = ''
           }
         }
         break
@@ -376,7 +442,9 @@ export class AgentSession {
         const blocks = (msg.message.content as { type: string; tool_use_id?: string; is_error?: boolean; content?: unknown }[]) ?? []
         for (const block of blocks) {
           if (block.type === 'tool_result' && block.tool_use_id) {
-            this.events.onToolEnd(block.tool_use_id, block.is_error ? 'error' : 'ok', typeof block.content === 'string' ? block.content.slice(0, 800) : undefined)
+            const detail = typeof block.content === 'string' ? block.content.slice(0, 800) : undefined
+            log('tool', block.is_error ? 'error' : 'debug', `← ${block.tool_use_id} ${block.is_error ? 'failed' : 'ok'}`, block.content, block.is_error ? 1 : 2)
+            this.events.onToolEnd(block.tool_use_id, block.is_error ? 'error' : 'ok', detail)
           }
         }
         break
@@ -384,12 +452,37 @@ export class AgentSession {
       case 'result': {
         const ok = msg.subtype === 'success'
         this.sessionId = msg.session_id
+        const durationMs = (msg as { duration_ms?: number }).duration_ms
+        const turns = (msg as { num_turns?: number }).num_turns
+        const raw = ok ? msg.result : (msg as { errors?: string[] }).errors?.join('\n') ?? ''
+        // A run that succeeded with nothing to say is a real state — the model
+        // called tools and stopped without prose. Saying so beats an empty bubble
+        // that looks like a crash, and at level 1+ it is written down.
+        const empty = ok && !String(raw ?? '').trim()
+        log(
+          'agent',
+          'info',
+          `run ${ok ? 'finished' : 'failed'}`,
+          { subtype: msg.subtype, durationMs, turns, costUsd: msg.total_cost_usd, empty, isError: msg.is_error },
+          1
+        )
+        if (empty) {
+          log(
+            'agent',
+            'warn',
+            'the run produced no text — the model stopped after its tool calls',
+            { sessionId: msg.session_id, turns, costUsd: msg.total_cost_usd },
+            1
+          )
+        }
         this.events.onResult({
-          text: ok ? msg.result : (msg as { errors?: string[] }).errors?.join('\n') ?? 'Run failed.',
+          text: empty ? 'The agent finished without writing a reply. Its tool calls above are the whole result.' : raw || 'Run failed.',
           costUsd: msg.total_cost_usd,
           isError: !ok || msg.is_error,
-          sessionId: msg.session_id
+          sessionId: msg.session_id,
+          empty
         })
+        this.thinking = ''
         this.busy = false
         this.events.onStatus('idle')
         break

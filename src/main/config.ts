@@ -10,6 +10,10 @@ const defaultConfig: AppConfig = {
   baseUrl: '',
   model: 'claude-sonnet-4-5-20250929',
   maxBudgetUsd: 5,
+  // Quiet by default: someone who has never opened a log should not be shown one.
+  diagLevel: 0,
+  showThinking: false,
+  thinkingTokens: 0,
   autonomy: 'review',
   workspaceDir: '',
   github: { owner: '', repo: '', branch: '' },

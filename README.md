@@ -61,7 +61,7 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.4.6 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.4.7 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
 > v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
 > decompiler picking a Java it could not run.
@@ -83,6 +83,8 @@ Settings or from GitHub's settings at any time.
 > it to another Minecraft version, another loader, or both — regenerating the build, carrying the
 > sources and assets across, keeping the mod id, and writing `MIGRATION.md` with the API work that
 > is genuinely left. The original is never touched.
+> **v0.4.7** adds three levels of diagnostic output (and a rolling `logs/agent.log`), lets you watch
+> how the agent thinks and codes, and fixes replies rendering as a bare `0`.
 >
 > From 0.3.0 on, the app updates itself: once you have it installed, new versions arrive
 > through GitHub releases without downloading the installer again.
@@ -345,10 +347,11 @@ src/main/
   versions/
     catalog.ts       live Minecraft/loader version catalog (24 h cache, offline fallbacks)
     eras.ts          per-era build files, metadata, Java level and starter source
+  diag.ts            three-level diagnostic log, ring buffer and rolling file
   update.ts          electron-updater wiring for GitHub releases
   learn.ts           mistake fingerprints, lessons and the error index
 template/neoforge-1.21.1/   vendored official MDK
-tests/                      offline tests for scaffold, build parsing, jar install, porting
+tests/                      offline tests for scaffold, build parsing, jar install, porting, diagnostics
 ```
 
 ## Tests
@@ -444,6 +447,46 @@ A fork of a 1.12.2 project is a **1.12.2 Gradle project**, even though the goal 
 - **Finish the upgrade properly**: update `minecraft_version`, the `loader`
   entry and the Gradle wrapper together, then delete `build/` — a stale
   `build.gradle` referencing ForgeGradle will fail even with the right JDK.
+
+## Diagnostics: three levels, and seeing how the agent works
+
+The **Diagnostics** tab records what the agent actually does. The levels are cumulative, and the
+point of having three is that the question changes as you get closer to a bug:
+
+| Level | What it records | When |
+| --- | --- | --- |
+| **Off** | nothing | the default |
+| **Errors** | only failures, plus each run's outcome | "it broke, tell me where" |
+| **Every step** | every tool call with its arguments and result, status changes, build and game output | "what did it do to my project" |
+| **Everything** | the above plus raw SDK traffic and streaming deltas | "it said `0` and I need to know why" |
+
+Everything from **Errors** up is also appended to `logs/agent.log` in the app's data folder, so
+evidence survives closing the window. **Copy for a bug report** puts the current buffer on the
+clipboard with app, Electron and Node versions at the top.
+
+### Seeing how it thinks
+
+Settings → Model → **Show how the agent thinks** lets the model reason before it acts, and shows
+that reasoning where it is useful: as a *why?* button on the tool call it produced, and as *show
+reasoning* on the reply itself. This is the difference between "it edited `ICBM.java`" and knowing
+that it did so because the registry event moved.
+
+Two honest limits:
+
+- It needs a token budget (Settings sets one, e.g. 4096). With a budget of 0 the model does not
+  think at all, and the panel says so rather than showing an empty box.
+- Only Anthropic-shaped endpoints accept the thinking parameter. On Ollama, Z.ai or OpenRouter the
+  setting is not sent — the app tells you so in Settings and logs a warning, instead of risking a
+  `400` that would end every turn. On those providers, the **Every step** level is how you see the
+  agent's work: every call, its arguments and its result.
+
+### The `0` bug this fixed
+
+Sometimes an assistant reply rendered as a lone `0`. The cause was a JSX guard of the form
+`{(text || m.tools?.length) && …}`: with no text and an empty tools array it evaluated to the number
+`0`, and React renders numbers. It now compares (`(m.tools?.length ?? 0) > 0`), and a test walks
+every `.tsx` file to make sure that shape cannot come back. A run that genuinely produces no prose
+now says so in words, and that case is logged at **Errors** level.
 
 ## Troubleshooting
 

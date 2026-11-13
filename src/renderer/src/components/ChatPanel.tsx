@@ -14,6 +14,8 @@ interface AttachmentDraft {
 interface Props {
   messages: ChatMessage[]
   streamingText: string
+  /** Model reasoning as it arrives; only shown when the user turned it on. */
+  liveThinking?: string
   /** System remarks from main (retries, warnings), shown inline. */
   notices?: { id: string; text: string }[]
   /** Last few build/game output lines, shown under the streaming bubble. */
@@ -86,6 +88,7 @@ function summarizeInput(name: string, input: Record<string, unknown>): string {
 export default function ChatPanel({
   messages,
   streamingText,
+  liveThinking = '',
   notices = [],
   liveLines,
   hasKey = true,
@@ -102,6 +105,8 @@ export default function ChatPanel({
 }: Props): JSX.Element {
   const [input, setInput] = useState('')
   const [drafts, setDrafts] = useState<AttachmentDraft[]>([])
+  /** Message id whose stored reasoning is expanded. */
+  const [openThinking, setOpenThinking] = useState<string | null>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -225,12 +230,18 @@ export default function ChatPanel({
                   <div className="meta">
                     {m.role === 'user' ? 'You' : 'Agent'}
                     {m.costUsd ? ` · $${m.costUsd.toFixed(3)}` : ''}
+                    {m.thinking?.trim() && (
+                      <button className="meta-why" onClick={() => setOpenThinking(openThinking === m.id ? null : m.id)}>
+                        {openThinking === m.id ? 'hide reasoning' : 'show reasoning'}
+                      </button>
+                    )}
                   </div>
-                  {(text || m.tools?.length) && (
+                  {openThinking === m.id && m.thinking?.trim() && <div className="msg-thinking">{m.thinking}</div>}
+                  {(text || (m.tools?.length ?? 0) > 0) && (
                     <div className="content">
                       {text ? <div dangerouslySetInnerHTML={{ __html: renderMarkdown(text) }} /> : null}
                       {m.tools?.map((t) => <ToolRow key={t.id} trace={t} />)}
-                      {isStreamingTarget && !text && !m.tools?.length && status === 'thinking' && (
+                      {isStreamingTarget && !text && !(m.tools?.length ?? 0) && status === 'thinking' && (
                         <span className="thinking-dots">
                           <i />
                           <i />
@@ -262,6 +273,15 @@ export default function ChatPanel({
               {n.text}
             </div>
           ))}
+
+          {/* Reasoning as it arrives. Only present when the user turned on
+              thinking in Settings — otherwise this component never gets text. */}
+          {busy && liveThinking.trim() && (
+            <div className="live-thinking">
+              <div className="live-thinking-head">Thinking</div>
+              {liveThinking.trim()}
+            </div>
+          )}
 
           {/* Live build/game output, inline: a build can take a minute and the
               chat should show it is doing something without a tab switch. */}
@@ -341,15 +361,28 @@ export default function ChatPanel({
 }
 
 function ToolRow({ trace }: { trace: ToolTrace }): JSX.Element {
+  const [showWhy, setShowWhy] = useState(false)
   const label = TOOL_LABEL[trace.name] ?? trace.name
+  // Reasoning is attached to the call it produced, which is the only place it
+  // means anything: "why did it edit this file" is answered next to the edit.
+  const hasWhy = !!trace.thinking?.trim()
   return (
-    <div className="tool-row">
-      <span className="name">{label}</span>
-      <span className="arg">{summarizeInput(trace.name, trace.input)}</span>
-      <span className={`state ${trace.status}`}>
-        {trace.status === 'running' ? '···' : trace.status === 'ok' ? 'done' : trace.status === 'error' ? 'failed' : 'denied'}
-      </span>
-    </div>
+    <>
+      <div className="tool-row">
+        <span className="name">{label}</span>
+        <span className="arg">{summarizeInput(trace.name, trace.input)}</span>
+        {trace.agent && <span className="agent-tag">{trace.agent}</span>}
+        {hasWhy && (
+          <button className="why" onClick={() => setShowWhy((v) => !v)} title="Why the model did this">
+            {showWhy ? 'hide reason' : 'why?'}
+          </button>
+        )}
+        <span className={`state ${trace.status}`}>
+          {trace.status === 'running' ? '···' : trace.status === 'ok' ? 'done' : trace.status === 'error' ? 'failed' : 'denied'}
+        </span>
+      </div>
+      {showWhy && hasWhy && <div className="tool-why">{trace.thinking}</div>}
+    </>
   )
 }
 

@@ -609,3 +609,70 @@ button.link:hover { color: var(--accent-2); }
 .port li { margin-bottom: 8px; }
 .port li .hint { margin-top: 2px; font-size: 11.5px; }
 .port code { font-size: 11.5px; word-break: break-all; }
+
+/* Diagnostics: three levels, then only what was recorded at that level */
+.diag { display: flex; flex-direction: column; gap: 10px; }
+.diag-levels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+.diag-level {
+  display: flex; flex-direction: column; gap: 2px; text-align: left;
+  padding: 7px 8px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--bg-3); color: var(--muted); cursor: pointer; font: inherit;
+}
+.diag-level b { font-size: 12px; color: var(--text); }
+.diag-level span { font-size: 10.5px; line-height: 1.25; color: var(--dim); }
+.diag-level:hover { border-color: var(--line-2); }
+.diag-level.on { border-color: #2b5b41; background: var(--accent-dim); }
+.diag-level.on b { color: var(--accent); }
+
+.diag-list {
+  max-height: 46vh; overflow-y: auto; border: 1px solid var(--line); border-radius: 9px;
+  background: var(--bg-3); padding: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.diag-row {
+  display: grid; grid-template-columns: 62px 52px 1fr auto; gap: 6px; align-items: baseline;
+  padding: 3px 5px; border-radius: 5px; font-size: 11px; cursor: pointer; line-height: 1.45;
+}
+.diag-row:hover { background: var(--bg-2); }
+.diag-row.open { background: var(--bg-2); }
+.diag-time { color: var(--dim); font-variant-numeric: tabular-nums; }
+.diag-src { font-size: 10px; text-transform: uppercase; letter-spacing: 0.03em; }
+.diag-label { color: var(--text); word-break: break-word; }
+.diag-note { color: var(--dim); font-size: 10px; }
+.diag-row.lvl1 .diag-label { color: var(--red); }
+.diag-detail {
+  grid-column: 1 / -1; margin: 4px 0 2px; padding: 6px 8px; max-height: 320px; overflow: auto;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 6px;
+  font-size: 10.5px; color: var(--muted); white-space: pre-wrap; word-break: break-word;
+}
+
+/* Why the agent did something — reasoning beside the action it produced */
+.tool-row .agent-tag {
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--amber); border: 1px solid #4a3d1e; background: #2a2312;
+  border-radius: 5px; padding: 1px 5px;
+}
+.tool-row button.why, .meta-why {
+  font-size: 10px; padding: 1px 6px; border-radius: 5px; cursor: pointer;
+  background: var(--bg-3); border: 1px solid var(--line); color: var(--dim);
+  font-family: inherit;
+}
+.tool-row button.why:hover, .meta-why:hover { color: var(--text); border-color: var(--line-2); }
+.meta-why { margin-left: 8px; }
+.tool-why, .msg-thinking {
+  margin: 2px 0 6px 10px; padding: 7px 10px;
+  border-left: 2px solid #2b4b6b; background: var(--bg-3);
+  border-radius: 0 7px 7px 0; color: var(--muted);
+  font-size: 11.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
+  max-height: 320px; overflow-y: auto;
+}
+.live-thinking {
+  align-self: stretch; margin: 0 0 10px; padding: 8px 11px;
+  border-left: 2px solid #2b4b6b; background: var(--bg-3);
+  border-radius: 0 7px 7px 0; color: var(--muted);
+  font-size: 11.5px; line-height: 1.55; white-space: pre-wrap;
+  max-height: 200px; overflow-y: auto;
+}
+.live-thinking-head {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--dim); margin-bottom: 3px;
+}

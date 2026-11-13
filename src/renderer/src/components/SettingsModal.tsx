@@ -339,6 +339,62 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
                 <input type="number" min={0} step={0.5} value={draft.maxBudgetUsd} onChange={(e) => set('maxBudgetUsd', Number(e.target.value))} />
                 <div className="hint">Only applies to paid models; a free tier cannot overspend.</div>
               </div>
+
+              <div className="field">
+                <label>Diagnostics</label>
+                <select
+                  value={draft.diagLevel}
+                  onChange={(e) => set('diagLevel', Number(e.target.value) as 0 | 1 | 2 | 3)}
+                >
+                  <option value={0}>Off — record nothing</option>
+                  <option value={1}>Errors — only what went wrong</option>
+                  <option value={2}>Every step — each tool call and its result</option>
+                  <option value={3}>Everything — plus raw provider traffic</option>
+                </select>
+                <div className="hint">
+                  Lives in the Diagnostics tab. Higher levels are slower and write more to the log; level 1 already
+                  writes each run's outcome to <code>logs/agent.log</code>, so a bug can be explained after the fact.
+                </div>
+              </div>
+
+              <div className="field">
+                <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <input
+                    type="checkbox"
+                    style={{ width: 'auto' }}
+                    checked={draft.showThinking}
+                    onChange={(e) => set('showThinking', e.target.checked)}
+                  />
+                  Show how the agent thinks
+                </label>
+                <div className="hint">
+                  Lets the model reason before it acts and shows that reasoning with the action it produced. Useful on a
+                  stubborn bug, slower and dearer on a paid model.
+                </div>
+                {draft.showThinking && (
+                  <input
+                    type="number"
+                    min={0}
+                    step={1024}
+                    value={draft.thinkingTokens}
+                    onChange={(e) => set('thinkingTokens', Number(e.target.value))}
+                    placeholder="thinking budget in tokens, e.g. 4096"
+                    style={{ marginTop: 6 }}
+                  />
+                )}
+                {draft.showThinking && draft.thinkingTokens <= 0 && (
+                  <div className="hint warn">
+                    A model only thinks when it is given a token budget. Set one above 0 or nothing will happen.
+                  </div>
+                )}
+                {draft.showThinking && draft.provider !== 'anthropic' && (
+                  <div className="hint warn">
+                    {providers.find((p) => p.id === draft.provider)?.label ?? draft.provider} does not accept the thinking parameter, so it
+                    is not sent. The Diagnostics tab still records every tool call and its arguments — that is how the
+                    agent works on a non-Claude model.
+                  </div>
+                )}
+              </div>
             </div>
             <div className="field">
               <label>Base URL override (optional)</label>

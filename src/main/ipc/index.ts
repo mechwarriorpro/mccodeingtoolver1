@@ -3,6 +3,20 @@ import fs from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
 import { AgentSession } from '../agent/engine'
+import {
+  attachDiagSink,
+  clearDiagHistory,
+  diagHistory,
+  diagLogPath,
+  getDiagLevel,
+  levelName,
+  log,
+  parseLevel,
+  safeJson,
+  setDiagLevel,
+  setDiagLogPath,
+  type DiagLevel
+} from '../diag'
 import { effectiveApiKey, effectiveBaseUrl, loadConfig, redactConfig, saveConfig, screenshotsDir, attachmentsDir } from '../config'
 import type {
   AppConfig,
@@ -163,6 +177,17 @@ function ensureSession(): AgentSession {
   session = new AgentSession(
     {
       onAssistantText: (text) => send('agent:text', { text }),
+      onThinking: (text) => {
+        // Kept out of the transcript unless the user asked to see it, but stored
+        // so the diagnostic panel and a saved conversation can show it later.
+        const conv = conversation()
+        const last = [...conv.messages].reverse().find((m) => m.role === 'assistant')
+        if (last) {
+          last.thinking = (last.thinking ?? '') + text
+          if (last.thinking.length > 20000) last.thinking = last.thinking.slice(-20000)
+        }
+        send('agent:thinking', { text })
+      },
       onAssistantBlock: (text) => {
         // Complete block: write it onto the assistant message so a cancelled stream
         // or a missed delta never loses the answer.
@@ -206,6 +231,9 @@ ${text}` : text
         if (last) {
           if (!last.text && payload.text) last.text = payload.text
           last.costUsd = payload.costUsd
+          // A run that wrote nothing still gets a sentence, so the conversation
+          // does not reopen as an empty bubble.
+          if (payload.empty && !last.text) last.text = payload.text
           // Prefer the classified sentence over the raw SDK text: the chat
           // should say what to do, not print a stack trace.
           if (payload.isError) last.error = payload.errorText || payload.text || 'The run failed.'
@@ -217,7 +245,12 @@ ${text}` : text
       // System remarks (retries, warnings) belong in the chat, but not as the
       // model's own words.
       onNotice: (text) => send('agent:notice', { text }),
-      onOutput: (line, source) => send('agent:output', { line, source }),
+      onOutput: (line, source) => {
+        // Build and game output is the first thing anyone asks about after "it
+        // did nothing", so level 2 writes it down with the rest.
+        log(source === 'build' ? 'build' : 'game', 'debug', line.trim(), undefined, 2)
+        send('agent:output', { line, source })
+      },
       onGameStatus: (status) => send('game:status', status)
     },
     cfg.autonomy,
@@ -232,6 +265,63 @@ function resetSession(): void {
 }
 
 export function registerIpc(): void {
+  /* --------------------------------------------------------- diagnostics */
+
+  // One rolling log per install, next to the config. Everything at level 1 and
+  // above lands here, so a report of "it said 0" can be backed by evidence after
+  // the window has closed.
+  const diagLog = path.join(app.getPath('userData'), 'logs', 'agent.log')
+  setDiagLogPath(diagLog)
+  setDiagLevel(parseLevel(loadConfig().diagLevel))
+  attachDiagSink({ onEntry: (entry) => send('diag:entry', entry), logPath: () => diagLog })
+
+  ipcMain.handle('diag:level', () => ({ level: getDiagLevel(), name: levelName(getDiagLevel()), logPath: diagLog }))
+
+  ipcMain.handle('diag:setLevel', (_e, value: unknown) => {
+    const level = parseLevel(value)
+    setDiagLevel(level)
+    saveConfig({ diagLevel: level })
+    return { level, name: levelName(level), logPath: diagLog }
+  })
+
+  ipcMain.handle('diag:history', () => diagHistory())
+
+  ipcMain.handle('diag:clear', () => {
+    clearDiagHistory()
+    return true
+  })
+
+  /** Everything currently buffered, as one text blob, for copying into a report. */
+  ipcMain.handle('diag:exportText', () => {
+    const header = [
+      `MC Forge Agent diagnostics — ${new Date().toISOString()}`,
+      `level ${getDiagLevel()} (${levelName(getDiagLevel())})`,
+      `app ${app.getVersion()} · electron ${process.versions.electron} · node ${process.versions.node} · ${process.platform} ${process.arch}`,
+      `log file: ${diagLog}`
+    ].join('\n')
+    const body = diagHistory()
+      .map((e) => {
+        const head = `[${new Date(e.at).toISOString()}] ${e.source.padEnd(8)} ${e.label}${e.note ? ` (${e.note})` : ''}`
+        return e.detail === undefined ? head : `${head}\n    ${safeJson(e.detail, 2000)}`
+      })
+      .join('\n')
+    return `${header}\n\n${body}\n`
+  })
+
+  ipcMain.handle('diag:logPath', () => diagLog)
+
+  ipcMain.handle('diag:openLog', async () => {
+    try {
+      fs.mkdirSync(path.dirname(diagLog), { recursive: true })
+      if (!fs.existsSync(diagLog)) fs.writeFileSync(diagLog, '', 'utf8')
+      return { ok: true, error: await shell.openPath(diagLog) }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  })
+
+  log('app', 'info', 'diagnostics ready', { logPath: diagLog, level: getDiagLevel() }, 2)
+
   ipcMain.handle('config:get', () => {
     const cfg = loadConfig()
     return { ...redactConfig(cfg), apiKeySet: !!effectiveApiKey() }
@@ -243,6 +333,9 @@ export function registerIpc(): void {
     if (patch.visionProviderKey && patch.visionProviderKey.startsWith('••')) delete patch.visionProviderKey
     const next = saveConfig(patch)
     if (patch.autonomy) session?.setAutonomy(next.autonomy)
+    // Turn the setting on the moment it is changed: waiting for a restart is how
+    // a diagnostic setting ends up never being used.
+    if (patch.diagLevel !== undefined) setDiagLevel(parseLevel(next.diagLevel))
     return { ...redactConfig(next), apiKeySet: !!effectiveApiKey() }
   })
 

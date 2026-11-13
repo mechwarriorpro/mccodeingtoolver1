@@ -16,6 +16,23 @@ import type {
 
 export type Loader = 'neoforge' | 'forge' | 'fabric'
 
+/** One line in the diagnostics panel. */
+export interface DiagEntry {
+  id: string
+  at: number
+  level: 0 | 1 | 2 | 3
+  source: 'agent' | 'sdk' | 'tool' | 'provider' | 'stream' | 'build' | 'game' | 'ipc' | 'app'
+  label: string
+  detail?: unknown
+  note?: string
+}
+
+export interface DiagState {
+  level: 0 | 1 | 2 | 3
+  name: 'off' | 'errors' | 'verbose' | 'trace'
+  logPath: string
+}
+
 export interface VersionChoice {
   id: string
   type: 'release' | 'snapshot' | 'old_beta' | 'old_alpha'
@@ -402,6 +419,17 @@ export interface McfApi {
     tree: (id: string) => Promise<{ path: string; dir: boolean }[]>
     readFile: (opts: { id: string; path: string }) => Promise<{ ok: boolean; text?: string; error?: string }>
     writeFile: (opts: { id: string; path: string; text: string }) => Promise<{ ok: boolean; error?: string }>
+  }
+  diag: {
+    level: () => Promise<DiagState>
+    setLevel: (value: number) => Promise<DiagState>
+    history: () => Promise<DiagEntry[]>
+    clear: () => Promise<boolean>
+    exportText: () => Promise<string>
+    logPath: () => Promise<string>
+    openLog: () => Promise<{ ok: boolean; error?: string }>
+    onEntry: (cb: (p: DiagEntry) => void) => () => void
+    onThinking: (cb: (p: { text: string }) => void) => () => void
   }
   port: {
     detect: (dir: string) => Promise<{ ok: boolean; project?: DetectedProject; error?: string }>

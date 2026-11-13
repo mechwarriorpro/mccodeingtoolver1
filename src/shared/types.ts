@@ -29,6 +29,15 @@ export interface AppConfig {
   model: string
   /** Max USD budget for a single agent run (0 = unlimited). */
   maxBudgetUsd: number
+  /**
+   * Diagnostic detail: 0 off, 1 errors only, 2 every agent step, 3 everything
+   * including raw provider traffic.
+   */
+  diagLevel: 0 | 1 | 2 | 3
+  /** Let the model think before acting, and show the reasoning when diag is on. */
+  showThinking: boolean
+  /** Token budget for that thinking (0 = the provider's default). */
+  thinkingTokens: number
   /** Default autonomy for new conversations. */
   autonomy: AutonomyMode
 
@@ -142,6 +151,8 @@ export interface ChatMessage {
   tools?: ToolTrace[]
   error?: string
   costUsd?: number
+  /** Model reasoning for this message, shown only when the user asks for it. */
+  thinking?: string
 }
 
 export interface ToolTrace {
@@ -152,6 +163,10 @@ export interface ToolTrace {
   detail?: string
   startedAt: number
   endedAt?: number
+  /** Reasoning the model produced before this call, when thinking is on. */
+  thinking?: string
+  /** The agent (subagent name) that made the call; empty for the coordinator. */
+  agent?: string
 }
 
 export interface Conversation {
