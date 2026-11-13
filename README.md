@@ -62,7 +62,7 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.4.17 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.4.18 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
 > v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
 > decompiler picking a Java it could not run.
@@ -89,6 +89,14 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.4.18** makes the Pack tab do the thing it was actually for: **update one mod and bring its dependencies
+> with it**. Pick the mod jar you are updating to; the dependencies *that build* declares are looked for in the
+> pack's `mods` folder, and the ones already there come along — decompiled, so the agent can read the API it is
+> compiling against — **without being downloaded again**. Only a dependency that is absent, or present in a
+> version the new build will not accept, is fetched. Also fixes the scan that reported **"0 mods, every
+> dependency present"**: a folder whose jars could not be parsed now says so, and names the jars; the scan reads
+> subfolders (`mods/1.21.1/`); and pre-1.13 packs are read from `mcmod.info`, which is where old Forge jars keep
+> their metadata instead of `mods.toml`.
 > **v0.4.17** adds the **Pack** tab: update the mods in a whole modpack without breaking it. Point it at a pack's
 > `mods` folder — or the pack folder that holds one — and it reads every jar's declared dependencies from its own
 > metadata and checks them **against the folder first**. A pack that runs already contains its libraries, so the
@@ -507,8 +515,19 @@ a half-migrated mod is the last thing you want to be holding the only copy of.
 
 The **Pack** tab updates mods inside a pack that already runs.
 
-Pick the pack's `mods` folder, or the pack folder itself and it will find the
-`mods` folder inside. Every jar is read the way the loader reads it —
+**Updating one mod brings its dependencies with it.** Pick the pack's `mods` folder
+(or the pack folder itself), then press **Update a mod…** and choose the jar you
+are moving to. The dependencies *that build* declares are read from its own
+metadata and looked for in the folder. Each one is reported with what will happen
+to it:
+
+- **in folder** — a compatible copy is already there. Nothing is downloaded; it is
+  decompiled so the agent can read the code the updated mod calls.
+- **download** — absent, or too old for the new build. This is the only case that
+  reaches the network, and the newer jar replaces the old copy.
+
+Older packs are not left out: pre-1.13 Forge jars keep their metadata in
+`mcmod.info` rather than `mods.toml`, and that is read too. Every jar is read the way the loader reads it —
 `META-INF/neoforge.mods.toml`, `META-INF/mods.toml` or `fabric.mod.json` — and the
 dependencies each one *declares* are collected, with their version ranges.
 

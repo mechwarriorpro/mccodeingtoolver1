@@ -154,7 +154,7 @@ import { repoState, suggestRepoName } from '../build/repo'
 import { scanDependencies } from '../mod/deps'
 import { declareJarDependency, findCandidates, findVersionFile, identifyFiles, libsDir, newestVersionFor, projectInfo, sha1Of } from '../mod/dep-resolve'
 import type { PackMod } from '../mod/modpack'
-import { adoptJar, describeScan, packVersions, planUpdate, previewAdoption, readModJar, removeJar, resolveModsDir, scanModsFolder } from '../mod/modpack'
+import { adoptJar, describeScan, displayNames, packVersions, planModUpdate, planUpdate, previewAdoption, readModJar, removeJar, resolveModsDir, scanModsFolder } from '../mod/modpack'
 import { readJarInfo, installJar } from '../mod/jar'
 import { detectTechnicInstances, buildTechnicPackZip, launchTechnic } from '../game/technic'
 import { gameStatus, launchDevClient, onGameLog, onGameStatus, readGameLog, stopGame } from '../game/launcher'
@@ -1619,6 +1619,183 @@ export function registerIpc(): void {
     const res = previewAdoption(scan, opts.jar)
     if (!res.ok) return { ok: false, error: res.error }
     return { ok: true, replaces: res.replaces, plan: res.plan, versions: packVersions(scan) }
+  })
+
+  /**
+   * The real update flow: one mod chosen, its dependencies found in the folder.
+   *
+   * Given the jar the user wants to update to, this reads the dependencies *that
+   * build* declares, finds each one in the pack, and works out what has to come
+   * with it. A dependency already in the folder at an acceptable version is
+   * listed as ready — it only needs decompiling if the user wants to read it. One
+   * that is present but too old, or absent, gets a target build to download.
+   */
+  ipcMain.handle(
+    'pack:updatePlan',
+    async (_e, opts: { dir: string; incomingJar: string; decompile?: boolean }) => {
+      const scan = scanModsFolder(opts.dir)
+      const res = planModUpdate(scan, opts.incomingJar)
+      if (!res.ok || !res.preview) return { ok: false, error: res.error, dependencies: [] }
+      const { mcVersion, loader } = packVersions(scan)
+      const names = displayNames(scan)
+
+      // Identify the jars already in the folder by hash, so a dependency that is
+      // only known by mod id can still be matched to a Modrinth project. The file
+      // name is never trusted for this.
+      const present = res.preview.dependencies.filter((d) => d.path)
+      const hashes = await Promise.all(present.map(async (d) => ({ path: d.path ?? '', hash: (await sha1Of(d.path ?? '')) ?? '' })))
+      const identified = await identifyFiles(hashes.filter((h) => h.hash))
+      const projectOf = new Map<string, string>()
+      if (identified.ok) for (const f of identified.found) if (f.path && f.projectId) projectOf.set(f.path, f.projectId)
+
+      const dependencies = await Promise.all(
+        res.preview.dependencies.map(async (d) => {
+          const display = names[d.modId] ?? d.modId
+          // A missing dependency has no jar to hash; search for it by name.
+          if (!d.path) {
+            const found = mcVersion && loader ? await findCandidates({ package: d.modId, name: display }, { mcVersion, loader }) : { ok: false, candidates: [] }
+            const best = found.ok ? found.candidates[0] : undefined
+            const file = best?.projectId ? await findVersionFile(best.projectId, { mcVersion: mcVersion ?? '', loader: loader ?? '' }) : { ok: false }
+            return {
+              ...d,
+              displayName: display,
+              action: 'download' as const,
+              reason: d.problem ?? 'not in this folder',
+              target: file.ok && file.file ? { name: file.file.name, url: file.file.url, version: file.file.versionNumber, projectId: best?.projectId } : undefined
+            }
+          }
+          if (!d.needsNewer) {
+            return { ...d, displayName: display, action: 'keep' as const, reason: `already here and compatible (${d.version ?? 'version unknown'})` }
+          }
+          // Present but too old: upgrade *this* jar rather than adding a second copy.
+          const projectId = projectOf.get(d.path)
+          const newest = projectId && mcVersion && loader ? await newestVersionFor(projectId, { mcVersion, loader }) : null
+          return {
+            ...d,
+            displayName: display,
+            action: 'download' as const,
+            reason: d.problem ?? 'too old for the updated mod',
+            target: newest ? { name: newest.file.name, url: newest.file.url, version: newest.versionNumber, projectId } : undefined
+          }
+        })
+      )
+
+      return {
+        ok: true,
+        preview: res.preview,
+        dependencies,
+        download: dependencies.filter((d) => d.action === 'download'),
+        keep: dependencies.filter((d) => d.action === 'keep'),
+        versions: { mcVersion, loader }
+      }
+    }
+  )
+
+  /**
+   * Apply that plan: fetch the newer dependency jars, replace the old copies, and
+   * decompile the results so the agent can read the code the updated mod calls.
+   *
+   * Downloads happen here and nowhere earlier. A jar is only replaced after the
+   * new file is on disk, and a decompile failure never undoes a successful
+   * update — it is reported per mod.
+   */
+  ipcMain.handle(
+    'pack:updateApply',
+    async (
+      _e,
+      opts: {
+        dir: string
+        items: { modId: string; url: string; name: string; replacePath?: string }[]
+        decompile?: boolean
+        /** The updated mod's own jar, decompiled alongside its dependencies. */
+        modJar?: string
+        sourcesDir?: string
+      }
+    ) => {
+      const { dir } = resolveModsDir(opts.dir)
+      const results: { modId: string; ok: boolean; error?: string; path?: string; replaced?: string; sources?: string; sourcesError?: string }[] = []
+      const outRoot = opts.sourcesDir || path.join(path.dirname(dir), 'reference-deps')
+      for (const item of opts.items ?? []) {
+        if (!/^https:\/\//i.test(item.url)) {
+          results.push({ modId: item.modId, ok: false, error: 'Only https downloads are allowed.' })
+          continue
+        }
+        try {
+          const res = await fetch(item.url, { headers: { 'User-Agent': 'MC-Forge-Agent' } })
+          if (!res.ok) {
+            results.push({ modId: item.modId, ok: false, error: `Download failed: HTTP ${res.status}` })
+            continue
+          }
+          const data = Buffer.from(await res.arrayBuffer())
+          const target = path.join(dir, path.basename(item.name))
+          fs.writeFileSync(target, data)
+          let replaced: string | undefined
+          if (item.replacePath && path.resolve(item.replacePath) !== path.resolve(target) && fs.existsSync(item.replacePath)) {
+            // Only after the new jar is safely written.
+            if (removeJar(item.replacePath).ok) replaced = path.basename(item.replacePath)
+          }
+          const entry: (typeof results)[number] = { modId: item.modId, ok: true, path: target, replaced }
+          if (opts.decompile) {
+            try {
+              const { decompileJar } = await import('../github/references')
+              const dest = path.join(outRoot, path.basename(target, '.jar'))
+              const job = await decompileJar(target, dest, { javaPath: loadConfig().javaPath })
+              if (job.ok) entry.sources = job.sourcesDir ?? dest
+              else entry.sourcesError = job.error ?? 'the decompiler produced nothing'
+            } catch (e) {
+              entry.sourcesError = (e as Error).message
+            }
+          }
+          results.push(entry)
+        } catch (e) {
+          results.push({ modId: item.modId, ok: false, error: (e as Error).message })
+        }
+      }
+      // The updated mod itself, if it was given: decompiled for the agent, but
+      // not copied into mods/ — that is `pack:adopt`'s job, so a half-finished
+      // dependency update cannot leave the pack launching an unread mod.
+      if (opts.decompile && opts.modJar && fs.existsSync(opts.modJar)) {
+        try {
+          const { decompileJar } = await import('../github/references')
+          const dest = path.join(outRoot, path.basename(opts.modJar, '.jar'))
+          const job = await decompileJar(opts.modJar, dest, { javaPath: loadConfig().javaPath })
+          results.push({ modId: 'self', ok: job.ok, path: opts.modJar, sources: job.sourcesDir, sourcesError: job.ok ? undefined : job.error })
+        } catch (e) {
+          results.push({ modId: 'self', ok: false, path: opts.modJar, error: (e as Error).message })
+        }
+      }
+      return {
+        ok: results.every((r) => r.ok),
+        results,
+        sourcesDir: opts.decompile ? outRoot : undefined
+      }
+    }
+  )
+
+  /**
+   * Decompile jars that are already in the pack, without touching them.
+   *
+   * This is what makes "update one mod and bring its dependencies" work inside a
+   * folder that already has every library: nothing is downloaded, the jars are
+   * just made readable under `reference-deps/` next to the pack.
+   */
+  ipcMain.handle('pack:decompile', async (_e, opts: { dir: string; jars: string[]; sourcesDir?: string }) => {
+    const { dir } = resolveModsDir(opts.dir)
+    const outRoot = opts.sourcesDir || path.join(path.dirname(dir), 'reference-deps')
+    const { decompileJar } = await import('../github/references')
+    const javaPath = loadConfig().javaPath
+    let done = 0
+    const failed: { jar: string; error?: string }[] = []
+    for (const jar of (opts.jars ?? []).filter(Boolean)) {
+      if (!fs.existsSync(jar)) {
+        failed.push({ jar, error: 'no longer there' })
+        continue
+      }
+      const job = await decompileJar(jar, path.join(outRoot, path.basename(jar, '.jar')), { javaPath })
+      if (job.ok) done++
+      else failed.push({ jar, error: job.error ?? 'the decompiler produced nothing' })
+    }
+    return { ok: failed.length === 0, done, failed, sourcesDir: outRoot }
   })
 
   /**

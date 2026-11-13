@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, type PackScan, type PackUpdate, type UpdatePlan } from '../lib/api'
+import { api, type PackDependencyAction, type PackScan, type PackUpdate, type UpdatePlan } from '../lib/api'
 
 interface Props {
   onToast: (text: string, kind?: 'ok' | 'err') => void
@@ -41,6 +41,22 @@ export default function PackPanel({ onToast }: Props): JSX.Element {
   /** Compiled against the folder for one mod, shown before anything is downloaded. */
   const [plan, setPlan] = useState<{ file: string; plan: UpdatePlan; replaces?: string } | null>(null)
   const [working, setWorking] = useState<string | null>(null)
+
+  /**
+   * The one-mod flow: choose the jar you are updating to, see which of *its*
+   * dependencies are already in this folder, then bring the rest along with it.
+   */
+  const [modPlan, setModPlan] = useState<{
+    jar: string
+    modId?: string
+    name?: string
+    replaces?: string
+    summary: string
+    dependencies: PackDependencyAction[]
+  } | null>(null)
+  const [includeDeps, setIncludeDeps] = useState(true)
+  const [decompile, setDecompile] = useState(true)
+  const [applied, setApplied] = useState<{ modId: string; ok: boolean; error?: string; replaced?: string; sources?: string; sourcesError?: string }[]>([])
 
   const load = useCallback(async (chosen: string) => {
     setBusy(true)
@@ -90,6 +106,99 @@ export default function PackPanel({ onToast }: Props): JSX.Element {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
+    }
+  }
+
+  /**
+   * Choose the mod being updated to, and ask the folder what it already has.
+   *
+   * This is the flow the feature exists for: the jar you are moving to names its
+   * own dependencies, and every one of those is looked for *in the pack* before
+   * any download is considered.
+   */
+  async function planMod(): Promise<void> {
+    if (!scan) return
+    const [jar] = await api.dialog.pickFiles({
+      title: 'Choose the mod jar you are updating to',
+      filters: [{ name: 'Mod jar', extensions: ['jar'] }]
+    })
+    if (!jar) return
+    setBusy(true)
+    setError('')
+    setApplied([])
+    try {
+      const res = await api.pack.updatePlan({ dir: scan.dir, incomingJar: jar })
+      if (!res.ok || !res.preview) {
+        onToast(res.error ?? 'Could not read that jar.', 'err')
+        return
+      }
+      setModPlan({
+        jar,
+        modId: res.preview.modId,
+        name: res.preview.name,
+        replaces: res.preview.replaces,
+        summary: res.preview.summary,
+        dependencies: res.dependencies ?? []
+      })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /**
+   * Bring the dependencies along, then the mod itself.
+   *
+   * Only the ones the folder cannot satisfy are downloaded. The compatible ones
+   * are already there — they get decompiled in place, so the agent can read the
+   * API it is compiling against without a download that would duplicate them.
+   */
+  async function applyMod(): Promise<void> {
+    if (!scan || !modPlan) return
+    const toFetch = modPlan.dependencies.filter((d) => d.action === 'download' && d.target)
+    const toDecompile = includeDeps ? modPlan.dependencies.filter((d) => d.action === 'keep' && d.path) : []
+    setWorking(modPlan.jar)
+    try {
+      if (toFetch.length) {
+        const res = await api.pack.updateApply({
+          dir: scan.dir,
+          decompile: decompile,
+          modJar: modPlan.jar,
+          items: toFetch.map((d) => ({
+            modId: d.modId,
+            url: d.target?.url ?? '',
+            name: d.target?.name ?? '',
+            replacePath: d.path
+          }))
+        })
+        setApplied(res.results)
+        const failed = res.results.filter((r) => !r.ok)
+        if (failed.length) {
+          onToast(
+            `${failed.length} dependenc${failed.length === 1 ? 'y' : 'ies'} could not be updated: ${failed.map((f) => f.modId).join(', ')}`,
+            'err'
+          )
+        } else {
+          onToast(`Updated ${toFetch.length} dependenc${toFetch.length === 1 ? 'y' : 'ies'} alongside ${modPlan.modId ?? 'the mod'}`)
+        }
+      } else if (modPlan.replaces) {
+        // Nothing to fetch: the folder already satisfies the new build, so the
+        // only thing left is to put the updated jar in.
+        const res = await api.pack.adopt({ dir: scan.dir, from: modPlan.jar, replace: true })
+        if (!res.ok) onToast(res.error ?? 'Could not place the updated jar', 'err')
+        else onToast(`${modPlan.modId ?? 'The mod'} updated; every dependency it needs was already in the folder.`)
+      }
+
+      if (toDecompile.length) {
+        const res = await api.pack.decompile({
+          dir: scan.dir,
+          jars: toDecompile.map((d) => d.path ?? '')
+        })
+        if (res.ok) onToast(`Decompiled ${res.done ?? toDecompile.length} dependenc${toDecompile.length === 1 ? 'y' : 'ies'} the folder already had.`)
+      }
+      setModPlan(null)
+      await load(dir)
+    } finally {
+      setWorking(null)
     }
   }
 
@@ -159,15 +268,20 @@ export default function PackPanel({ onToast }: Props): JSX.Element {
   return (
     <div>
       <p className="muted small">
-        Point this at a modpack&apos;s <code>mods</code> folder — or at the pack folder itself. Every jar is read for the
-        dependencies it declares, and those dependencies are looked for <b>in the folder first</b>. A pack that runs
-        already holds them, so an update normally needs nothing downloaded.
+        Choose a modpack&apos;s <code>mods</code> folder — or the pack folder itself. Then pick the mod you are
+        updating to: its dependencies are looked for <b>in this folder first</b>, and the ones already here come along
+        with it — decompiled, so the code can be read — without being downloaded again.
       </p>
 
       <div className="row wrap">
         <button className="small primary" disabled={busy} onClick={() => void pick()}>
           {busy && !scan ? 'Reading…' : scan ? 'Choose another folder' : 'Choose a mods folder'}
         </button>
+        {scan && (
+          <button className="small primary" disabled={busy} onClick={() => void planMod()}>
+            Update a mod…
+          </button>
+        )}
         {scan && (
           <button className="small" disabled={busy} onClick={() => void checkUpdates()}>
             {busy ? 'Checking…' : 'Check for mod updates'}
@@ -234,6 +348,70 @@ export default function PackPanel({ onToast }: Props): JSX.Element {
               </span>
               <span className="muted small">wanted by {m.requiredBy.join(', ')}</span>
             </div>
+          ))}
+        </div>
+      )}
+
+      {modPlan && (
+        <div className="card">
+          <div className="row wrap">
+            <b>Updating {modPlan.name ?? modPlan.modId ?? 'this mod'}</b>
+            {modPlan.modId && <span className="chip">{modPlan.modId}</span>}
+            {modPlan.replaces && <span className="chip">replaces {modPlan.replaces}</span>}
+          </div>
+          <p className="muted small" style={{ marginTop: 4 }}>
+            {modPlan.summary}
+          </p>
+
+          {modPlan.dependencies.length > 0 && (
+            <div style={{ marginTop: 6 }}>
+              {modPlan.dependencies.map((d) => (
+                <div key={d.modId} className="row wrap" style={{ marginTop: 3 }}>
+                  <span className={d.action === 'keep' ? 'chip on' : 'chip'}>{d.action === 'keep' ? 'in folder' : 'download'}</span>
+                  <b>{d.displayName}</b>
+                  {d.version && <span className="muted small">{d.version}</span>}
+                  {d.versionRange && <span className="muted small">wants {d.versionRange}</span>}
+                  <span className={d.action === 'keep' ? 'muted small' : 'warn small'}>{d.reason}</span>
+                  {d.action === 'download' && !d.target && <span className="warn small">· no build found for this version</span>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          <label className="chk" style={{ marginTop: 8, display: 'flex' }}>
+            <input type="checkbox" checked={includeDeps} onChange={(e) => setIncludeDeps(e.target.checked)} />
+            Bring the dependencies in this folder along
+          </label>
+          <label className="chk" style={{ marginTop: 4, display: 'flex' }}>
+            <input type="checkbox" checked={decompile} onChange={(e) => setDecompile(e.target.checked)} />
+            Decompile them so the code can be read
+          </label>
+
+          <div className="row wrap" style={{ marginTop: 8 }}>
+            <button className="small primary" disabled={working === modPlan.jar} onClick={() => void applyMod()}>
+              {working === modPlan.jar
+                ? 'Working…'
+                : modPlan.dependencies.some((d) => d.action === 'download')
+                  ? `Update mod and ${modPlan.dependencies.filter((d) => d.action === 'download').length} dependenc${modPlan.dependencies.filter((d) => d.action === 'download').length === 1 ? 'y' : 'ies'}`
+                  : 'Update the mod — every dependency is already here'}
+            </button>
+            <button className="small ghost" onClick={() => setModPlan(null)}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+
+      {applied.length > 0 && (
+        <div className="card">
+          <b>What happened</b>
+          {applied.map((r) => (
+            <p key={r.modId} className={r.ok ? 'muted small' : 'warn small'} style={{ marginTop: 3 }}>
+              {r.modId === 'self' ? 'the mod itself' : r.modId}: {r.ok ? 'updated' : (r.error ?? 'failed')}
+              {r.replaced ? ` (replaced ${r.replaced})` : ''}
+              {r.sources ? ` · sources in ${r.sources}` : ''}
+              {r.sourcesError ? ` · could not decompile: ${r.sourcesError}` : ''}
+            </p>
           ))}
         </div>
       )}

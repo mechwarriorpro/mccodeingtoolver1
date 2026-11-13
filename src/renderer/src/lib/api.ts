@@ -589,6 +589,27 @@ export interface PackIdentified {
 }
 
 /** One mod that has a newer build for the pack's own game version. */
+/**
+ * One dependency of a mod being updated, and what has to happen to it.
+ *
+ * `keep` means the folder already has a compatible copy — the only decision left
+ * is whether to decompile it. `download` means it is absent or too old, which is
+ * the *only* case that reaches the network.
+ */
+export interface PackDependencyAction {
+  modId: string
+  displayName: string
+  versionRange?: string
+  path?: string
+  file?: string
+  version?: string
+  needsNewer: boolean
+  problem?: string
+  action: 'keep' | 'download'
+  reason: string
+  target?: { name: string; url: string; version?: string; projectId?: string }
+}
+
 export interface PackUpdate {
   path: string
   file: string
@@ -911,6 +932,46 @@ export interface McfApi {
       updates: PackUpdate[]
       scanned?: number
       unidentified?: number
+    }>
+    /**
+     * The real flow: one mod chosen to update, and the dependencies its new build
+     * needs, each resolved against the folder first.
+     */
+    updatePlan: (opts: { dir: string; incomingJar: string }) => Promise<{
+      ok: boolean
+      error?: string
+      preview?: {
+        modId?: string
+        name?: string
+        version?: string
+        replaces?: string
+        dependencies: unknown[]
+        needNewer: unknown[]
+        summary: string
+      }
+      dependencies: PackDependencyAction[]
+      download: PackDependencyAction[]
+      keep: PackDependencyAction[]
+      versions?: { mcVersion?: string; loader?: string }
+    }>
+    /** Download, replace and optionally decompile the dependencies of an update. */
+    updateApply: (opts: {
+      dir: string
+      items: { modId: string; url: string; name: string; replacePath?: string }[]
+      decompile?: boolean
+      /** The updated mod's own jar, decompiled but not installed. */
+      modJar?: string
+    }) => Promise<{
+      ok: boolean
+      results: { modId: string; ok: boolean; error?: string; path?: string; replaced?: string; sources?: string; sourcesError?: string }[]
+      sourcesDir?: string
+    }>
+    /** Decompile jars that are already in the pack. Nothing is moved or downloaded. */
+    decompile: (opts: { dir: string; jars: string[]; sourcesDir?: string }) => Promise<{
+      ok: boolean
+      done?: number
+      failed: { jar: string; error?: string }[]
+      sourcesDir?: string
     }>
     /** What a jar would do to the folder, before it is copied in. Writes nothing. */
     preview: (opts: { dir: string; jar: string }) => Promise<{

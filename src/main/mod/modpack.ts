@@ -77,8 +77,15 @@ export interface PackScan {
   missing: MissingDependency[]
   /** Present but the wrong version for something that asks for it. */
   mismatched: { modId: string; have?: string; versionRange?: string; requiredBy: string[] }[]
-  /** Non-jar files, and jars that are not mods, kept visible rather than dropped. */
+  /** Non-jar files, kept visible rather than dropped. */
   ignored: string[]
+  /**
+   * Jars that are there but could not be read as a mod.
+   *
+   * Separate from `ignored` on purpose: a folder full of these is a bug in the
+   * reader, not a folder full of junk, and it must never be reported as healthy.
+   */
+  unreadableJars: string[]
   /** Loader/version seen in the jars, for the UI to confirm it read the right pack. */
   loaders: ModLoader[]
   gameVersions: string[]
@@ -176,6 +183,55 @@ export function readModJar(jarPath: string): PackMod {
       }
     } catch {
       return { ...base, unreadable: true }
+    }
+  }
+
+  // ---- Forge before 1.13 ----------------------------------------------
+  // Old packs are a large share of the ones people update, and those jars have
+  // no mods.toml at all: the metadata is `mcmod.info`, a JSON array whose
+  // `dependencies` are *bare mod ids with no version range*. Reading only
+  // `mods.toml` is why such a folder could scan as "0 mods".
+  const legacy = zip.getEntry('mcmod.info')
+  if (legacy) {
+    try {
+      const raw = JSON.parse(legacy.getData().toString('utf8')) as
+        | { modid?: string; name?: string; version?: string; dependencies?: string[] }[]
+        | { modList: { modid?: string; name?: string; version?: string; dependencies?: string[] }[] }
+      const list = Array.isArray(raw) ? raw : (raw.modList ?? [])
+      const first = list[0]
+      if (first?.modid) {
+        const depends: ModDependency[] = (first.dependencies ?? [])
+          .filter((id) => typeof id === 'string' && id && id !== 'forge' && id !== 'FML' && id !== 'minecraft')
+          .map((id) => ({ modId: id, kind: 'required' as const, isLoaderOrGame: isPlatformId(id) }))
+        return {
+          ...base,
+          modId: first.modid,
+          name: first.name && first.name !== first.modid ? first.name : undefined,
+          version: first.version,
+          loader: 'forge',
+          depends
+        }
+      }
+    } catch {
+      // fall through to the manifest below
+    }
+  }
+
+  // ---- the manifest, as the last resort --------------------------------
+  // Some jars (and every plain library) carry only a MANIFEST.MF. A jar with an
+  // Implementation-Title is a real thing in the folder even when it declares no
+  // dependencies, and reporting it beats calling the folder empty.
+  const manifest = zip.getEntry('META-INF/MANIFEST.MF')
+  if (manifest) {
+    try {
+      const text = manifest.getData().toString('utf8')
+      const title = firstMatch(text, /^Implementation-Title:\s*(.+)$/m)?.trim()
+      const version = firstMatch(text, /^Implementation-Version:\s*(.+)$/m)?.trim()
+      if (title || version) {
+        return { ...base, name: title, version, loader: 'unknown', depends: [] }
+      }
+    } catch {
+      // nothing readable
     }
   }
 
@@ -401,36 +457,55 @@ export function scanModsFolder(inputDir: string): PackScan {
   const { dir } = resolveModsDir(inputDir)
   const mods: PackMod[] = []
   const ignored: string[] = []
-  let names: string[] = []
-  try {
-    names = fs.readdirSync(dir)
-  } catch {
-    return { dir, mods: [], missing: [], mismatched: [], ignored: [], loaders: [], gameVersions: [] }
-  }
-  for (const name of names.sort()) {
-    const full = path.join(dir, name)
-    if (!/\.jar$/i.test(name)) {
-      ignored.push(name)
-      continue
-    }
-    let stat: fs.Stats
+  const unreadableJars: string[] = []
+
+  /**
+   * Walk the folder, not just its top level.
+   *
+   * Some packs keep `mods/1.21.1/`, `mods/client/` or unpacked mods in
+   * subfolders, and a launcher that flattens them still has to be able to read
+   * them. Depth is capped so a symlink loop cannot hang the scan.
+   */
+  const walk = (current: string, depth: number, rel: string): void => {
+    let entries: fs.Dirent[] = []
     try {
-      stat = fs.statSync(full)
+      entries = fs.readdirSync(current, { withFileTypes: true })
     } catch {
-      ignored.push(name)
-      continue
+      return
     }
-    if (!stat.isFile()) {
-      ignored.push(name)
-      continue
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      const full = path.join(current, entry.name)
+      const shown = rel ? path.join(rel, entry.name) : entry.name
+      if (entry.isDirectory()) {
+        if (entry.name === '.git' || entry.name === '__MACOSX' || depth >= 4) continue
+        walk(full, depth + 1, shown)
+        continue
+      }
+      if (!/\.jar$/i.test(entry.name)) {
+        // Counted, but not one by one: a pack folder holds dozens of configs,
+        // and 200 names in a message is noise, not information.
+        ignored.push(shown)
+        continue
+      }
+      const mod = readModJar(full)
+      if (mod.unreadable) {
+        // A jar that cannot be read is a *jar*, not junk. Saying "242 files were
+        // not mods" while silently dropping every one of them is how a scan can
+        // report an empty pack as healthy.
+        unreadableJars.push(shown)
+        continue
+      }
+      mods.push({ ...mod, file: shown })
     }
-    const mod = readModJar(full)
-    if (mod.unreadable) {
-      ignored.push(name)
-      continue
-    }
-    mods.push(mod)
   }
+  try {
+    if (!fs.statSync(dir).isDirectory()) {
+      return { dir, mods: [], missing: [], mismatched: [], ignored: [], unreadableJars: [], loaders: [], gameVersions: [] }
+    }
+  } catch {
+    return { dir, mods: [], missing: [], mismatched: [], ignored: [], unreadableJars: [], loaders: [], gameVersions: [] }
+  }
+  walk(dir, 0, '')
 
   // What the folder provides, by mod id. A mod id can legitimately appear twice
   // (two builds of the same mod mid-update); the newest-looking version wins and
@@ -479,6 +554,7 @@ export function scanModsFolder(inputDir: string): PackScan {
     missing: [...missing.values()].sort((a, b) => a.modId.localeCompare(b.modId)),
     mismatched,
     ignored,
+    unreadableJars,
     loaders: loaders as ModLoader[],
     gameVersions
   }
@@ -645,7 +721,44 @@ export function planUpdate(scan: PackScan, opts: { modId?: string; incoming?: Mo
 export function describeScan(scan: PackScan): { headline: string; detail: string; healthy: boolean } {
   const n = scan.mods.length
   const modWord = `${n} mod${n === 1 ? '' : 's'}`
-  const ignored = scan.ignored.length ? ` ${scan.ignored.length} file${scan.ignored.length === 1 ? '' : 's'} were not mods and were left alone.` : ''
+  const ignored = scan.ignored.length
+    ? ` ${scan.ignored.length} other file${scan.ignored.length === 1 ? ' was' : 's were'} not mods and ${scan.ignored.length === 1 ? 'was' : 'were'} left alone.`
+    : ''
+
+  /**
+   * Nothing read is not the same as nothing needed.
+   *
+   * The first version of this answered "0 mods, every dependency present" for a
+   * folder whose jars it had all failed to parse — the most confidently wrong
+   * thing an update tool can say. An empty result is a failure to look, and is
+   * reported as one, with the count of jars that were actually there.
+   */
+  if (n === 0) {
+    if (scan.unreadableJars.length > 0) {
+      return {
+        headline: `No mod could be read from ${scan.unreadableJars.length} jar${scan.unreadableJars.length === 1 ? '' : 's'}`,
+        detail: `The jars are there, but none of them could be read as a mod — so this is a problem reading them, not an empty folder. First three: ${scan.unreadableJars
+          .slice(0, 3)
+          .join(', ')}.${ignored}`,
+        healthy: false
+      }
+    }
+    return {
+      headline: 'No mods found in this folder',
+      detail: `There are no jar files at all in ${scan.dir}${ignored} Check that this is the mods folder — it is the one the launcher loads.`,
+      healthy: false
+    }
+  }
+
+  if (scan.unreadableJars.length > 0) {
+    return {
+      headline: `${modWord} read, ${scan.unreadableJars.length} jar${scan.unreadableJars.length === 1 ? '' : 's'} could not be`,
+      detail: `Dependencies are decided from what could be read, so an unreadable jar's own requirements are invisible to this scan. First: ${scan.unreadableJars
+        .slice(0, 3)
+        .join(', ')}.${ignored}`,
+      healthy: false
+    }
+  }
 
   if (scan.missing.length === 0 && scan.mismatched.length === 0) {
     return {
@@ -665,8 +778,8 @@ export function describeScan(scan: PackScan): { headline: string; detail: string
     )
   }
   if (scan.mismatched.length) {
-    const n = scan.mismatched.length
-    parts.push(n === 1 ? '1 is present but the wrong version' : `${n} are present but the wrong version`)
+    const k = scan.mismatched.length
+    parts.push(k === 1 ? '1 is present but the wrong version' : `${k} are present but the wrong version`)
   }
   return {
     headline: `${modWord}, ${parts.join(' and ')}`,
@@ -699,4 +812,117 @@ export function previewAdoption(
     replaces,
     plan: duplicates ? { ...plan, summary: `${plan.summary} This folder already holds ${duplicates.join(' and ')}; adding this would leave two copies.` } : plan
   }
+}
+
+/* ------------------------------------------- updating one mod, with its needs */
+
+/**
+ * A dependency that belongs to the mod being updated, found in the folder.
+ *
+ * This is the shape the *real* workflow needs: the user picks one mod to update,
+ * and the pack's own copies of that mod's dependencies come along with it —
+ * decompiled, so the agent can read them, and updated to the version the new
+ * build of the chosen mod actually asks for.
+ *
+ * `problems` is filled instead of throwing: a jar that is present but which the
+ * new build will not accept is still listed, with the reason, because "your
+ * Create build wants Flywheel 2.x and you have 1.0.4" is the answer the user
+ * needs, not a silent skip.
+ */
+export interface DependencyToUpdate {
+  modId: string
+  /** The range the updated mod asks for. */
+  versionRange?: string
+  /** The jar in the folder that provides it, when one does. */
+  path?: string
+  file?: string
+  version?: string
+  /** True when the folder's copy does not satisfy the requested range. */
+  needsNewer: boolean
+  /** Something worth saying about it — missing, wrong version, unreadable. */
+  problem?: string
+}
+
+export interface ModUpdatePreview {
+  modId?: string
+  name?: string
+  version?: string
+  /** The jar in the folder that this update replaces, when it is already there. */
+  replaces?: string
+  /** Every required dependency of the incoming build, decided against the folder. */
+  dependencies: DependencyToUpdate[]
+  /** Those that need a newer jar before the updated mod will load. */
+  needNewer: DependencyToUpdate[]
+  summary: string
+}
+
+/**
+ * Read the dependencies of a downloaded jar and find each of them in the pack.
+ *
+ * Runs entirely against the folder: the answer is which jars already in it belong
+ * with the new build, and which of those are too old. Downloading is what happens
+ * to the ones that are missing — after this, not before it.
+ */
+export function planModUpdate(scan: PackScan, incomingJar: string): { ok: boolean; error?: string; preview?: ModUpdatePreview } {
+  if (!fs.existsSync(incomingJar)) return { ok: false, error: `No such file: ${incomingJar}` }
+  const incoming = readModJar(incomingJar)
+  if (incoming.unreadable) {
+    return { ok: false, error: `${path.basename(incomingJar)} could not be read as a mod — no ${incomingJar.endsWith('.jar') ? 'mods.toml, mcmod.info' : 'metadata'} found in it.` }
+  }
+
+  const byModId = new Map<string, PackMod>()
+  for (const mod of scan.mods) {
+    if (!mod.modId) continue
+    const prev = byModId.get(mod.modId)
+    if (!prev || compareNumeric(numericParts(mod.version ?? ''), numericParts(prev.version ?? '')) > 0) byModId.set(mod.modId, mod)
+  }
+
+  const dependencies: DependencyToUpdate[] = []
+  for (const dep of incoming.depends) {
+    if (dep.isLoaderOrGame || dep.kind !== 'required') continue
+    const have = byModId.get(dep.modId)
+    if (!have) {
+      dependencies.push({
+        modId: dep.modId,
+        versionRange: dep.versionRange,
+        needsNewer: true,
+        problem: 'not in this folder — this one has to be downloaded'
+      })
+      continue
+    }
+    const inRange = !dep.versionRange || satisfiesRange(have.version, dep.versionRange)
+    dependencies.push({
+      modId: dep.modId,
+      versionRange: dep.versionRange,
+      path: have.path,
+      file: have.file,
+      version: have.version,
+      needsNewer: !inRange,
+      problem: inRange ? undefined : `the folder has ${have.version ?? 'an older build'}, but this mod needs ${dep.versionRange}`
+    })
+  }
+
+  const needNewer = dependencies.filter((d) => d.needsNewer)
+  const covered = dependencies.length - needNewer.length
+  const sameMod = incoming.modId ? scan.mods.filter((m) => m.modId === incoming.modId) : []
+  const replaces = sameMod[0]?.file
+
+  const summary =
+    dependencies.length === 0
+      ? `${incoming.modId ?? 'This mod'} declares no dependencies outside the loader, so nothing else has to come with it.`
+      : needNewer.length === 0
+        ? `${incoming.modId ?? 'This mod'} needs ${dependencies.length} dependenc${dependencies.length === 1 ? 'y' : 'ies'}, and this folder provides ${covered === dependencies.length ? 'all of them' : 'them'} at compatible versions. They can be decompiled and updated alongside it, or left as they are.`
+        : `${covered} of ${dependencies.length} dependencies are already here and compatible. ${needNewer.length} ${needNewer.length === 1 ? 'needs' : 'need'} a newer build: ${needNewer.map((d) => d.modId).join(', ')}.`
+
+  return { ok: true, preview: { modId: incoming.modId, name: incoming.name, version: incoming.version, replaces, dependencies, needNewer, summary } }
+}
+
+/** Names the pack already uses for each mod id, so a report says "Create" not "create". */
+export function displayNames(scan: PackScan): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const mod of scan.mods) {
+    if (!mod.modId) continue
+    if (!out[mod.modId] && mod.name) out[mod.modId] = mod.name
+  }
+  return out
 }

@@ -219,6 +219,10 @@ check('a broken jar does not abort the scan', () => {
   assert.equal(messyScan.mods.length, 1)
   assert.equal(messyScan.mods[0].modId, 'create')
 })
+check('a broken jar is named as a jar, not written off as junk', () => {
+  assert.deepEqual(messyScan.unreadableJars, ['not-a-mod.jar'])
+  assert.doesNotMatch(messyScan.ignored.join(' '), /not-a-mod\.jar/, 'a jar must not be filed as a non-mod file')
+})
 
 /* ----------------------------------------------------------- THE RULE UNDER TEST */
 
@@ -395,10 +399,12 @@ check('a pack whose only problem is a version mismatch says so', () => {
   assert.doesNotMatch(v.headline, /not in this folder/)
   assert.doesNotMatch(v.headline, /\b1 are\b/, 'a count of one is singular')
 })
-check('unreadable extras are mentioned but do not make a pack unhealthy', () => {
+check('one unreadable jar is said out loud and blocks the all-clear', () => {
+  // The old answer here was "healthy", which is exactly how a folder full of
+  // unread jars could be reported as complete.
   const v = pack.describeScan(pack.scanModsFolder(messy))
-  assert.equal(v.healthy, true)
-  assert.match(v.detail, /not mods/)
+  assert.equal(v.healthy, false)
+  assert.match(v.headline, /not-a-mod\.jar|could not be/)
 })
 
 /* -------------------------------------- checking an incoming jar, harmlessly */
@@ -479,6 +485,204 @@ check('previewing writes nothing to the folder', () => {
   neoJar(incoming, { modId: 'create', version: '6.3.0' })
   pack.previewAdoption(pack.scanModsFolder(complete), incoming)
   assert.equal(fs.readdirSync(path.join(complete, 'mods')).length, before)
+})
+
+/* ------------------------------------------- the scan that said "0 mods" */
+
+section('an empty answer is never an all-clear')
+
+check('a folder with no jars is reported as empty, not as healthy', () => {
+  const empty = tmp('empty')
+  const scan = pack.scanModsFolder(empty)
+  const v = pack.describeScan(scan)
+  assert.equal(scan.mods.length, 0)
+  assert.equal(v.healthy, false)
+  assert.match(v.headline, /No mods found/)
+  assert.doesNotMatch(v.headline, /every dependency present/)
+  fs.rmSync(empty, { recursive: true, force: true })
+})
+check('jars that cannot be parsed are a reading failure, not an empty pack', () => {
+  const broken = tmp('broken')
+  const mods = path.join(broken, 'mods')
+  fs.mkdirSync(mods, { recursive: true })
+  for (const n of ['a.jar', 'b.jar', 'c.jar']) fs.writeFileSync(path.join(mods, n), Buffer.from('not a zip at all'))
+  const scan = pack.scanModsFolder(broken)
+  assert.equal(scan.mods.length, 0)
+  assert.equal(scan.unreadableJars.length, 3, 'every jar is accounted for, none are called junk')
+  const v = pack.describeScan(scan)
+  assert.equal(v.healthy, false)
+  assert.match(v.headline, /No mod could be read/)
+  assert.match(v.detail, /a\.jar/)
+  fs.rmSync(broken, { recursive: true, force: true })
+})
+check('one unreadable jar downgrades the all-clear for the whole folder', () => {
+  const mixed = tmp('mixed')
+  jarIn(mixed, 'flywheel.jar', (f) => neoJar(f, { modId: 'flywheel', version: '1.0.4' }))
+  fs.writeFileSync(path.join(mixed, 'mods', 'mystery.jar'), Buffer.from('nope'))
+  const v = pack.describeScan(pack.scanModsFolder(mixed))
+  assert.equal(v.healthy, false)
+  assert.match(v.headline, /1 jar could not be/)
+  fs.rmSync(mixed, { recursive: true, force: true })
+})
+
+section('packs that keep mods in subfolders')
+
+check('jars in a version subfolder are read, not skipped', () => {
+  const nested = tmp('nested')
+  const inner = path.join(nested, 'mods', '1.21.1')
+  fs.mkdirSync(inner, { recursive: true })
+  neoJar(path.join(inner, 'create.jar'), { modId: 'create', version: '6.0.0' })
+  const scan = pack.scanModsFolder(nested)
+  assert.equal(scan.mods.length, 1)
+  assert.equal(scan.mods[0].modId, 'create')
+  assert.equal(scan.mods[0].file, path.join('1.21.1', 'create.jar'), 'the subfolder is kept in the name')
+  fs.rmSync(nested, { recursive: true, force: true })
+})
+check('non-jar files are counted but never listed one by one', () => {
+  const noisy = tmp('noisy')
+  const mods = path.join(noisy, 'mods')
+  fs.mkdirSync(mods, { recursive: true })
+  for (let i = 0; i < 40; i++) fs.writeFileSync(path.join(mods, `config-${i}.toml`), 'x')
+  neoJar(path.join(mods, 'sodium.jar'), { modId: 'sodium', version: '0.6.0' })
+  const scan = pack.scanModsFolder(noisy)
+  assert.equal(scan.mods.length, 1)
+  assert.equal(scan.ignored.length, 40)
+  const v = pack.describeScan(scan)
+  assert.equal(v.healthy, true)
+  assert.match(v.detail, /40 other files/)
+  fs.rmSync(noisy, { recursive: true, force: true })
+})
+
+section('old Forge packs, which have no mods.toml')
+
+check('a pre-1.13 jar is read from mcmod.info', () => {
+  const old = tmp('old')
+  const mods = path.join(old, 'mods')
+  fs.mkdirSync(mods, { recursive: true })
+  const zip = new AdmZip()
+  zip.addFile(
+    'mcmod.info',
+    Buffer.from(
+      JSON.stringify([{ modid: 'icbmclassic', name: 'ICBM Classic', version: '4.2.0', dependencies: ['icbmcore', 'forge'] }]),
+      'utf8'
+    )
+  )
+  zip.writeZip(path.join(mods, 'icbm-classic-1.12.2-4.2.0.jar'))
+  const mod = pack.readModJar(path.join(mods, 'icbm-classic-1.12.2-4.2.0.jar'))
+  assert.equal(mod.modId, 'icbmclassic')
+  assert.equal(mod.name, 'ICBM Classic')
+  assert.equal(mod.version, '4.2.0')
+  assert.equal(mod.loader, 'forge')
+  assert.deepEqual(
+    mod.depends.map((d) => d.modId),
+    ['icbmcore'],
+    'a loader id in an old dependency list is not a mod you download'
+  )
+  fs.rmSync(old, { recursive: true, force: true })
+})
+
+/* ------------------------------------- one mod, and what has to come with it */
+
+section('updating one mod brings its dependencies with it')
+
+check('a jar with only a manifest is a read file, not an unreadable one', () => {
+  const lib = tmp('lib')
+  fs.mkdirSync(path.join(lib, 'mods'), { recursive: true })
+  const zip = new AdmZip()
+  zip.addFile('META-INF/MANIFEST.MF', Buffer.from('Manifest-Version: 1.0\nImplementation-Title: Registrate\nImplementation-Version: 1.3.1\n', 'utf8'))
+  zip.writeZip(path.join(lib, 'mods', 'registrate.jar'))
+  const scan = pack.scanModsFolder(lib)
+  assert.equal(scan.unreadableJars.length, 0)
+  assert.equal(scan.mods.length, 1)
+  assert.equal(scan.mods[0].name, 'Registrate')
+  fs.rmSync(lib, { recursive: true, force: true })
+})
+
+check('updating Create finds Flywheel and Ponder in the folder, not online', () => {
+  const incoming = path.join(work, 'create-update.jar')
+  neoJar(incoming, {
+    modId: 'create',
+    version: '6.1.0',
+    depends: [
+      { id: 'flywheel', range: '[1.0,2.0)' },
+      { id: 'ponder', range: '[1.0,)' }
+    ]
+  })
+  const res = pack.planModUpdate(pack.scanModsFolder(complete), incoming)
+  assert.ok(res.ok)
+  const p = res.preview
+  assert.equal(p.modId, 'create')
+  assert.equal(p.replaces, 'create.jar', 'the old Create jar is the file to replace')
+  assert.deepEqual(p.dependencies.map((d) => d.modId).sort(), ['flywheel', 'ponder'])
+  assert.equal(p.needNewer.length, 0, 'nothing has to be downloaded')
+  assert.deepEqual(p.dependencies.map((d) => d.file).sort(), ['flywheel.jar', 'ponder.jar'])
+  assert.match(p.summary, /provides them at compatible versions|provides all of them/)
+})
+
+check('a dependency that is too old is named, with the reason', () => {
+  const incoming = path.join(work, 'create-strict.jar')
+  neoJar(incoming, { modId: 'create', version: '7.0.0', depends: [{ id: 'flywheel', range: '[2.0,3.0)' }] })
+  const res = pack.planModUpdate(pack.scanModsFolder(complete), incoming)
+  assert.ok(res.ok)
+  assert.equal(res.preview.needNewer.length, 1)
+  const fly = res.preview.needNewer[0]
+  assert.equal(fly.modId, 'flywheel')
+  assert.equal(fly.path, path.join(complete, 'mods', 'flywheel.jar'), 'the jar to update is in the folder')
+  assert.match(fly.problem, /needs \[2\.0,3\.0\)/)
+  assert.match(res.preview.summary, /needs a newer build: flywheel/)
+})
+
+check('a dependency with no jar at all is the only kind that has to be downloaded', () => {
+  const incoming = path.join(work, 'create-missing.jar')
+  neoJar(incoming, {
+    modId: 'create',
+    version: '6.1.0',
+    depends: [
+      { id: 'flywheel', range: '[1.0,2.0)' },
+      { id: 'ponder', range: '[1.0,)' },
+      { id: 'registrate', range: '[1.3,)' }
+    ]
+  })
+  const res = pack.planModUpdate(pack.scanModsFolder(complete), incoming)
+  assert.deepEqual(res.preview.needNewer.map((d) => d.modId), ['registrate'])
+  assert.equal(res.preview.needNewer[0].path, undefined)
+  assert.match(res.preview.needNewer[0].problem, /not in this folder/)
+  assert.match(res.preview.summary, /2 of 3 dependencies are already here/)
+})
+
+check('optional dependencies never come along for the ride', () => {
+  const incoming = path.join(work, 'create-optional.jar')
+  neoJar(incoming, {
+    modId: 'create',
+    version: '6.1.0',
+    depends: [
+      { id: 'flywheel', range: '[1.0,2.0)' },
+      { id: 'jei', range: '[15,)', type: 'optional' }
+    ]
+  })
+  const res = pack.planModUpdate(pack.scanModsFolder(complete), incoming)
+  assert.deepEqual(res.preview.dependencies.map((d) => d.modId), ['flywheel'])
+})
+
+check('a mod with no dependencies outside the loader says so plainly', () => {
+  const incoming = path.join(work, 'solo.jar')
+  neoJar(incoming, { modId: 'solo', version: '1.0.0', depends: [{ id: 'minecraft', range: '[1.21.1,1.22)' }] })
+  const res = pack.planModUpdate(pack.scanModsFolder(complete), incoming)
+  assert.equal(res.preview.dependencies.length, 0)
+  assert.match(res.preview.summary, /no dependencies outside the loader/)
+})
+
+check('an unreadable incoming jar is refused with a usable reason', () => {
+  const junk = path.join(work, 'broken-update.jar')
+  fs.writeFileSync(junk, Buffer.from('not a zip'))
+  const res = pack.planModUpdate(pack.scanModsFolder(complete), junk)
+  assert.equal(res.ok, false)
+  assert.match(res.error, /could not be read as a mod/)
+})
+
+check('the display name a pack already uses is kept for the report', () => {
+  const names = pack.displayNames(pack.scanModsFolder(complete))
+  assert.equal(names.flywheel, 'flywheel')
 })
 
 for (const d of [work, fabricDir, messy, complete, partial, oldDep]) fs.rmSync(d, { recursive: true, force: true })

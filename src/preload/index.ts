@@ -193,6 +193,11 @@ const api = {
     updates: (opts: unknown) => ipcRenderer.invoke('pack:updates', opts),
     plan: (opts: unknown) => ipcRenderer.invoke('pack:plan', opts),
     preview: (opts: unknown) => ipcRenderer.invoke('pack:preview', opts),
+    /** One mod chosen: what its new build needs from the folder, and where each comes from. */
+    updatePlan: (opts: unknown) => ipcRenderer.invoke('pack:updatePlan', opts),
+    /** Fetch and replace those dependencies, optionally decompiling them for the agent. */
+    updateApply: (opts: unknown) => ipcRenderer.invoke('pack:updateApply', opts),
+    decompile: (opts: unknown) => ipcRenderer.invoke('pack:decompile', opts),
     download: (opts: unknown) => ipcRenderer.invoke('pack:download', opts),
     adopt: (opts: unknown) => ipcRenderer.invoke('pack:adopt', opts),
     remove: (file: string) => ipcRenderer.invoke('pack:remove', file)
