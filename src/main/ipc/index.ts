@@ -152,7 +152,9 @@ import { isGradleProject, runLocalBuild, buildLogPath, findBuiltJar, gitSummary 
 import { ghPreflight, initGithubRepo, runActionsBuild } from '../build/actions'
 import { repoState, suggestRepoName } from '../build/repo'
 import { scanDependencies } from '../mod/deps'
-import { declareJarDependency, findCandidates, findVersionFile, libsDir } from '../mod/dep-resolve'
+import { declareJarDependency, findCandidates, findVersionFile, identifyFiles, libsDir, newestVersionFor, projectInfo, sha1Of } from '../mod/dep-resolve'
+import type { PackMod } from '../mod/modpack'
+import { adoptJar, describeScan, packVersions, planUpdate, previewAdoption, readModJar, removeJar, resolveModsDir, scanModsFolder } from '../mod/modpack'
 import { readJarInfo, installJar } from '../mod/jar'
 import { detectTechnicInstances, buildTechnicPackZip, launchTechnic } from '../game/technic'
 import { gameStatus, launchDevClient, onGameLog, onGameStatus, readGameLog, stopGame } from '../game/launcher'
@@ -1457,6 +1459,181 @@ export function registerIpc(): void {
       return { ok: false, error: (e as Error).message }
     }
   })
+
+  /**
+   * Read one jar's metadata, tolerating a file that is not a mod at all.
+   * Used at the IPC boundary where a bad file must produce an empty answer, not
+   * a rejected promise in the renderer.
+   */
+  const readModJarSafe = (jarPath: string): PackMod => {
+    try {
+      return readModJar(jarPath)
+    } catch {
+      return { path: jarPath, file: path.basename(jarPath), loader: 'unknown', depends: [], unreadable: true }
+    }
+  }
+
+  /**
+   * Read a modpack's `mods` folder — or a pack root that contains one.
+   *
+   * This is the first and usually only step of a pack update: a working folder
+   * already holds the libraries its mods need, so the scan answers "is anything
+   * actually missing" before any download is considered.
+   */
+  ipcMain.handle('pack:scan', (_e, chosen: string) => {
+    if (!chosen) return { ok: false, error: 'No folder chosen.' }
+    const resolved = resolveModsDir(chosen)
+    if (!fs.existsSync(resolved.dir)) {
+      return { ok: false, error: `No mods folder at ${resolved.dir}.`, adjusted: resolved.adjusted }
+    }
+    const scan = scanModsFolder(chosen)
+    return { ok: true, adjusted: resolved.adjusted, versions: packVersions(scan), verdict: describeScan(scan), scan }
+  })
+
+  /** Name the jars in a pack, by SHA-1, so the list says "Create" not "create.jar". */
+  ipcMain.handle('pack:identify', async (_e, chosen: string) => {
+    const scan = scanModsFolder(chosen)
+    const hashed = await Promise.all(scan.mods.map(async (m) => ({ path: m.path, hash: await sha1Of(m.path) })))
+    const usable = hashed.filter((h): h is { path: string; hash: string } => !!h.hash)
+    const res = await identifyFiles(usable)
+    if (!res.ok) return { ok: false, error: res.error, identified: [] }
+    const info = await projectInfo(res.found.map((f) => f.projectId ?? ''))
+    const identified = res.found.map((f) => ({
+      ...f,
+      projectName: f.projectId ? info[f.projectId]?.title : undefined,
+      projectSlug: f.projectId ? info[f.projectId]?.slug : undefined
+    }))
+    // A jar Modrinth has never seen is normal — a dev build, a private mod, a
+    // fork. It stays in the report as unidentified rather than disappearing.
+    const known = new Set(identified.map((i) => i.path))
+    const unidentified = scan.mods.filter((m) => !known.has(m.path)).map((m) => ({ path: m.path, file: m.file, modId: m.modId }))
+    return { ok: true, identified, unidentified, versions: packVersions(scan) }
+  })
+
+  /**
+   * Which of a pack's mods have a newer build for the pack's own game version.
+   *
+   * Read-only: it returns proposals and downloads nothing. The dependency half of
+   * the answer comes from `pack:plan`, against the folder as it stands.
+   */
+  ipcMain.handle('pack:updates', async (_e, opts: { dir: string; only?: string[] }) => {
+    const scan = scanModsFolder(opts.dir)
+    const { mcVersion, loader } = packVersions(scan)
+    if (!mcVersion || !loader) {
+      return { ok: false, error: 'Could not tell which Minecraft version this pack is for.', updates: [], mcVersion, loader }
+    }
+    const hashed = await Promise.all(scan.mods.map(async (m) => ({ path: m.path, hash: await sha1Of(m.path) })))
+    const res = await identifyFiles(hashed.filter((h): h is { path: string; hash: string } => !!h.hash))
+    if (!res.ok) return { ok: false, error: res.error, updates: [], mcVersion, loader }
+
+    const only = opts.only?.length ? new Set(opts.only) : null
+    const candidates = res.found.filter((f) => f.projectId && (!only || only.has(f.projectId) || only.has(f.path)))
+    const info = await projectInfo(candidates.map((f) => f.projectId ?? ''))
+
+    const updates = await Promise.all(
+      candidates.map(async (f) => {
+        const mod = scan.mods.find((m) => m.path === f.path)
+        const newest = await newestVersionFor(f.projectId ?? '', { mcVersion, loader })
+        const current = f.versionId
+        // Same version id means the file is already the newest; a different one
+        // is a real update, not a guess from version numbers.
+        const isNewer = !!newest && newest.id !== current
+        return {
+          path: f.path,
+          file: mod?.file ?? path.basename(f.path),
+          modId: mod?.modId,
+          projectId: f.projectId,
+          projectName: f.projectId ? info[f.projectId]?.title : undefined,
+          haveVersion: f.versionNumber ?? mod?.version,
+          newestVersion: newest?.versionNumber,
+          newestFile: newest ? { name: newest.file.name, url: newest.file.url, versionId: newest.id, size: newest.file.size } : undefined,
+          updateAvailable: isNewer
+        }
+      })
+    )
+    return {
+      ok: true,
+      mcVersion,
+      loader,
+      updates: updates.filter((u) => u.updateAvailable),
+      scanned: scan.mods.length,
+      unidentified: scan.mods.length - res.found.length
+    }
+  })
+
+  /**
+   * What an update would need from the folder, before anything is downloaded.
+   *
+   * `incomingJar` is optional: when a newer build has been fetched, its own
+   * metadata is read first so a requirement the new version *added* is caught.
+   * Without it the plan answers from the dependencies the installed copy declares.
+   */
+  ipcMain.handle('pack:plan', (_e, opts: { dir: string; modId?: string; incomingJar?: string }) => {
+    const scan = scanModsFolder(opts.dir)
+    const incoming = opts.incomingJar && fs.existsSync(opts.incomingJar) ? readModJarSafe(opts.incomingJar) : undefined
+    const plan = planUpdate(scan, {
+      modId: opts.modId ?? incoming?.modId,
+      incoming: incoming?.depends
+    })
+    return { ok: true, plan, versions: packVersions(scan) }
+  })
+
+  /**
+   * Fetch one jar and put it in the pack's `mods` folder, replacing the old copy
+   * of the same mod rather than adding a second one.
+   */
+  ipcMain.handle('pack:download', async (_e, opts: { dir: string; url: string; name: string; replacePath?: string }) => {
+    if (!/^https:\/\//i.test(opts.url)) return { ok: false, error: 'Only https downloads are allowed.' }
+    if (!/\.jar$/i.test(opts.name)) return { ok: false, error: 'That is not a jar file.' }
+    const { dir } = resolveModsDir(opts.dir)
+    try {
+      fs.mkdirSync(dir, { recursive: true })
+      const res = await fetch(opts.url, { headers: { 'User-Agent': 'MC-Forge-Agent' } })
+      if (!res.ok) return { ok: false, error: `Download failed: HTTP ${res.status}` }
+      const data = Buffer.from(await res.arrayBuffer())
+      const target = path.join(dir, path.basename(opts.name))
+      fs.writeFileSync(target, data)
+      // Removing the replaced file only after the new one is on disk: a failed
+      // download must never leave the pack without the mod it had.
+      let removed: string | undefined
+      if (opts.replacePath && path.resolve(opts.replacePath) !== path.resolve(target) && fs.existsSync(opts.replacePath)) {
+        const del = removeJar(opts.replacePath)
+        if (del.ok) removed = opts.replacePath
+      }
+      const mod = readModJarSafe(target)
+      return { ok: true, path: target, removed, mod: { modId: mod.modId, version: mod.version, loader: mod.loader } }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  })
+
+  /**
+   * What a jar would do to this folder, before it is copied in.
+   *
+   * Checking a file already on disk is the cheapest possible answer to "does
+   * this update need downloads" — the incoming jar names its own dependencies,
+   * and the folder is asked whether it covers them. Nothing is written.
+   */
+  ipcMain.handle('pack:preview', (_e, opts: { dir: string; jar: string }) => {
+    const scan = scanModsFolder(opts.dir)
+    const res = previewAdoption(scan, opts.jar)
+    if (!res.ok) return { ok: false, error: res.error }
+    return { ok: true, replaces: res.replaces, plan: res.plan, versions: packVersions(scan) }
+  })
+
+  /**
+   * Take a jar the user already has — in Downloads, in the pack root, in a
+   * sibling `mods-1.21.1` — instead of downloading the same thing again.
+   */
+  ipcMain.handle('pack:adopt', (_e, opts: { dir: string; from: string; replace?: boolean }) => {
+    const { dir } = resolveModsDir(opts.dir)
+    const res = adoptJar(opts.from, dir, opts.replace)
+    if (!res.ok) return { ok: false, error: res.error }
+    const mod = res.path ? readModJarSafe(res.path) : undefined
+    return { ok: true, path: res.path, mod: mod ? { modId: mod.modId, version: mod.version, loader: mod.loader } : undefined }
+  })
+
+  ipcMain.handle('pack:remove', (_e, file: string) => removeJar(file))
 
   ipcMain.handle('ref:search', (_e, opts: { query: string; id?: string; regex?: boolean }) => {
     if (!opts.query?.trim()) return { hits: [] }

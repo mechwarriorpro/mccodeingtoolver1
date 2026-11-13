@@ -553,6 +553,76 @@ export interface DependencyCandidate {
   versionId?: string
 }
 
+/** Mirrors `PackMod` in `src/main/mod/modpack.ts`. */
+export interface PackMod {
+  path: string
+  file: string
+  modId?: string
+  name?: string
+  version?: string
+  loader: 'neoforge' | 'forge' | 'fabric' | 'quilt' | 'unknown'
+  depends: { modId: string; versionRange?: string; kind: string; isLoaderOrGame: boolean }[]
+  unreadable?: boolean
+}
+
+/** What a scan of a pack's `mods` folder found. */
+export interface PackScan {
+  dir: string
+  mods: PackMod[]
+  /** Dependencies no jar in the folder provides — the only download candidates. */
+  missing: { modId: string; versionRange?: string; requiredBy: string[] }[]
+  mismatched: { modId: string; have?: string; versionRange?: string; requiredBy: string[] }[]
+  ignored: string[]
+  loaders: string[]
+  gameVersions: string[]
+}
+
+/** A jar matched to a Modrinth project, by hash. */
+export interface PackIdentified {
+  path: string
+  hash: string
+  projectId?: string
+  versionId?: string
+  versionNumber?: string
+  projectName?: string
+  projectSlug?: string
+}
+
+/** One mod that has a newer build for the pack's own game version. */
+export interface PackUpdate {
+  path: string
+  file: string
+  modId?: string
+  projectId?: string
+  projectName?: string
+  haveVersion?: string
+  newestVersion?: string
+  newestFile?: { name: string; url: string; versionId: string; size?: number }
+  updateAvailable: boolean
+}
+
+export type DependencyOutcome = 'already-present' | 'present-wrong-version' | 'missing' | 'needs-confirmation'
+
+/** One dependency of an update, decided against the folder as it stands. */
+export interface PlannedDependency {
+  modId: string
+  outcome: DependencyOutcome
+  providedBy?: string
+  haveVersion?: string
+  versionRange?: string
+  requiredBy: string[]
+  declaredBy: string[]
+}
+
+/** The folder-first answer for one update. */
+export interface UpdatePlan {
+  modId?: string
+  dependencies: PlannedDependency[]
+  /** Usually empty: a working pack covers its own dependencies. */
+  toDownload: PlannedDependency[]
+  summary: string
+}
+
 export interface JavaStatus {
   game: { path: string | null; version?: string; error?: string }
   tools: { path: string | null; version?: string; error?: string }
@@ -808,6 +878,67 @@ export interface McfApi {
       error?: string
     }>
     install: (opts: { url: string; name: string; dir?: string }) => Promise<{ ok: boolean; path?: string; added?: boolean; error?: string }>
+  }
+  /**
+   * A modpack's `mods` folder, scanned and updated mod by mod.
+   *
+   * Everything here takes a folder and answers about the folder. `updates` and
+   * `download` are separate on purpose: what a pack has is decided without the
+   * network, and only a genuinely missing dependency ever reaches `download`.
+   */
+  pack: {
+    scan: (dir: string) => Promise<{
+      ok: boolean
+      error?: string
+      adjusted?: boolean
+      versions?: { mcVersion?: string; loader?: string }
+      /** One sentence: is this folder already complete? */
+      verdict?: { headline: string; detail: string; healthy: boolean }
+      scan?: PackScan
+    }>
+    identify: (dir: string) => Promise<{
+      ok: boolean
+      error?: string
+      identified: PackIdentified[]
+      unidentified?: { path: string; file: string; modId?: string }[]
+      versions?: { mcVersion?: string; loader?: string }
+    }>
+    updates: (opts: { dir: string; only?: string[] }) => Promise<{
+      ok: boolean
+      error?: string
+      mcVersion?: string
+      loader?: string
+      updates: PackUpdate[]
+      scanned?: number
+      unidentified?: number
+    }>
+    /** What a jar would do to the folder, before it is copied in. Writes nothing. */
+    preview: (opts: { dir: string; jar: string }) => Promise<{
+      ok: boolean
+      error?: string
+      replaces?: string
+      plan?: UpdatePlan
+      versions?: { mcVersion?: string; loader?: string }
+    }>
+    plan: (opts: { dir: string; modId?: string; incomingJar?: string }) => Promise<{
+      ok: boolean
+      plan?: UpdatePlan
+      versions?: { mcVersion?: string; loader?: string }
+    }>
+    download: (opts: { dir: string; url: string; name: string; replacePath?: string }) => Promise<{
+      ok: boolean
+      error?: string
+      path?: string
+      removed?: string
+      mod?: { modId?: string; version?: string; loader?: string }
+    }>
+    adopt: (opts: { dir: string; from: string; replace?: boolean }) => Promise<{
+      ok: boolean
+      error?: string
+      path?: string
+      mod?: { modId?: string; version?: string; loader?: string }
+    }>
+    remove: (file: string) => Promise<{ ok: boolean; error?: string }>
   }
   build: {
     local: (opts?: { task?: 'build' | 'compileJava' }) => Promise<{ ok: boolean; code: number | null; logPath: string; jarPath?: string; errors: string[]; durationMs: number; hint?: string; missingDependencies?: string[] }>

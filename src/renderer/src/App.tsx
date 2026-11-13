@@ -9,6 +9,7 @@ import SetupModal from './components/SetupModal'
 import SettingsModal from './components/SettingsModal'
 import ReferencePanel from './components/ReferencePanel'
 import ForkPanel from './components/ForkPanel'
+import PackPanel from './components/PackPanel'
 import PortPanel from './components/PortPanel'
 import DiagPanel from './components/DiagPanel'
 import ModesPanel from './components/ModesPanel'
@@ -63,7 +64,10 @@ const TAB_GROUPS: { label: string; tabs: { id: RailTab; label: string; hint: str
   },
   {
     label: 'Grow',
-    tabs: [{ id: 'evolve', label: 'Evolve', hint: 'Let the agent evolve its own prompt' }]
+    tabs: [
+      { id: 'pack', label: 'Pack', hint: 'Update the mods in a modpack, dependencies included' },
+      { id: 'evolve', label: 'Evolve', hint: 'Let the agent evolve its own prompt' }
+    ]
   }
 ]
 
@@ -73,6 +77,7 @@ type RailTab =
   | 'files'
   | 'refs'
   | 'port'
+  | 'pack'
   | 'clips'
   | 'learn'
   | 'modes'
@@ -592,6 +597,7 @@ export default function App(): JSX.Element {
                 activeDir={project?.open ? project.dir : undefined}
               />
             )}
+            {railTab === 'pack' && <PackPanel onToast={toast} />}
             {railTab === 'modes' && (
               <div className="card">
                 <h4>Modes</h4>

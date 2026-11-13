@@ -33,6 +33,7 @@ setup and API key.
 | Local build | `gradlew build --console=plain`; javac errors are parsed out and fed back |
 | GitHub sign-in | In-app OAuth device flow (`ABCD-1234` at github.com/login/device); no GitHub CLI required. A personal access token works too |
 | GitHub build | Token-authenticated REST: commit → push → dispatch `build.yml` → poll the run → download the artifact |
+| Modpack updates | Point the **Pack** tab at a `mods` folder; dependencies are read from each jar and satisfied **from the folder** before any download is considered. Only genuinely missing or out-of-range ones are offered, and a replaced jar is removed, not duplicated |
 | Technic install | Writes into `.technic/modpacks/<pack>/mods`; can export a Technic-spec pack zip |
 | Loader install | Official NeoForge installer, headless: `--install-client <dir>` |
 | Launch + test | `runClient` (dev) or direct Java launch of `neoforge-<ver>.json` (real instance) |
@@ -61,7 +62,7 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.4.16 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.4.17 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
 > v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
 > decompiler picking a Java it could not run.
@@ -88,6 +89,14 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.4.17** adds the **Pack** tab: update the mods in a whole modpack without breaking it. Point it at a pack's
+> `mods` folder — or the pack folder that holds one — and it reads every jar's declared dependencies from its own
+> metadata and checks them **against the folder first**. A pack that runs already contains its libraries, so the
+> answer is usually "every dependency present" and nothing is downloaded. Only a dependency that is genuinely
+> absent, or present in a version the mod will not accept, is ever offered as a download. Updating a mod replaces
+> the old jar of that mod instead of leaving two copies, and a new build can be checked against the folder before
+> it is copied in — so a tightened version range is caught while it is still a sentence on screen rather than a
+> crashed launch afterwards. Jars Modrinth has never seen are left alone and reported, not guessed at.
 > **v0.4.16** fixes the two reasons a ported mod failed to compile, which look the same in a gradle log and are
 > not. `error: package net.minecraft.world.level does not exist` meant the port wrote an **empty loader version**
 > into `gradle.properties`, so gradle never put the game on the classpath — it now resolves a real NeoForge,
@@ -395,6 +404,7 @@ src/main/
     scaffold.ts      vendored-template helpers, mod id/package validation
     fork.ts          turns a decompiled reference mod into an editable project
     port.ts          detects a project's real version/loader, plans and runs a conversion
+    modpack.ts       a modpack's mods folder: jar metadata, dependency ranges, folder-first update plans
     props.ts         gradle.properties reader shared by the build, the converter and the models
     assets.ts        per-version asset layout: where a model has to live, and what does not exist yet
     models.ts        block, item, entity and animation JSON, generated and validated
@@ -418,8 +428,8 @@ src/main/
   update.ts          electron-updater wiring for GitHub releases
   learn.ts           mistake fingerprints, lessons and the error index
 template/neoforge-1.21.1/   vendored official MDK
-tests/                      offline tests for scaffold, build parsing, jar install, porting, diagnostics,
-                            layout reachability and model generation
+tests/                      offline tests for scaffold, build parsing, jar install, porting, modpack scanning,
+                            diagnostics, layout reachability and model generation
 ```
 
 ## Tests
@@ -492,6 +502,45 @@ never pretends a one-ended project is a clean two-ended port.
 **Nothing is destroyed.** The original folder is never written to. A `backup-…`
 copy is made inside it first, and the new project goes in a folder of its own —
 a half-migrated mod is the last thing you want to be holding the only copy of.
+
+## Updating the mods in a modpack
+
+The **Pack** tab updates mods inside a pack that already runs.
+
+Pick the pack's `mods` folder, or the pack folder itself and it will find the
+`mods` folder inside. Every jar is read the way the loader reads it —
+`META-INF/neoforge.mods.toml`, `META-INF/mods.toml` or `fabric.mod.json` — and the
+dependencies each one *declares* are collected, with their version ranges.
+
+**The folder is checked first, and that is the whole point.** A pack that runs
+already contains every library its mods need; that is what a running pack is. So
+before anything is fetched, each declared dependency is looked for among the jars
+that are already there:
+
+| The folder | The answer |
+|---|---|
+| has it, in a version the mod accepts | **covered** — never offered as a download |
+| has it, in a version the mod will not accept | **wrong version** — update *that* mod, don't add a copy |
+| does not have it at all | **missing** — the only case a download helps |
+| cannot be read | reported as unreadable, never guessed at |
+
+So a normal pack reports *"N mods, every dependency present"* and offers nothing.
+Downloading is the fallback, not the method.
+
+**Updating a mod replaces it.** When a newer build is downloaded, the old jar of
+that same mod is removed after the new one is on disk — one file per mod, not two
+versions fighting over the classpath. The mod being updated is identified by its
+**SHA-1** against Modrinth, so the file name is never trusted.
+
+**You can check a jar before it lands.** "Add a jar you already have" reads the
+jar you pick — one in Downloads, a newer build, a sibling `mods-1.21.1` folder —
+and shows what it declares against the folder as it is, so a build that tightens a
+dependency's range past what you have is caught while it is still a sentence on
+screen. Then it either replaces the old copy of that mod or is added as new.
+
+Only `required` dependencies count. A pack that lists JEI as optional works
+without it, and `minecraft`, `neoforge`, `forge` and `fabricloader` are never
+offered as downloads — the loader is not a mod you fetch.
 
 ### The toolchain rules behind it
 

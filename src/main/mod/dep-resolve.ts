@@ -225,3 +225,103 @@ export function declareJarDependency(projectDir: string, jarPath: string): { ok:
 export function hasModrinthRepo(buildFileText: string): boolean {
   return /maven\.modrinth\.com/i.test(buildFileText)
 }
+
+/* ------------------------------------------------------- identifying what a jar is */
+
+/**
+ * The SHA-1 of a jar, which is how Modrinth identifies a file exactly.
+ *
+ * Matching by file name is guesswork — packs rename jars, and two builds of the
+ * same mod can share a name. The hash is the same identifier Modrinth itself uses
+ * for deduplication, so a lookup by it either finds the exact project and version
+ * or finds nothing. Nothing is a fine answer; a wrong match is not.
+ */
+export async function sha1Of(file: string): Promise<string | null> {
+  const crypto = await import('node:crypto')
+  return new Promise((resolve) => {
+    try {
+      const hash = crypto.createHash('sha1')
+      const stream = fs.createReadStream(file)
+      stream.on('data', (chunk) => hash.update(chunk))
+      stream.on('error', () => resolve(null))
+      stream.on('end', () => resolve(hash.digest('hex')))
+    } catch {
+      resolve(null)
+    }
+  })
+}
+
+export interface IdentifiedFile {
+  /** The jar this hash came from, so the caller can map back. */
+  path: string
+  hash: string
+  projectId?: string
+  /** The version this exact file is; the newest version is what an update compares to. */
+  versionId?: string
+  versionNumber?: string
+  projectSlug?: string
+  projectName?: string
+}
+
+/**
+ * Resolve many jars to Modrinth projects in one request.
+ *
+ * `/v2/version_files` takes up to a few hundred hashes at once, which is the
+ * difference between a scan of 200 mods taking two seconds and taking four
+ * minutes. Jars the service has never seen are simply absent from the answer.
+ */
+export async function identifyFiles(files: { path: string; hash: string }[]): Promise<{ ok: boolean; found: IdentifiedFile[]; error?: string }> {
+  if (!files.length) return { ok: true, found: [] }
+  const byHash = new Map(files.map((f) => [f.hash, f.path]))
+  try {
+    const res = await fetch('https://api.modrinth.com/v2/version_files', {
+      method: 'POST',
+      headers: { ...UA, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hashes: [...byHash.keys()], algorithm: 'sha1' })
+    })
+    if (!res.ok) return { ok: false, found: [], error: `Modrinth answered HTTP ${res.status}` }
+    const data = (await res.json()) as Record<
+      string,
+      { id: string; version_number: string; project_id: string }
+    >
+    const found: IdentifiedFile[] = []
+    for (const [hash, version] of Object.entries(data ?? {})) {
+      found.push({
+        path: byHash.get(hash) ?? '',
+        hash,
+        projectId: version.project_id,
+        versionId: version.id,
+        versionNumber: version.version_number
+      })
+    }
+    return { ok: true, found }
+  } catch (e) {
+    return { ok: false, found: [], error: `Could not reach Modrinth: ${(e as Error).message}` }
+  }
+}
+
+/** Project names and slugs for a set of ids, so a report can say "Create" not "PtS8h". */
+export async function projectInfo(ids: string[]): Promise<Record<string, { title: string; slug: string }>> {
+  const unique = [...new Set(ids)].filter(Boolean)
+  if (!unique.length) return {}
+  try {
+    const res = await fetch(`https://api.modrinth.com/v2/projects?ids=${encodeURIComponent(JSON.stringify(unique))}`, {
+      headers: UA
+    })
+    if (!res.ok) return {}
+    const list = (await res.json()) as { id: string; title: string; slug: string }[]
+    return Object.fromEntries((list ?? []).map((p) => [p.id, { title: p.title, slug: p.slug }]))
+  } catch {
+    return {}
+  }
+}
+
+/** The newest version of a project for a game version and loader, or null. */
+export async function newestVersionFor(
+  projectId: string,
+  opts: { mcVersion: string; loader: string }
+): Promise<{ id: string; versionNumber: string; file: DependencyFile } | null> {
+  const res = await findVersionFile(projectId, opts)
+  if (!res.ok || !res.file || !res.versionId) return null
+  return { id: res.versionId, versionNumber: res.file.versionNumber ?? '', file: res.file }
+}

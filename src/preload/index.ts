@@ -186,6 +186,18 @@ const api = {
     install: (opts: unknown) => ipcRenderer.invoke('deps:install', opts)
   },
 
+  /** A modpack's mods folder: scan it, then update from it. */
+  pack: {
+    scan: (dir: string) => ipcRenderer.invoke('pack:scan', dir),
+    identify: (dir: string) => ipcRenderer.invoke('pack:identify', dir),
+    updates: (opts: unknown) => ipcRenderer.invoke('pack:updates', opts),
+    plan: (opts: unknown) => ipcRenderer.invoke('pack:plan', opts),
+    preview: (opts: unknown) => ipcRenderer.invoke('pack:preview', opts),
+    download: (opts: unknown) => ipcRenderer.invoke('pack:download', opts),
+    adopt: (opts: unknown) => ipcRenderer.invoke('pack:adopt', opts),
+    remove: (file: string) => ipcRenderer.invoke('pack:remove', file)
+  },
+
   build: {
     local: (opts?: unknown) => ipcRenderer.invoke('build:local', opts),
     actions: () => ipcRenderer.invoke('build:actions'),
