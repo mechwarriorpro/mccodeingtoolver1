@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 /**
  * 3D model and animation checks.
@@ -17,11 +17,18 @@ import path from 'node:path'
  */
 
 const out = path.join(process.cwd(), 'out-test', 'main')
-const { modelPaths, modelPathOrFallback, blockModelJson, entityModelJson, animationJson, QUADRUPED_BONES, quadrupedWalk, validateModel, writeModels } = await import(
-  path.join(out, 'mod', 'models.js')
-)
-const { assetLayout, blockstateJson, modelGuidance, atLeast } = await import(path.join(out, 'mod', 'assets.js'))
-const { textureRef, textureFile } = await import(path.join(out, 'mod', 'texture-ref.js'))
+/**
+ * `import()` needs a URL, not a path.
+ *
+ * On Windows `D:\a\repo\out-test\main\mod\models.js` is a drive-letter
+ * specifier, which throws ERR_UNSUPPORTED_ESM_URL_SCHEME — the whole file dies
+ * before a single check runs, and only on the Windows runner. The sibling tests
+ * get away with raw relative specifiers; an absolute one is not relative.
+ */
+const load = (file) => import(pathToFileURL(path.join(out, file)).href)
+const { modelPaths, modelPathOrFallback, blockModelJson, entityModelJson, animationJson, QUADRUPED_BONES, quadrupedWalk, validateModel, writeModels } = await load('mod/models.js')
+const { assetLayout, blockstateJson, modelGuidance, atLeast } = await load('mod/assets.js')
+const { textureRef, textureFile } = await load('mod/texture-ref.js')
 
 let passed = 0
 function check(name, fn) {
@@ -35,6 +42,22 @@ function check(name, fn) {
     process.exitCode = 1
   }
 }
+
+/**
+ * The Windows-only failure this guards: an absolute path handed to `import()`
+ * is a drive-letter specifier there and throws before any check runs. It has to
+ * be a file URL. This is cheap and it is the difference between a test suite
+ * that reports 49 failures and one that crashes silently with none.
+ */
+check('the compiled modules are loaded by file URL, not by path', () => {
+  const source = fs.readFileSync(new URL(import.meta.url), 'utf8')
+  // Built by concatenation so this check does not match its own source.
+  const importer = 'pathTo' + 'FileURL('
+  const byPath = 'import(' + 'path.join('
+  assert.ok(source.includes(importer), 'models.test.mjs does not load modules by file URL')
+  assert.ok(!source.includes(byPath), 'a module is imported from a raw absolute path')
+})
+
 
 /* ------------------------------------------------------------- version rules */
 
@@ -434,7 +457,13 @@ check('the expected png path follows the texture id', () => {
 
 /* ---------------------------------------------------------------- writing */
 
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'mcf-models-'))
+// Not os.tmpdir(): on a Windows runner that is C: while the checkout is D:, and
+// path.relative() across drives returns an absolute path. Every assertion on a
+// relative file name would then compare against "D:\\a\\...". Same filesystem as
+// the repo, always.
+const scratch = path.join(process.cwd(), 'out-test', 'models-scratch')
+fs.mkdirSync(scratch, { recursive: true })
+const tmp = fs.mkdtempSync(path.join(scratch, 'mcf-models-'))
 try {
   check('writeModels creates the folders and reports what it wrote', () => {
     const p = modelPaths({ modId: 'ruby', name: 'golem', kind: 'entity' })
@@ -470,7 +499,7 @@ try {
   })
 
   check('the whole quadruped + walk set writes as a coherent project', () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcf-set-'))
+    const dir = fs.mkdtempSync(path.join(scratch, 'mcf-set-'))
     const mc = '1.21.1'
     const bones = QUADRUPED_BONES(8, 6)
     const res = writeModels(dir, [

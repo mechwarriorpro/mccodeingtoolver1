@@ -14,8 +14,18 @@ import path from 'node:path'
 
 const root = process.cwd()
 const renderer = path.join(root, 'src', 'renderer', 'src')
-const css = fs.readFileSync(path.join(renderer, 'styles.css'), 'utf8')
-const app = fs.readFileSync(path.join(renderer, 'App.tsx'), 'utf8')
+/**
+ * Read a source file with its line endings normalised.
+ *
+ * `core.autocrlf` is on by default on Windows, so a GitHub checkout has CRLF
+ * while this sandbox has LF. A rule written as `/\n\n/` matched here and not
+ * there: these checks passed locally and failed in CI for a reason that had
+ * nothing to do with the layout. Normalise at the boundary and the rules can be
+ * written once.
+ */
+const read = (name) => fs.readFileSync(path.join(renderer, name), 'utf8').replace(/\r\n/g, '\n')
+const css = read('styles.css')
+const app = read('App.tsx')
 
 let passed = 0
 function check(name, fn) {
