@@ -7,6 +7,7 @@ import { readProps } from '../mod/props'
 import { resolveEra, javaForVersion } from '../versions/eras'
 import { compareMcVersions } from '../versions/catalog'
 import { indexErrors } from '../learn'
+import { classifyBuildErrors, isGamePackage } from '../mod/deps'
 
 export type BuildMode = 'local' | 'actions'
 
@@ -28,6 +29,14 @@ export interface BuildResult {
   jarPath?: string
   errors: string[]
   durationMs: number
+  /**
+   * One sentence explaining what the errors actually mean, when they reduce to
+   * something actionable ("Minecraft is not resolving", "a dependency is not
+   * declared"). Undefined for ordinary compile errors.
+   */
+  hint?: string
+  /** Packages the build needs and does not declare, when it could tell. */
+  missingDependencies?: string[]
 }
 
 const isWin = process.platform === 'win32'
@@ -201,6 +210,54 @@ export function extractErrors(log: string): string[] {
   return [...new Set(out)]
 }
 
+/**
+ * Turn gradle's "package does not exist" lines into an answer.
+ *
+ * javac reports a missing Minecraft class and a missing dependency identically,
+ * and the two need different fixes. Left alone, a user sees a screen of
+ * "package net.minecraft.world.level does not exist" and concludes the port is
+ * broken, when the real cause is an unresolved build property.
+ *
+ * Exported so the build panel can say it before the user reads the log.
+ */
+export function explainMissingClasses(errors: string[]): { gameClasses: string[]; missing: string[]; hint: string | null } {
+  const { gameClasses, externalPackages } = classifyBuildErrors(errors)
+  if (gameClasses.length) {
+    const example = gameClasses[0]
+    return {
+      gameClasses,
+      missing: externalPackages,
+      hint:
+        `Minecraft itself is not resolving (${example}). That is a build-file problem, not a missing download: ` +
+        'the loader version in gradle.properties is probably empty or wrong for this Minecraft version. ' +
+        'The Build tab can check it.'
+    }
+  }
+  if (externalPackages.length) {
+    return {
+      gameClasses: [],
+      missing: externalPackages,
+      hint:
+        `The project imports ${externalPackages.slice(0, 3).join(', ')} but does not declare it. ` +
+        'Open Dependencies in the Build tab to find and add it — a jar in libs/ is not enough until the build file mentions it.'
+    }
+  }
+  return { gameClasses: [], missing: [], hint: null }
+}
+
+/** True when the project declares this package anywhere in its build files. */
+export function declaresDependency(dir: string, pkg: string): boolean {
+  for (const file of ['build.gradle', 'build.gradle.kts']) {
+    try {
+      const text = fs.readFileSync(path.join(dir, file), 'utf8')
+      if (text.includes(pkg) || text.includes(pkg.split('.').slice(0, 2).join('.'))) return true
+    } catch {
+      /* no build file */
+    }
+  }
+  return isGamePackage(pkg)
+}
+
 export function findBuiltJar(dir: string): string | undefined {
   const libs = path.join(dir, 'build', 'libs')
   if (!fs.existsSync(libs)) return undefined
@@ -316,10 +373,28 @@ export async function runLocalBuild(opts: BuildOptions): Promise<BuildResult> {
       /* learning must never fail a build */
     }
   }
+  // A failure that is really "the game or a dependency is not declared" gets said
+  // in one line here, above a log the user would otherwise have to interpret.
+  if (errors.length) {
+    const explained = explainMissingClasses(errors)
+    if (explained.hint) push(`[build] ${explained.hint}`)
+    if (explained.missing.length) {
+      push(`[build] missing dependencies: ${explained.missing.join(', ')}`)
+    }
+  }
   const jarPath = result.code === 0 ? findBuiltJar(opts.workspaceDir) : undefined
   push(`[build] exit=${result.code} jar=${jarPath ?? 'none'}`)
   logStream.end()
-  return { ok: result.code === 0, code: result.code, logPath, jarPath, errors, durationMs: Date.now() - started }
+  return {
+    ok: result.code === 0,
+    code: result.code,
+    logPath,
+    jarPath,
+    errors,
+    durationMs: Date.now() - started,
+    hint: errors.length ? explainMissingClasses(errors).hint ?? undefined : undefined,
+    missingDependencies: errors.length ? explainMissingClasses(errors).missing : undefined
+  }
 }
 
 /** Quick `git status --porcelain` so the agent knows what is dirty. */

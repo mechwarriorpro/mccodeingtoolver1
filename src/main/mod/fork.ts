@@ -5,7 +5,7 @@ import { userDataDir } from '../config'
 import { compareMcVersions, type Loader } from '../versions/catalog'
 import { classNameFor, generateProject } from './generate'
 import { templateRoot } from './scaffold'
-import { resolveEra } from '../versions/eras'
+import { resolveEra, resolveLoaderVersion } from '../versions/eras'
 
 /**
  * "Edit a reference mod".
@@ -407,18 +407,15 @@ export function inferGroup(sourcesDir: string): string | null {
   return best
 }
 
-/** Newest loader build the era can be expected to build against. */
+/**
+ * Newest loader build the era can be expected to build against.
+ *
+ * Delegates to the catalog-aware resolver: a fork of a decompiled mod has no
+ * build file of its own, so the version it starts with is the only one it will
+ * have, and an empty or invented value means the game never resolves.
+ */
 function defaultLoaderVersion(loader: Loader, mcVersion: string): string {
-  if (loader === 'neoforge') {
-    const m = mcVersion.split('.')
-    return `${m[1] ?? '21'}.${m[2] ?? '1'}.0`
-  }
-  if (loader === 'forge') {
-    // Forge's version is tied to the game version; a 0 placeholder resolves to a
-    // real build in gradle.properties and is editable there.
-    return '1.0.0'
-  }
-  return '0.16.0'
+  return resolveLoaderVersion(loader, mcVersion)
 }
 
 /* ------------------------------------------------------------- fork listing */

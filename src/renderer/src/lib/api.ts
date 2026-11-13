@@ -515,6 +515,44 @@ export interface ProjectSummary {
   template?: string
 }
 
+export interface DependencyInfo {
+  package: string
+  name?: string
+  kind: 'mod' | 'library' | 'unknown'
+  files: number
+  declared?: string[]
+  homepage?: string
+  note?: string
+}
+
+export interface DependencyScan {
+  ok: boolean
+  dir?: string
+  mcVersion?: string
+  loader?: string
+  filesScanned: number
+  /** Minecraft classes the build failed to find — a build-file problem, not a download. */
+  gameClassErrors: string[]
+  dependencies: DependencyInfo[]
+  error?: string
+}
+
+export interface DependencyCandidate {
+  source: 'modrinth' | 'manual'
+  name: string
+  projectId?: string
+  slug?: string
+  homepage?: string
+  description?: string
+  downloads?: number
+  loaders?: string[]
+  /** The file that would be downloaded, when one applies to this version. */
+  file?: { name: string; url: string; versionNumber?: string; versionId?: string; size?: number }
+  /** Why no file applies, when one does not. */
+  missing?: string
+  versionId?: string
+}
+
 export interface JavaStatus {
   game: { path: string | null; version?: string; error?: string }
   tools: { path: string | null; version?: string; error?: string }
@@ -705,6 +743,8 @@ export interface McfApi {
       copiedSources?: number
       copiedResources?: number
       skipped?: string[]
+      /** What the sources still need; a port copies code, not build files. */
+      dependencies?: { package: string; name?: string; kind: string; files: number; declared?: string[]; homepage?: string }[]
     }>
   }
   versions: {
@@ -758,9 +798,20 @@ export interface McfApi {
     status: () => Promise<{ instance: string | null; minecraftDir: string; neoVersion: string; installed: boolean; javaFound: boolean }>
     install: () => Promise<{ ok: boolean; minecraftDir: string; versionId?: string; log: string; error?: string }>
   }
+  deps: {
+    scan: (opts?: { dir?: string; buildErrors?: string[] }) => Promise<DependencyScan>
+    find: (opts: { package: string; name?: string; dir?: string }) => Promise<{
+      ok: boolean
+      mcVersion?: string
+      loader?: string
+      candidates: DependencyCandidate[]
+      error?: string
+    }>
+    install: (opts: { url: string; name: string; dir?: string }) => Promise<{ ok: boolean; path?: string; added?: boolean; error?: string }>
+  }
   build: {
-    local: (opts?: { task?: 'build' | 'compileJava' }) => Promise<{ ok: boolean; code: number | null; logPath: string; jarPath?: string; errors: string[]; durationMs: number }>
-    actions: () => Promise<{ ok: boolean; code: number | null; logPath: string; jarPath?: string; errors: string[]; durationMs: number }>
+    local: (opts?: { task?: 'build' | 'compileJava' }) => Promise<{ ok: boolean; code: number | null; logPath: string; jarPath?: string; errors: string[]; durationMs: number; hint?: string; missingDependencies?: string[] }>
+    actions: () => Promise<{ ok: boolean; code: number | null; logPath: string; jarPath?: string; errors: string[]; durationMs: number; hint?: string; missingDependencies?: string[] }>
     preflight: () => Promise<{ ghFound: boolean; authed: boolean; repoOk: boolean; messages: string[] }>
     initRepo: (isPrivate: boolean) => Promise<{ ok: boolean; url?: string; error?: string }>
     /** Whether the open folder can be pushed, and what is missing if not. */

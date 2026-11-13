@@ -45,7 +45,14 @@ export default function PortPanel({ onToast, onEditProject, activeDir }: Props):
 
   const [plan, setPlan] = useState<PortPlan | null>(null)
   const [busy, setBusy] = useState(false)
-  const [result, setResult] = useState<{ dir: string; reportPath?: string; copiedSources: number; copiedResources: number } | null>(null)
+  const [result, setResult] = useState<{
+    dir: string
+    reportPath?: string
+    copiedSources: number
+    copiedResources: number
+    /** What the sources still need; the port copies code, not build files. */
+    dependencies?: { package: string; name?: string; kind: string; files: number; declared?: string[] }[]
+  } | null>(null)
 
   /* every project that can be an input: forks of examples, and the active one */
   const [candidates, setCandidates] = useState<{ dir: string; label: string }[]>([])
@@ -129,7 +136,8 @@ export default function PortPanel({ onToast, onEditProject, activeDir }: Props):
         dir: res.dir ?? '',
         reportPath: res.reportPath,
         copiedSources: res.copiedSources ?? 0,
-        copiedResources: res.copiedResources ?? 0
+        copiedResources: res.copiedResources ?? 0,
+        dependencies: res.dependencies
       })
       setPlan(res.plan ?? plan)
       onToast(`Created ${name}`)
@@ -330,6 +338,28 @@ export default function PortPanel({ onToast, onEditProject, activeDir }: Props):
             <p className="hint">
               The list of what is left is in <code>MIGRATION.md</code>.
             </p>
+          )}
+          {result.dependencies && result.dependencies.length > 0 && (
+            <div className="card">
+              <b>Dependencies this port did not carry ({result.dependencies.length})</b>
+              <p className="muted small" style={{ marginTop: 4 }}>
+                The sources import these, but the old build files that declared them are not part of a port — so the
+                new project will not compile until they are added back. The Build tab has a Dependencies panel that
+                finds and declares them.
+              </p>
+              <ul className="files">
+                {result.dependencies.map((d) => (
+                  <li key={d.package}>
+                    <b>{d.name ?? d.package}</b>{' '}
+                    <span className="muted small">
+                      <code>{d.package}</code>
+                      {d.files ? ` · ${d.files} file${d.files === 1 ? '' : 's'}` : ''}
+                      {d.declared?.length ? ` · was ${d.declared.join(', ')}` : ''}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
           <div className="row">
             <button

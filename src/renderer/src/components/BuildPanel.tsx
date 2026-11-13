@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { AppConfig } from '../../../shared/types'
 import type { ProjectSummary } from '../lib/api'
 import { api } from '../lib/api'
+import DependenciesPanel from './DependenciesPanel'
 
 interface Props {
   project: ProjectSummary | null
@@ -13,7 +14,15 @@ interface Props {
 
 export default function BuildPanel({ project, config, onRefreshProject, onOpenImage, onToast }: Props): JSX.Element {
   const [busy, setBusy] = useState<string | null>(null)
-  const [result, setResult] = useState<{ ok: boolean; jarPath?: string; errors: string[]; logPath: string; seconds?: number } | null>(null)
+  const [result, setResult] = useState<{
+    ok: boolean
+    jarPath?: string
+    errors: string[]
+    logPath: string
+    seconds?: number
+    hint?: string
+    missingDependencies?: string[]
+  } | null>(null)
   const [openFile, setOpenFile] = useState<{ path: string; text: string } | null>(null)
   /**
    * Whether this folder can be pushed at all, and the one action that would make
@@ -56,8 +65,23 @@ export default function BuildPanel({ project, config, onRefreshProject, onOpenIm
     const started = Date.now()
     try {
       const res = mode === 'local' ? await api.build.local({ task: 'build' }) : await api.build.actions()
-      setResult({ ok: res.ok, jarPath: res.jarPath, errors: res.errors, logPath: res.logPath, seconds: Math.round((Date.now() - started) / 1000) })
-      onToast(res.ok ? `Build succeeded (${Math.round((Date.now() - started) / 1000)}s)` : 'Build failed — see errors', res.ok ? 'ok' : 'err')
+      setResult({
+        ok: res.ok,
+        jarPath: res.jarPath,
+        errors: res.errors,
+        logPath: res.logPath,
+        seconds: Math.round((Date.now() - started) / 1000),
+        hint: res.hint,
+        missingDependencies: res.missingDependencies
+      })
+      onToast(
+        res.ok
+          ? `Build succeeded (${Math.round((Date.now() - started) / 1000)}s)`
+          : res.missingDependencies?.length
+            ? `Build failed — ${res.missingDependencies.length} dependency(ies) not declared`
+            : 'Build failed — see errors',
+        res.ok ? 'ok' : 'err'
+      )
       onRefreshProject()
     } catch (e) {
       onToast((e as Error).message, 'err')
@@ -165,6 +189,11 @@ export default function BuildPanel({ project, config, onRefreshProject, onOpenIm
                 </button>
               </div>
             )}
+            {result.hint && (
+              <div className="hint warn" style={{ marginBottom: 8 }}>
+                {result.hint}
+              </div>
+            )}
             {result.errors.slice(0, 12).map((e, i) => (
               <div key={i} style={{ fontFamily: 'var(--mono)', fontSize: 11.5, color: 'var(--red)', marginBottom: 3, wordBreak: 'break-word' }}>
                 {e}
@@ -201,6 +230,13 @@ export default function BuildPanel({ project, config, onRefreshProject, onOpenIm
                 </div>
               ))}
           </div>
+        </div>
+      )}
+
+      {project?.open && (
+        <div className="card">
+          <h4>Dependencies</h4>
+          <DependenciesPanel dir={project.dir} onToast={onToast} />
         </div>
       )}
 

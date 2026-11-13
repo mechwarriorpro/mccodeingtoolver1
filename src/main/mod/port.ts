@@ -18,8 +18,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { readProps } from './props'
-import { ERAS, resolveEra, javaForVersion } from '../versions/eras'
+import { ERAS, resolveEra, javaForVersion, resolveLoaderVersion } from '../versions/eras'
 import { generateProject } from './generate'
+import { scanDependencies } from './deps'
 import { scaffoldProject, templateRoot } from './scaffold'
 import { sourceJavaLevel } from '../build/gradle'
 import { compareMcVersions, type Loader } from '../versions/catalog'
@@ -463,7 +464,63 @@ export function planPort(dir: string, target: { loader: Loader; mcVersion: strin
 }
 
 /** The migration report written into the project root. */
-export function migrationReport(plan: PortPlan, date = new Date()): string {
+/**
+ * The dependencies section of the migration report.
+ *
+ * A port copies sources and regenerates the build; it does not know what those
+ * sources were written against. The result is a project that fails with
+ * "package com.simibubi.create does not exist" on a codebase that compiled
+ * before the port — a dependency was left behind, and nothing said so.
+ *
+ * Split by kind, because the three answers are not alike: game classes mean the
+ * build file is wrong, a mod means a download, a maven library means a line in
+ * `dependencies`.
+ */
+export function dependencySection(scan: {
+  filesScanned: number
+  dependencies: { package: string; name?: string; kind: string; files: number; declared?: string[]; homepage?: string }[]
+}): string[] {
+  const lines: string[] = []
+  const mods = scan.dependencies.filter((d) => d.kind === 'mod')
+  const libs = scan.dependencies.filter((d) => d.kind === 'library' || d.kind === 'unknown')
+  if (!mods.length && !libs.length) {
+    lines.push('No dependencies beyond Minecraft were found in the sources or the old build files.')
+    return lines
+  }
+  lines.push(`Scanned ${scan.filesScanned} source files. These are outside Minecraft and the loader:`)
+  lines.push('')
+  if (mods.length) {
+    lines.push('### Mod dependencies')
+    lines.push('')
+    lines.push('The port carries sources but not the build files that declared these. Each one needs to be')
+    lines.push('declared again for the new loader, or the code that calls it will not compile.')
+    lines.push('')
+    for (const d of mods) {
+      const version = d.declared?.length ? ` (was ${d.declared.join(', ')})` : ''
+      lines.push(`- **${d.name ?? d.package}** — \`${d.package}\`${version}, used in ${d.files} file(s)`)
+      if (d.homepage) lines.push(`  - ${d.homepage}`)
+    }
+    lines.push('')
+  }
+  if (libs.length) {
+    lines.push('### Libraries')
+    lines.push('')
+    for (const d of libs) {
+      const version = d.declared?.length ? ` (was ${d.declared.join(', ')})` : ''
+      lines.push(`- **${d.name ?? d.package}**${version}, used in ${d.files} file(s)`)
+    }
+    lines.push('')
+  }
+  lines.push('The Shaders tab and the deps panel in the Build tab can find and declare these; a jar placed')
+  lines.push('in `libs/` is not enough until `dependencies` mentions it.')
+  return lines
+}
+
+export function migrationReport(
+  plan: PortPlan,
+  date = new Date(),
+  scan?: Parameters<typeof dependencySection>[0]
+): string {
   const { from, target } = plan
   const lines: string[] = []
   lines.push(`# Porting to ${target.loader} ${target.mcVersion}`)
@@ -494,6 +551,12 @@ export function migrationReport(plan: PortPlan, date = new Date()): string {
     lines.push(`### ${m.title} — ${tag}`)
     lines.push('')
     lines.push(m.detail)
+    lines.push('')
+  }
+  if (scan) {
+    lines.push('## Dependencies the port did not carry')
+    lines.push('')
+    lines.push(...dependencySection(scan))
     lines.push('')
   }
   if (plan.blockers.length) {
@@ -585,6 +648,8 @@ export interface ConvertResult {
   copiedResources: number
   /** Build output and IDE files that were deliberately skipped. */
   skipped: string[]
+  /** What the sources still need beyond Minecraft, for the UI to offer. */
+  dependencies?: { package: string; name?: string; kind: string; files: number; declared?: string[]; homepage?: string }[]
 }
 
 const SKIP_DIRS = new Set(['build', 'out', '.gradle', '.git', '.idea', 'run', 'logs', '.vscode'])
@@ -688,7 +753,10 @@ export function convertProject(opts: ConvertOptions): ConvertResult {
       modVersion: opts.modVersion ?? from.version ?? '1.0.0',
       loader: opts.target.loader,
       mcVersion: opts.target.mcVersion,
-      loaderVersion: '',
+      // A real loader version, not ''. With an empty one gradle cannot resolve
+      // Minecraft, and every source file fails with "package net.minecraft… does
+      // not exist" — which looks like a broken port rather than an empty property.
+      loaderVersion: resolveLoaderVersion(opts.target.loader, opts.target.mcVersion),
       templateRoot: templateRoot(),
       author: opts.author,
       license: opts.license
@@ -719,9 +787,14 @@ export function convertProject(opts: ConvertOptions): ConvertResult {
     })
   }
 
+  // ---- what the sources need that the port cannot carry -------------------
+  // Scanned from the *source* project: the copied tree is the same code, but the
+  // old build file is the only place a version was ever written down.
+  const scan = scanDependencies({ dir: srcAbs, sourceRoot: from.sourceRoot })
+
   // ---- migration report --------------------------------------------------
   const reportPath = path.join(dstAbs, 'MIGRATION.md')
-  fs.writeFileSync(reportPath, migrationReport(plan), 'utf8')
+  fs.writeFileSync(reportPath, migrationReport(plan, new Date(), scan), 'utf8')
 
   // The agent should know where to start, without being told twice.
   const agentNote = path.join(dstAbs, '.agent')
@@ -735,6 +808,9 @@ export function convertProject(opts: ConvertOptions): ConvertResult {
           to: opts.target,
           copiedSources,
           copiedResources,
+          dependencies: scan.dependencies
+            .filter((d) => d.kind !== 'game')
+            .map((d) => ({ package: d.package, name: d.name, kind: d.kind, files: d.files })),
           blockers: plan.blockers,
           createdAt: Date.now()
         },
@@ -755,6 +831,9 @@ export function convertProject(opts: ConvertOptions): ConvertResult {
     backupPath,
     copiedSources,
     copiedResources,
-    skipped: from.legacyFiles
+    skipped: from.legacyFiles,
+    dependencies: scan.dependencies
+      .filter((d) => d.kind !== 'game')
+      .map((d) => ({ package: d.package, name: d.name, kind: d.kind, files: d.files, declared: d.declared, homepage: d.homepage }))
   }
 }

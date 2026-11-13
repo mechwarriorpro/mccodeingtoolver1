@@ -180,6 +180,12 @@ const api = {
     install: () => ipcRenderer.invoke('neoforge:install')
   },
 
+  deps: {
+    scan: (opts?: unknown) => ipcRenderer.invoke('deps:scan', opts),
+    find: (opts: unknown) => ipcRenderer.invoke('deps:find', opts),
+    install: (opts: unknown) => ipcRenderer.invoke('deps:install', opts)
+  },
+
   build: {
     local: (opts?: unknown) => ipcRenderer.invoke('build:local', opts),
     actions: () => ipcRenderer.invoke('build:actions'),

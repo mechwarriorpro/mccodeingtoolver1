@@ -61,7 +61,7 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.4.15 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.4.16 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
 > v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
 > decompiler picking a Java it could not run.
@@ -88,6 +88,15 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.4.16** fixes the two reasons a ported mod failed to compile, which look the same in a gradle log and are
+> not. `error: package net.minecraft.world.level does not exist` meant the port wrote an **empty loader version**
+> into `gradle.properties`, so gradle never put the game on the classpath — it now resolves a real NeoForge,
+> Forge or Fabric build for the target version. `error: package com.simibubi.create… does not exist` meant a
+> **dependency the port did not carry**: a port copies sources but not the build files that declared them. The
+> Build tab now has a **Dependencies** panel that scans both the imports and the old build files, says which of
+> the two problems you have, and finds a build for the right Minecraft version and loader on Modrinth, drops the
+> jar in `libs/` and declares it — a jar alone was never enough. The port report lists them too, in
+> `MIGRATION.md` and on screen.
 > **v0.4.15** makes **Build on GitHub** work on a project that has never been pushed — which is every project
 > made by decompiling a mod. It said "Not a git repository. Create one first (Settings > GitHub)", which was
 > wrong twice: the app can create the repository itself, and Settings is where you sign in. It now creates the

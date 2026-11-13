@@ -151,6 +151,8 @@ import {
 import { isGradleProject, runLocalBuild, buildLogPath, findBuiltJar, gitSummary } from '../build/gradle'
 import { ghPreflight, initGithubRepo, runActionsBuild } from '../build/actions'
 import { repoState, suggestRepoName } from '../build/repo'
+import { scanDependencies } from '../mod/deps'
+import { declareJarDependency, findCandidates, findVersionFile, libsDir } from '../mod/dep-resolve'
 import { readJarInfo, installJar } from '../mod/jar'
 import { detectTechnicInstances, buildTechnicPackZip, launchTechnic } from '../game/technic'
 import { gameStatus, launchDevClient, onGameLog, onGameStatus, readGameLog, stopGame } from '../game/launcher'
@@ -1381,6 +1383,80 @@ export function registerIpc(): void {
       return res
     }
   )
+
+  /**
+   * What this project needs beyond Minecraft, and where to get it.
+   *
+   * The failure it answers: a port carries sources but not the build files that
+   * declared their dependencies, so the new project fails with
+   * "package com.simibubi.create does not exist" — a missing download, reported
+   * as if it were broken code.
+   *
+   * `buildErrors` is what makes this useful rather than noisy: given a failed
+   * build's output it can tell a missing dependency apart from a build file that
+   * cannot resolve Minecraft at all, which need completely different fixes.
+   */
+  ipcMain.handle('deps:scan', (_e, opts: { dir?: string; buildErrors?: string[] } = {}) => {
+    const cfg = loadConfig()
+    const dir = opts.dir || activeProjectDir(cfg)
+    if (!dir) return { ok: false, error: 'No project open.', dependencies: [], gameClassErrors: [], filesScanned: 0 }
+    const props = parseProps(path.join(dir, 'gradle.properties'))
+    const scan = scanDependencies({ dir, buildErrors: opts.buildErrors })
+    return {
+      ok: true,
+      dir,
+      mcVersion: detectMcVersion(props),
+      loader: detectLoader(props),
+      filesScanned: scan.filesScanned,
+      gameClassErrors: scan.gameClassErrors,
+      dependencies: scan.dependencies.filter((d) => d.kind !== 'game')
+    }
+  })
+
+  /** Candidate downloads for one dependency, from Modrinth. */
+  ipcMain.handle('deps:find', async (_e, opts: { package: string; name?: string; dir?: string }) => {
+    const cfg = loadConfig()
+    const dir = opts.dir || activeProjectDir(cfg)
+    const props = dir ? parseProps(path.join(dir, 'gradle.properties')) : {}
+    const mcVersion = detectMcVersion(props)
+    const loader = detectLoader(props)
+    const res = await findCandidates({ package: opts.package, name: opts.name }, { mcVersion, loader })
+    if (!res.ok) return { ok: false, candidates: [], error: res.error, mcVersion, loader }
+    // One version lookup per candidate is cheap and turns a list of guesses into
+    // a list the user can act on; a candidate with no build for this version is
+    // shown but marked, not hidden.
+    const withFiles = await Promise.all(
+      res.candidates.slice(0, 4).map(async (c) => {
+        if (!c.projectId) return { ...c }
+        const v = await findVersionFile(c.projectId, { mcVersion, loader })
+        return { ...c, file: v.ok ? v.file : undefined, missing: v.ok ? undefined : v.error, versionId: v.versionId }
+      })
+    )
+    return { ok: true, mcVersion, loader, candidates: withFiles }
+  })
+
+  /** Download one dependency jar and declare it so gradle actually compiles against it. */
+  ipcMain.handle('deps:install', async (_e, opts: { dir?: string; url: string; name: string }) => {
+    const cfg = loadConfig()
+    const dir = opts.dir || activeProjectDir(cfg)
+    if (!dir) return { ok: false, error: 'No project open.' }
+    if (!/^https:\/\//i.test(opts.url)) return { ok: false, error: 'Only https downloads are allowed.' }
+    if (!/\.jar$/i.test(opts.name)) return { ok: false, error: 'That is not a jar file.' }
+    try {
+      const target = path.join(libsDir(dir), path.basename(opts.name))
+      fs.mkdirSync(path.dirname(target), { recursive: true })
+      const res = await fetch(opts.url, { headers: { 'User-Agent': 'MC-Forge-Agent' } })
+      if (!res.ok) return { ok: false, error: `Download failed: HTTP ${res.status}` }
+      fs.writeFileSync(target, Buffer.from(await res.arrayBuffer()))
+      const declared = declareJarDependency(dir, target)
+      if (!declared.ok) {
+        return { ok: false, error: `Downloaded to ${target} but could not add it to the build file: ${declared.error}` }
+      }
+      return { ok: true, path: target, added: declared.added }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    }
+  })
 
   ipcMain.handle('ref:search', (_e, opts: { query: string; id?: string; regex?: boolean }) => {
     if (!opts.query?.trim()) return { hits: [] }

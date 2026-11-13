@@ -34,6 +34,8 @@ const sources = [
   'src/main/mod/textures.ts',
   'src/main/mod/renderer.ts',
   'src/main/mod/shader-stack.ts',
+  'src/main/mod/deps.ts',
+  'src/main/mod/dep-resolve.ts',
   'src/main/updater-logic.ts',
   'src/main/mod/port.ts',
   'src/main/diag.ts',

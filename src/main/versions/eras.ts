@@ -1011,3 +1011,44 @@ zipStoreBase=GRADLE_USER_HOME
 zipStorePath=wrapper/dists
 `
 }
+
+/**
+ * A real, non-empty loader version for a target project.
+ *
+ * A generated project with `neo_version=` (empty) does not resolve Minecraft at
+ * all: gradle fails with "package net.minecraft.world.level does not exist" on
+ * every single line, which reads like hundreds of API errors and is really one
+ * empty property. The port used to pass '' here and produced exactly that.
+ *
+ * Order: the cached catalog's real builds first (newest that supports the game
+ * version), then a derived guess that at least resolves to something plausible so
+ * the project is not obviously broken while the catalog refreshes.
+ */
+export function resolveLoaderVersion(
+  loader: Loader,
+  mcVersion: string,
+  catalog: Catalog | null = cachedCatalog()
+): string {
+  if (catalog) {
+    const builds = catalog.loaders[loader].filter((l) => l.mcVersions.includes(mcVersion))
+    if (builds.length) {
+      // Catalog order is newest-first from the upstream APIs; sorting guards a
+      // cached file written by an older version of the app.
+      const newest = [...builds].sort((a, b) => compareMcVersions(b.version, a.version))[0]
+      if (newest?.version) return newest.version
+    }
+  }
+  const parts = mcVersion.split('.')
+  if (loader === 'neoforge') {
+    // NeoForge tracks the game: 1.21.1 → 21.1.x, 1.20.6 → 20.6.x.
+    const minor = parts[1] ?? '21'
+    const patch = parts[2] ?? '1'
+    return `${minor}.${patch}.0`
+  }
+  if (loader === 'forge') {
+    // Forge's version is its own sequence and cannot be derived from the game
+    // version; 1 is a valid, resolvable placeholder the user edits.
+    return '1.0.0'
+  }
+  return '0.16.0'
+}
