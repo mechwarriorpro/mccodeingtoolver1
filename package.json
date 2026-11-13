@@ -1,0 +1,43 @@
+{
+  "name": "mc-forge-agent",
+  "productName": "MC Forge Agent",
+  "version": "0.4.19",
+  "description": "Vision-capable AI coding agent for Minecraft 1.21.1 NeoForge mods: generates, edits, builds via GitHub Actions, installs and play-tests.",
+  "main": "out/main/index.js",
+  "author": "ShadowClanGaming",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "start": "electron-vite preview",
+    "build": "electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "dist:win": "npm run build && electron-builder --win --publish never",
+    "dist:dir": "npm run build && electron-builder --dir --publish never",
+    "postinstall": "node scripts/patch-electron-shim.mjs",
+    "test": "node scripts/test.mjs",
+    "pack:win": "npm run build && electron-builder --win --publish never"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.77",
+    "adm-zip": "^0.5.16",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
+    "electron-updater": "^6.8.11",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/adm-zip": "^0.5.7",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.17",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^2.3.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11"
+  }
+}
