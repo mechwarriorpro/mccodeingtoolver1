@@ -26,6 +26,9 @@ const sources = [
   'src/main/github/references.ts',
   'src/main/mod/fork.ts',
   'src/main/mod/props.ts',
+  'src/main/mod/assets.ts',
+  'src/main/mod/models.ts',
+  'src/main/mod/texture-ref.ts',
   'src/main/mod/port.ts',
   'src/main/diag.ts',
   'src/main/agent/autoswitch.ts',
@@ -109,6 +112,8 @@ const walk = (dir) => {
 }
 walk(outDir)
 
+// Every tests/*.test.mjs is picked up, including layout.test.mjs (which reads
+// the renderer source directly) and models.test.mjs (compiled modules above).
 // repo.test.mjs uses git directly, so it runs without the compiled modules
 const tests = fs.readdirSync(path.join(root, 'tests')).filter((f) => f.endsWith('.test.mjs'))
 let failed = 0

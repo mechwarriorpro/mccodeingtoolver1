@@ -123,6 +123,11 @@ import {
   touchFork
 } from '../mod/fork'
 import { convertProject, detectProject, migrationReport, planPort } from '../mod/port'
+import { detectMcVersion } from '../agent/engine'
+import { readProps } from '../mod/props'
+import { assetLayout, blockstateJson } from '../mod/assets'
+import { QUADRUPED_BONES, animationJson, blockModelJson, entityModelJson, modelPaths, quadrupedWalk, writeModels } from '../mod/models'
+import { textureFile, textureRef } from '../mod/texture-ref'
 import { bestAvailable, describeRunTarget } from '../agent/autoswitch'
 import { loadResearch, researchDir, saveResearch, runMode } from '../agent/modes'
 import { knowledgeOn } from '../learn'
@@ -942,6 +947,129 @@ export function registerIpc(): void {
    * "the best available" is only honest if the user can see what that means on
    * their own keys, and that it will cost money.
    */
+  /**
+   * The 3D model panel's data. The paths are computed from the project's
+   * Minecraft version rather than hardcoded, because a 1.12 project has no
+   * geo/ folder and showing one would send the user looking for files that
+   * nothing reads.
+   */
+  ipcMain.handle('models:info', () => {
+    const cfg = loadConfig()
+    const dir = cfg.workspaceDir
+    const props = readProps(path.join(dir, 'gradle.properties'))
+    const mcVersion = detectMcVersion(props)
+    const modId = props.mod_id ?? props.modid ?? 'modid'
+    const layout = assetLayout({ mcVersion, modId })
+    return {
+      ok: true,
+      modId,
+      mcVersion,
+      legacy: layout.legacy,
+      note: layout.note,
+      folders: {
+        blockModels: layout.blockModels,
+        itemModels: layout.itemModels,
+        blockstates: layout.blockstates,
+        geo: layout.geo,
+        animations: layout.animations
+      }
+    }
+  })
+
+  /**
+   * Write a starting model immediately, without a model call.
+   *
+   * This exists because "generate a model" is deterministic: there is nothing
+   * for an LLM to decide, and routing it through chat costs a turn and can add
+   * the exact kind of invented coordinate that makes a model invisible. The
+   * agent still gets the tool for cases that need judgement (a mob that matches
+   * a described creature); this is the button for the common case.
+   */
+  ipcMain.handle(
+    'models:create',
+    (
+      _e,
+      req: { name: string; kind: 'block' | 'item' | 'entity' | 'animation'; texture?: string; skeleton?: 'none' | 'quadruped'; size?: [number, number, number] }
+    ) => {
+      const cfg = loadConfig()
+      const dir = cfg.workspaceDir
+      const props = readProps(path.join(dir, 'gradle.properties'))
+      const mcVersion = detectMcVersion(props)
+      const modId = (props.mod_id ?? props.modid ?? 'modid').trim()
+      const name = (req.name ?? '').trim()
+      if (!/^[a-z0-9_]{2,48}$/.test(name)) {
+        return { ok: false, error: 'Use 2-48 lowercase letters, digits or underscores for the name (it becomes a file name and a registry id).' }
+      }
+      if (!/^[a-z0-9_]{2,48}$/.test(modId)) {
+        return { ok: false, error: `The project's mod id (${modId}) is not set in gradle.properties, so asset paths cannot be built.` }
+      }
+      const layout = assetLayout({ mcVersion, modId })
+      if (layout.legacy && (req.kind === 'entity' || req.kind === 'animation')) {
+        return {
+          ok: false,
+          error: `Minecraft ${mcVersion} has no JSON entity models or animations. A 1.12 mob is a Java ModelBase class — ask the agent for one.`
+        }
+      }
+
+      const writes: { path: string; text: string; kind: 'block' | 'item' | 'entity' | 'animation' | 'blockstate' }[] = []
+      try {
+        if (req.kind === 'block') {
+          const tex = textureRef(modId, req.texture, `block/${name}`)
+          const size = req.size ?? [16, 16, 16]
+          const full = size[0] === 16 && size[1] === 16 && size[2] === 16
+          writes.push({
+            path: modelPaths({ modId, name, kind: 'block', mcVersion }),
+            kind: 'block',
+            text: blockModelJson(
+              full
+                ? { parent: 'minecraft:block/cube_all', all: tex }
+                : { textures: { all: tex }, elements: [{ origin: [8 - size[0] / 2, 0, 8 - size[2] / 2], size, uv: [0, 0] }] }
+            )
+          })
+          writes.push({ path: `${layout.blockstates}/${name}.json`, kind: 'blockstate', text: blockstateJson({ mcVersion, modelId: `${modId}:block/${name}` }) })
+        } else if (req.kind === 'item') {
+          writes.push({
+            path: modelPaths({ modId, name, kind: 'item', mcVersion }),
+            kind: 'item',
+            text: blockModelJson({ parent: 'minecraft:item/generated', all: textureRef(modId, req.texture, `item/${name}`) })
+          })
+        } else {
+          const bones = req.skeleton === 'quadruped' ? QUADRUPED_BONES(8, 6) : [{ name: 'root', pivot: [0, 8, 0] as [number, number, number], boxes: [{ origin: [-4, 0, -4] as [number, number, number], size: [8, 16, 8] as [number, number, number], uv: [0, 0] as [number, number] }] }]
+          writes.push({
+            path: modelPaths({ modId, name, kind: 'entity', mcVersion }),
+            kind: 'entity',
+            text: entityModelJson({ identifier: `geometry.${modId}.${name}`, bones })
+          })
+          if (req.kind === 'animation') {
+            if (req.skeleton !== 'quadruped') {
+              return { ok: false, error: 'A walk cycle needs the quadruped skeleton, because it animates named bones — pick "quadruped" to generate both.' }
+            }
+            writes.push({
+              path: modelPaths({ modId, name: `${name}.walk`, kind: 'animation', mcVersion }),
+              kind: 'animation',
+              text: animationJson(quadrupedWalk(`animation.${modId}.${name}.walk`))
+            })
+          }
+        }
+      } catch (e) {
+        return { ok: false, error: (e as Error).message }
+      }
+
+      const res = writeModels(dir, writes)
+      if (!res.ok) {
+        return {
+          ok: false,
+          error: res.issues.filter((i) => i.severity === 'error').map((i) => i.message).join('\n'),
+          issues: res.issues,
+          written: res.written
+        }
+      }
+      for (const win of BrowserWindow.getAllWindows()) win.webContents.send('project:changed', {})
+      const texture = req.kind === 'block' || req.kind === 'item' ? textureRef(modId, req.texture, `${req.kind === 'block' ? 'block' : 'item'}/${name}`) : null
+      return { ok: true, written: res.written, issues: res.issues, texture, textureFile: texture ? textureFile(modId, texture) : null }
+    }
+  )
+
   ipcMain.handle('modes:status', () => {
     const cfg = loadConfig()
     const best = bestAvailable(cfg)

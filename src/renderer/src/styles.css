@@ -74,9 +74,11 @@ textarea { resize: none; }
 /* ---------- layout ---------- */
 .app {
   display: grid;
-  grid-template-columns: 268px 1fr;
+  /* --side-width is dragged by the handle beside the sidebar. */
+  grid-template-columns: var(--side-width, 268px) 1fr;
   grid-template-rows: 48px 1fr;
   height: 100%;
+  overflow: hidden;
 }
 .titlebar {
   grid-column: 1 / -1;
@@ -116,7 +118,10 @@ textarea { resize: none; }
 
 .main {
   display: grid;
-  grid-template-columns: 1fr 380px;
+  /* Set from a style attribute at runtime so the divide can be dragged; the
+     fallback keeps it sane if the value is missing. `minmax(320px, 1fr)` stops
+     the chat from being squeezed to nothing while the rail is dragged wide. */
+  grid-template-columns: minmax(320px, 1fr) 6px var(--rail-width, 380px);
   min-height: 0;
   overflow: hidden;
 }
@@ -215,14 +220,72 @@ textarea { resize: none; }
 .autonomy button.on.blue { background: #14263d; color: var(--blue); }
 
 /* ---------- right rail ---------- */
-.rail { border-left: 1px solid var(--line); background: var(--bg-2); display: flex; flex-direction: column; min-height: 0; }
-.rail-tabs { display: flex; border-bottom: 1px solid var(--line); }
-.rail-tabs button {
-  flex: 1; border: none; border-radius: 0; background: transparent; padding: 10px 5px;
-  font-size: 12px; color: var(--muted); border-bottom: 2px solid transparent; white-space: nowrap;
+.rail {
+  border-left: 1px solid var(--line);
+  background: var(--bg-2);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 300px;
+  /* The rail is a resizable pane; the handle sits on its left edge. */
+  overflow: hidden;
 }
-.rail-tabs button.on { color: var(--text); border-bottom-color: var(--accent); background: #10151a; }
+
+/* Tabs: grouped, wrapping, and never clipped. `flex-wrap` is the whole fix —
+   a single non-wrapping row pushed the last tabs past the window edge, where
+   they could not be reached by resizing or scrolling. */
+.rail-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  /* A short window scrolls the tab strip rather than hiding tabs inside it. */
+  max-height: 40vh;
+  overflow-y: auto;
+  flex-shrink: 0;
+}
+.rail-group { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rail-group-label {
+  font-size: 8.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--dim);
+  padding-left: 3px;
+}
+.rail-group-items { display: flex; flex-wrap: wrap; gap: 3px; }
+.rail-tabs button {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-3);
+  padding: 4px 8px;
+  font-size: 11.5px;
+  color: var(--muted);
+  white-space: nowrap;
+  cursor: pointer;
+  font-family: inherit;
+}
+.rail-tabs button:hover { color: var(--text); border-color: var(--line-2); }
+.rail-tabs button.on { color: var(--text); border-color: #2b5b41; background: var(--accent-dim); }
 .rail-body { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; }
+
+/* Drag handles between the chat and the rail, and beside the sidebar. */
+.resizer {
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  position: relative;
+  z-index: 5;
+  flex-shrink: 0;
+}
+.resizer::after {
+  content: '';
+  position: absolute;
+  inset: 0 2px;
+  background: var(--line);
+  transition: background 0.12s;
+}
+.resizer:hover::after, .resizer.dragging::after { background: var(--accent); }
 
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 11px; margin-bottom: 10px; }
 .card h4 { margin: 0 0 8px; font-size: 12.5px; display: flex; align-items: center; gap: 7px; }
@@ -736,3 +799,41 @@ button.link:hover { color: var(--accent-2); }
 .genome-view { margin-top: 8px; }
 .evolve details summary { cursor: pointer; font-size: 11.5px; color: var(--muted); }
 .evolve ul li { margin-bottom: 5px; line-height: 1.5; }
+
+/* A narrow window must still expose every panel. Below this width the two
+   columns cannot both be usable, so the rail takes the full width underneath
+   the chat instead of being clipped at the right edge. */
+@media (max-width: 900px) {
+  .app {
+    grid-template-columns: 1fr;
+    /* Title bar, chat+rail, then the sidebar: three real rows. The sidebar used
+       to be `display: none` here, which did not make it narrow — it made every
+       conversation control disappear with no way to get it back. Hiding a panel
+       is not a responsive layout. */
+    grid-template-rows: 48px minmax(0, 1fr) minmax(120px, 26vh);
+    overflow: hidden;
+  }
+  .sidebar {
+    max-height: 26vh;
+    border-right: none;
+    border-top: 1px solid var(--line);
+  }
+  /* No vertical divider when the panes are stacked. */
+  .app > .resizer { display: none; }
+  .main {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(200px, 1fr) minmax(240px, 45vh);
+  }
+  .main > .resizer { display: none; }
+  .rail {
+    border-left: none;
+    border-top: 1px solid var(--line);
+    min-width: 0;
+    width: 100%;
+  }
+}
+
+/* While a divider is being dragged, stop the pointer selecting text in either
+   pane — which otherwise makes a resize feel like a glitch. */
+body.resizing { cursor: col-resize; user-select: none; }
+body.resizing * { cursor: col-resize !important; }

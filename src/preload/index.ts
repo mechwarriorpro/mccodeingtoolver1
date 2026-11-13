@@ -208,6 +208,12 @@ const api = {
     stopAny: () => ipcRenderer.invoke('game:stopAny')
   },
 
+  /** 3D models and animations: the paths for this project's version, and a one-click generator. */
+  models: {
+    info: () => ipcRenderer.invoke('models:info'),
+    create: (req: unknown) => ipcRenderer.invoke('models:create', req)
+  },
+
   chat: {
     list: () => ipcRenderer.invoke('chat:list'),
     load: (id: string) => ipcRenderer.invoke('chat:load', id),

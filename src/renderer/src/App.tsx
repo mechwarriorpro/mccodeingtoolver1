@@ -13,8 +13,49 @@ import PortPanel from './components/PortPanel'
 import DiagPanel from './components/DiagPanel'
 import ModesPanel from './components/ModesPanel'
 import EvolvePanel from './components/EvolvePanel'
+import ModelsPanel from './components/ModelsPanel'
 import ClipPanel from './components/ClipPanel'
 import LearnPanel from './components/LearnPanel'
+
+/**
+ * Every panel, grouped by the question it answers.
+ *
+ * Flat tabs stopped working at ten: they ran off the edge of the window and the
+ * overflow could not be scrolled to, because the strip was a single non-wrapping
+ * flex row. Grouping keeps the count per row small, and wrapping means the strip
+ * grows downwards instead of outwards, so no tab can ever be off-screen.
+ */
+const TAB_GROUPS: { label: string; tabs: { id: RailTab; label: string; hint: string }[] }[] = [
+  {
+    label: 'Make',
+    tabs: [
+      { id: 'game', label: 'Game', hint: 'Game window, launch, vision' },
+      { id: 'project', label: 'Build', hint: 'Build, jar, install and project files' },
+      { id: 'port', label: 'Update', hint: 'Port an existing mod to another version or loader' },
+      { id: 'models', label: 'Models', hint: '3D block, item and mob models, plus animations' }
+    ]
+  },
+  {
+    label: 'Know',
+    tabs: [
+      { id: 'refs', label: 'References', hint: 'Reference mods and editable forks' },
+      { id: 'learn', label: 'Lessons', hint: 'Mistakes the app has learned from' },
+      { id: 'modes', label: 'Modes', hint: 'AutoSwitch, learning mode and deep research' }
+    ]
+  },
+  {
+    label: 'See',
+    tabs: [
+      { id: 'files', label: 'Shots', hint: 'Screenshots of the running game' },
+      { id: 'clips', label: 'Clips', hint: 'Record gameplay and analyse it with a vision model' },
+      { id: 'diag', label: 'Log', hint: 'Diagnostics at three levels of detail' }
+    ]
+  },
+  {
+    label: 'Grow',
+    tabs: [{ id: 'evolve', label: 'Evolve', hint: 'Let the agent evolve its own prompt' }]
+  }
+]
 
 type RailTab =
   | 'game'
@@ -26,6 +67,7 @@ type RailTab =
   | 'learn'
   | 'modes'
   | 'evolve'
+  | 'models'
   | 'diag'
 
 export default function App(): JSX.Element {
@@ -49,6 +91,70 @@ export default function App(): JSX.Element {
   const [showSetup, setShowSetup] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [railTab, setRailTab] = useState<RailTab>('game')
+  /**
+   * Width of the right-hand rail, dragged by the handle beside it. Persisted,
+   * because a user who widened it once should not have to do it every launch.
+   */
+  const [sideWidth, setSideWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('sideWidth'))
+    return Number.isFinite(saved) && saved >= 200 ? saved : 268
+  })
+  useEffect(() => {
+    localStorage.setItem('sideWidth', String(sideWidth))
+  }, [sideWidth])
+
+  /** Drag the sidebar divider. Same clamp rule as the rail. */
+  const startSideDrag = useCallback(() => {
+    const onMove = (e: MouseEvent): void => {
+      const max = Math.max(220, window.innerWidth - 420)
+      setSideWidth(Math.min(Math.max(e.clientX, 190), max))
+    }
+    const onUp = (): void => {
+      document.body.classList.remove('resizing')
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    document.body.classList.add('resizing')
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [])
+
+  const [railWidth, setRailWidth] = useState<number>(() => {
+    const saved = Number(localStorage.getItem('railWidth'))
+    return Number.isFinite(saved) && saved >= 300 ? saved : 380
+  })
+  const dragging = useRef(false)
+  const railRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    localStorage.setItem('railWidth', String(railWidth))
+  }, [railWidth])
+
+  /**
+   * Drag the divider between the chat and the rail.
+   *
+   * Clamped to what the window can actually show: dragging past the window edge
+   * is how a panel ends up somewhere the user cannot reach it, which is the bug
+   * this whole change is about.
+   */
+  const startDrag = useCallback(() => {
+    dragging.current = true
+    const onMove = (e: MouseEvent): void => {
+      if (!dragging.current) return
+      const right = window.innerWidth - e.clientX
+      const max = Math.max(320, window.innerWidth - 360)
+      setRailWidth(Math.min(Math.max(right, 300), max))
+    }
+    const onUp = (): void => {
+      dragging.current = false
+      document.body.classList.remove('resizing')
+      window.removeEventListener('mousemove', onMove)
+      window.removeEventListener('mouseup', onUp)
+    }
+    document.body.classList.add('resizing')
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  }, [])
   const [lightbox, setLightbox] = useState<string | null>(null)
   const [shots, setShots] = useState<ScreenshotInfo[]>([])
   const autoShotDone = useRef(false)
@@ -360,7 +466,14 @@ export default function App(): JSX.Element {
         </div>
       </aside>
 
-      <main className={`main ${railTab === 'files' ? '' : ''}`}>
+      <div
+        className="resizer"
+        onMouseDown={startSideDrag}
+        title="Drag to resize"
+        role="separator"
+        aria-orientation="vertical"
+      />
+      <main className="main" style={{ ['--rail-width' as string]: `${railWidth}px` }}>
         <ChatPanel
           messages={messages}
           streamingText={streaming}
@@ -385,55 +498,30 @@ export default function App(): JSX.Element {
           onOpenImage={setLightbox}
         />
 
-        <div className="rail">
-          <div className="rail-tabs">
-            <button className={railTab === 'game' ? 'on' : ''} onClick={() => setRailTab('game')} title="Game window, launch, vision">
-              Game
-            </button>
-            <button className={railTab === 'project' ? 'on' : ''} onClick={() => setRailTab('project')}>
-              Build
-            </button>
-            <button className={railTab === 'files' ? 'on' : ''} onClick={() => setRailTab('files')}>
-              Screenshots
-            </button>
-            <button className={railTab === 'refs' ? 'on' : ''} onClick={() => setRailTab('refs')}>
-              References
-            </button>
-            <button
-              className={railTab === 'port' ? 'on' : ''}
-              onClick={() => setRailTab('port')}
-              title="Update an existing mod to another Minecraft version or loader"
-            >
-              Update
-            </button>
-            <button className={railTab === 'clips' ? 'on' : ''} onClick={() => setRailTab('clips')} title="Record gameplay and analyse it with a vision model">
-              Clips
-            </button>
-            <button className={railTab === 'learn' ? 'on' : ''} onClick={() => setRailTab('learn')} title="Mistakes the app has learned from">
-              Lessons
-            </button>
-            <button
-              className={railTab === 'modes' ? 'on' : ''}
-              onClick={() => setRailTab('modes')}
-              title="AutoSwitch, learning mode and deep research"
-            >
-              Modes
-            </button>
-            <button
-              className={railTab === 'evolve' ? 'on' : ''}
-              onClick={() => setRailTab('evolve')}
-              title="Let the agent evolve its own prompt against weighted rules"
-            >
-              Evolve
-            </button>
-            <button
-              className={railTab === 'diag' ? 'on' : ''}
-              onClick={() => setRailTab('diag')}
-              title="What the agent is doing, at three levels of detail"
-            >
-              Diagnostics
-            </button>
-          </div>
+        <div className="resizer" onMouseDown={startDrag} title="Drag to resize" role="separator" aria-orientation="vertical" />
+        <div className="rail" ref={railRef}>
+          {/* Tabs wrap and are grouped by what they are for. Ten flat tabs used
+              to run off the right edge of the window, which made the last ones
+              unreachable — a window cannot be resized past the monitor. */}
+          <nav className="rail-tabs" aria-label="Panels">
+            {TAB_GROUPS.map((group) => (
+              <div className="rail-group" key={group.label}>
+                <span className="rail-group-label">{group.label}</span>
+                <div className="rail-group-items">
+                  {group.tabs.map((t) => (
+                    <button
+                      key={t.id}
+                      className={railTab === t.id ? 'on' : ''}
+                      onClick={() => setRailTab(t.id)}
+                      title={t.hint}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </nav>
           <div className="rail-body">
             {railTab === 'game' && (
               <GamePanel
@@ -471,6 +559,12 @@ export default function App(): JSX.Element {
               <div className="card">
                 <h4>Modes</h4>
                 <ModesPanel onToast={toast} onSend={(text) => void send(text, [])} />
+              </div>
+            )}
+            {railTab === 'models' && (
+              <div className="card">
+                <h4>3D models &amp; animations</h4>
+                <ModelsPanel onToast={toast} onSend={(text) => void send(text, [])} />
               </div>
             )}
             {railTab === 'evolve' && (

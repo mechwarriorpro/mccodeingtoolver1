@@ -296,6 +296,16 @@ async function asyncChecks() {
   })
 
   // The important one: a mutation that fails to typecheck is never evaluated.
+  //
+  // evolveOnce reads the persisted store, so the generation cap has to be
+  // cleared here. Without this the checks pass on the first run of a fresh
+  // checkout and fail on the second, because the previous run left the store at
+  // its 20-generation limit and evolveOnce returns "at the limit" before it
+  // ever reaches the mutator. A test whose result depends on how many times it
+  // has run is not a test.
+  const freshStore = { active: 0, generations: [], paused: false, maxGenerations: 20, rules, root: '' }
+  genome.saveStore(freshStore)
+
   const appDir = path.join(root, 'app-src')
   fs.mkdirSync(path.join(appDir, 'src/main/agent'), { recursive: true })
   fs.writeFileSync(path.join(appDir, 'src/main/agent/prompt.ts'), 'export const x = 1\n')
@@ -310,6 +320,8 @@ async function asyncChecks() {
     assert.equal(step.ok, false)
     assert.match(step.verdict, /typecheck/i)
   })
+
+  genome.saveStore(freshStore)
 
   const noEdit = await loop.evolveOnce({
     appDir,

@@ -1,6 +1,7 @@
 import type { Loader } from '../versions/catalog'
 import { resolveEra } from '../versions/eras'
 import { lessonsForPrompt } from '../learn'
+import { modelGuidance } from '../mod/assets'
 
 /**
  * System prompt appended to Claude Code's preset prompt.
@@ -81,6 +82,21 @@ You have Claude Code's normal file tools (Read/Write/Edit/Glob/Grep/LS) plus app
 - \`mcp__mcfrogeagent__recall_mistakes\` — check whether an error you are looking at has happened before, with the fix that worked. **Call it before debugging a build or runtime failure from scratch.**
 - \`mcp__mcfrogeagent__remember_fix\` — record an error and the fix that actually worked, so it is recognised next time. Call it once the fix is verified.
 - \`mcp__mcfrogeagent__list_mistakes\` — the lessons the app has learned so far.
+- \`mcp__mcfrogeagent__make_model\` — generate a block model, item model, entity geometry or animation as valid JSON, **in the right folder**. Use it rather than typing model JSON: the three things that make a model silently invisible are bad coordinates, a non-namespaced texture, and the wrong directory.
+- \`mcp__mcfrogeagent__check_model\` — validate a model or animation file. Call it after writing one by hand.
+
+# 3D models and animations
+
+A model that is structurally wrong does not throw: it renders as nothing, and the log says nothing useful. So:
+
+- **Use \`make_model\`** for blocks, items, entity geometry and animations. For a mob, \`kind: "entity", skeleton: "quadruped", animation: "walk"\` gives a parented body/head/four legs plus a walk cycle.
+- **File locations are fixed.** Block and item models go in \`assets/<modid>/models/{block,item}/\`; entity geometry in \`assets/<modid>/geo/<name>.geo.json\`; animations in \`assets/<modid>/animations/<name>.animation.json\`. Anywhere else and the game will not look.
+- **A block also needs a blockstate** at \`assets/<modid>/blockstates/<name>.json\` pointing at the model, or it renders as the missing-texture cube. \`make_model\` writes it for you.
+- **Textures are namespaced**: \`<modid>:block/<name>\`, never a bare path. A missing texture renders as the black-and-pink checkerboard — check it in the screenshot rather than assuming.
+- **Identifiers are prefixes, not names**: \`geometry.<modid>.<name>\` for a model and \`animation.<modid>.<name>\` for an animation. The renderer looks these up by string, so a typo is an invisible entity.
+- **Entity models are Bedrock geometry**, the same format Blockbench exports. Tell the user to open the \`.geo.json\` in Blockbench when the shape needs real art: the rig is correct, but a generator cannot make something look like a dragon.
+- **Animations need a controller.** A file in \`animations/\` does nothing until the entity's renderer or animation controller references it, and rotation values are in degrees.
+${legacyModelNote(opts.mcVersion ?? '1.21.1', opts.modId)}
 - \`mcp__mcfrogeagent__add_reference_mod\` — pull another mod from a GitHub release (or a local jar), decompile it with Vineflower, and copy the sources to \`reference/<slug>/\`.
 - \`mcp__mcfrogeagent__list_reference_mods\` / \`search_reference\` / \`reference_status\` — browse and grep those sources.
 
@@ -222,6 +238,20 @@ function modernJava(mc: string, since: string): boolean {
  * The learning block, or nothing at all when there is nothing to say. An empty
  * heading would only teach the model that the section is noise.
  */
+/**
+ * The pre-1.13 paragraph, or nothing. Kept separate from the generic model
+ * section because on 1.12 the honest answer is "this format does not exist",
+ * and repeating the modern advice there is worse than useless — it is a
+ * confident instruction to create files the game ignores.
+ */
+function legacyModelNote(mc: string, modId: string): string {
+  try {
+    return modelGuidance({ mcVersion: mc, modId })
+  } catch {
+    return ''
+  }
+}
+
 function lessonsBlock(loader: Loader, mc: string): string {
   try {
     const block = lessonsForPrompt({ loader, mcVersion: mc })

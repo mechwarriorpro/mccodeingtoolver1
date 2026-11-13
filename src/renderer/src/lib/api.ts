@@ -117,6 +117,41 @@ export interface VersionChoice {
   loaders: Loader[]
 }
 
+export type ModelKind = 'block' | 'item' | 'entity' | 'animation'
+
+export interface ModelInfo {
+  ok: boolean
+  modId: string
+  mcVersion: string
+  /** Pre-1.13: no geo/ or animations/ folders exist, and entity models are Java. */
+  legacy: boolean
+  note: string
+  folders: {
+    blockModels: string
+    itemModels: string
+    blockstates: string
+    geo: string | null
+    animations: string | null
+  }
+}
+
+export interface ModelIssue {
+  severity: 'error' | 'warning'
+  message: string
+  fix: string
+}
+
+export interface ModelCreateResult {
+  ok: boolean
+  error?: string
+  written?: string[]
+  issues?: ModelIssue[]
+  /** The texture id the model refers to, e.g. ruby:block/ruby_block. */
+  texture?: string | null
+  /** The png that must exist, or the block renders as a checkerboard. */
+  textureFile?: string | null
+}
+
 export interface LocalModelDef {
   id: string
   label: string
@@ -640,6 +675,16 @@ export interface McfApi {
     launchDirect: () => Promise<{ ok: boolean; error?: string }>
     directStatus: () => Promise<{ running: boolean; pid?: number; titleScreen?: boolean; logPath?: string; exitCode?: number | null }>
     stopAny: () => Promise<{ ok: boolean; error?: string }>
+  }
+  models: {
+    info: () => Promise<ModelInfo>
+    create: (req: {
+      name: string
+      kind: ModelKind
+      texture?: string
+      skeleton?: 'none' | 'quadruped'
+      size?: [number, number, number]
+    }) => Promise<ModelCreateResult>
   }
   chat: {
     list: () => Promise<{ id: string; title: string; updatedAt: number }[]>

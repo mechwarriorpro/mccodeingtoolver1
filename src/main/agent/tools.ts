@@ -20,6 +20,19 @@ import { ghPreflight, runActionsBuild } from '../build/actions'
 import { addFromGithub, ensureReferenceIgnored, getReference, linkToProject, listReferences, parseRepoRef, searchReference, getReference as getRef } from '../github/references'
 import { authToken } from '../github/oauth'
 import { gitSummary } from '../build/gradle'
+import { assetLayout, blockstateJson } from '../mod/assets'
+import { detectMcVersion } from './engine'
+import {
+  QUADRUPED_BONES,
+  animationJson,
+  blockModelJson,
+  entityModelJson,
+  modelPaths,
+  quadrupedWalk,
+  validateModel,
+  writeModels,
+  type ModelKind
+} from '../mod/models'
 
 type TextResult = { content: { type: 'text'; text: string }[]; isError?: boolean }
 
@@ -462,6 +475,125 @@ export function createAgentTools(ctx: ToolContext) {
           )
         } catch (e) {
           return err((e as Error).message)
+        }
+      }
+    ),
+
+    tool(
+      'make_model',
+      'Generate a 3D model or animation as valid Minecraft JSON and write it to the right folder. ' +
+        'Use this instead of typing model JSON by hand: coordinates, namespaces and file locations are the three things that silently make a model invisible. ' +
+        'Kinds: block (a block model), item (an item model), entity (Bedrock geometry, openable in Blockbench), animation (a Bedrock animation). ' +
+        'For a quadruped mob, entity with skeleton="quadruped" gives a body, head and four legs already parented.',
+      {
+        modId: z.string().describe('The mod id, used for the asset path and texture references.'),
+        name: z.string().describe('File name without extension, e.g. "ruby_block" or "ruby_golem".'),
+        kind: z.enum(['block', 'item', 'entity', 'animation']).describe('What to generate.'),
+        texture: z.string().optional().describe('For block/item: the texture path, e.g. "block/ruby_block". Defaults to the name.'),
+        skeleton: z.enum(['none', 'quadruped']).optional().describe('For entity: "quadruped" gives a ready body/head/legs rig.'),
+        animation: z.enum(['none', 'walk']).optional().describe('For entity: add a looping walk cycle for the quadruped rig.'),
+        identifier: z.string().optional().describe('For entity/animation: the identifier. Defaults to geometry.<modId>.<name> / animation.<modId>.<name>.'),
+        size: z.array(z.number()).length(3).optional().describe('For block: [width, height, depth] in pixels (16 = one block). Defaults to a full 16 cube.')
+      },
+      async ({ modId, name, kind, texture, skeleton, animation, identifier, size }) => {
+        const cfg = loadConfig()
+        const dir = cfg.workspaceDir
+        // The folder layout is a property of the Minecraft version, not of the
+        // app: writing a geo file into a 1.12 project makes a file nothing loads.
+        const mcVersion = detectMcVersion(readProps(path.join(dir, 'gradle.properties')))
+        const layout = assetLayout({ mcVersion, modId })
+        if (layout.legacy && (kind === 'entity' || kind === 'animation')) {
+          return err(
+            `Minecraft ${mcVersion} has no JSON entity models or animation files. ` +
+              'A 1.12 mob is a Java class extending ModelBase with ModelRenderer parts, registered in the client proxy — ' +
+              'ask me to write that class instead, or migrate the project to 1.13+ first.'
+          )
+        }
+        const writes: { path: string; text: string; kind: ModelKind | 'animation' | 'blockstate' }[] = []
+        const summary: string[] = []
+
+        if (kind === 'block' || kind === 'item') {
+          const tex = `${modId}:${texture ?? `block/${name}`}`
+          if (kind === 'block') {
+            const elements = size
+              ? [{ origin: [8 - size[0] / 2, 0, 8 - size[2] / 2] as [number, number, number], size: size as [number, number, number], uv: [0, 0] as [number, number] }]
+              : undefined
+            writes.push({
+              kind,
+              path: modelPaths({ modId, name, kind, mcVersion }),
+              text: blockModelJson(
+                elements
+                  ? { textures: { all: tex }, elements }
+                  : { parent: 'minecraft:block/cube_all', all: tex }
+              )
+            })
+            summary.push(`block model → ${modelPaths({ modId, name, kind, mcVersion })}`)
+            // A block without a blockstate pointing at this model is invisible in
+            // the world even though the model file is perfect.
+            const statePath = `${layout.blockstates}/${name}.json`
+            writes.push({
+              kind: 'blockstate',
+              path: statePath,
+              text: blockstateJson({ mcVersion, modelId: `${modId}:block/${name}` })
+            })
+            summary.push(`blockstate → ${statePath}`)
+          } else {
+            writes.push({
+              kind,
+              path: modelPaths({ modId, name, kind, mcVersion }),
+              text: blockModelJson({ parent: 'minecraft:item/generated', all: tex })
+            })
+            summary.push(`item model → ${modelPaths({ modId, name, kind, mcVersion })}`)
+          }
+          // The texture path must exist or the model renders as the pink checker.
+          summary.push(`texture expected at assets/${modId}/textures/${texture ?? `block/${name}`}.png (add one or it shows as missing)`)
+        } else {
+          const id = identifier ?? `geometry.${modId}.${name}`
+          const bones = skeleton === 'quadruped' ? QUADRUPED_BONES(8, 6) : [{ name: 'root', pivot: [0, 0, 0] as [number, number, number], boxes: [{ origin: [-4, 0, -4] as [number, number, number], size: [8, 16, 8] as [number, number, number], uv: [0, 0] as [number, number] }] }]
+          writes.push({
+            kind: 'entity',
+            path: modelPaths({ modId, name, kind: 'entity', mcVersion }),
+            text: entityModelJson({ identifier: id, bones, textureWidth: 64, textureHeight: 64 })
+          })
+          summary.push(`entity geometry "${id}" → ${modelPaths({ modId, name, kind: 'entity', mcVersion })}`)
+          summary.push('Open the .geo.json in Blockbench to sculpt it — the rig is structurally correct, the art is yours.')
+          if (animation !== 'none' && skeleton === 'quadruped') {
+            const anim = quadrupedWalk(identifier ?? `animation.${modId}.${name}.walk`)
+            writes.push({ kind: 'animation', path: modelPaths({ modId, name: name + '.walk', kind: 'animation', mcVersion }), text: animationJson(anim) })
+            summary.push(`walk animation → ${modelPaths({ modId, name: name + '.walk', kind: 'animation', mcVersion })} (reference it from the entity's animation controller)`)
+          }
+        }
+
+        const res = writeModels(dir, writes)
+        if (!res.ok) {
+          return err(
+            `Not written — ${res.issues.filter((i) => i.severity === 'error').map((i) => `${i.message}. ${i.fix}`).join(' ')}`
+          )
+        }
+        ctx.notify('project:changed', {})
+        return text(`Wrote ${res.written.length} file(s):\n${summary.map((l) => `- ${l}`).join('\n')}`)
+      }
+    ),
+
+    tool(
+      'check_model',
+      'Validate a model or animation JSON file before using it. Catches the failures that produce an invisible model with no error: bad identifier prefixes, missing namespaced textures, bones with parents that do not exist, unparseable JSON.',
+      { file: z.string().describe('Path relative to the project root, e.g. src/main/resources/assets/mymod/geo/golem.geo.json') },
+      async ({ file }) => {
+        const cfg = loadConfig()
+        const full = path.join(cfg.workspaceDir, file)
+        try {
+          // Not `text`: that name is the tool-result helper, and shadowing it
+          // here made the return statements call a string.
+          const body = fs.readFileSync(full, 'utf8')
+          const kind = /animations/.test(file) ? 'animation' : /geo\.json/.test(file) ? 'entity' : 'block'
+          const issues = validateModel(body, kind)
+          if (!issues.length) return text(`OK — parsed as a ${kind} model and nothing looks wrong.`)
+          return text(
+            issues.map((i) => `${i.severity === 'error' ? 'ERROR' : 'warn '} ${i.message}\n      fix: ${i.fix}`).join('\n')
+          )
+        } catch (e) {
+          return err(`Could not read ${file}: ${(e as Error).message}`)
         }
       }
     ),

@@ -61,7 +61,7 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.4.9 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.4.10 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
 > v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
 > decompiler picking a Java it could not run.
@@ -88,6 +88,12 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.4.10** fixes the tab strip running off the window — the tabs were a single non-wrapping row, so the
+> last ones were unreachable and a window cannot be resized past the monitor. They are now grouped by task
+> (Make / Know / See / Grow), wrap, scroll if the window is short, and both panes have draggable dividers
+> whose widths persist. It also adds the **Models** tab: 3D block, item, entity and animation JSON
+> generated to the folder *your* Minecraft version reads, validated before writing, with the exact texture
+> path you still need to draw.
 > **v0.4.8** adds three modes: **AutoSwitch** (a chat that dies from running out of credit, a rate
 > limit or a retired model carries on with another free model), **learning mode** (study instead of
 > coding, with the findings saved as lessons), and **deep research** (the strongest model available
@@ -349,6 +355,10 @@ src/main/
     scaffold.ts      vendored-template helpers, mod id/package validation
     fork.ts          turns a decompiled reference mod into an editable project
     port.ts          detects a project's real version/loader, plans and runs a conversion
+    props.ts         gradle.properties reader shared by the build, the converter and the models
+    assets.ts        per-version asset layout: where a model has to live, and what does not exist yet
+    models.ts        block, item, entity and animation JSON, generated and validated
+    texture-ref.ts   normalises a pasted texture path into a namespaced id
     autoswitch.ts    which model to try next when one dies, and why
     modes.ts         learning and deep-research prompts, research state
   evolve/
@@ -357,7 +367,6 @@ src/main/
     evaluate.ts      the fixed task, the compiler as judge, scoring
     candidate.ts     compiles and imports a candidate's prompt
     loop.ts          fork, mutate, typecheck, evaluate, promote
-    props.ts         gradle.properties reader shared by the build and the converter
     jar.ts           jar metadata (neoforge.mods.toml) and mods-folder install
   versions/
     catalog.ts       live Minecraft/loader version catalog (24 h cache, offline fallbacks)
@@ -366,7 +375,8 @@ src/main/
   update.ts          electron-updater wiring for GitHub releases
   learn.ts           mistake fingerprints, lessons and the error index
 template/neoforge-1.21.1/   vendored official MDK
-tests/                      offline tests for scaffold, build parsing, jar install, porting, diagnostics
+tests/                      offline tests for scaffold, build parsing, jar install, porting, diagnostics,
+                            layout reachability and model generation
 ```
 
 ## Tests
@@ -515,6 +525,43 @@ It writes the full notes to `docs/research/<slug>.md` in the project, and distil
 That is how a free model punches above its weight: the expensive model did the reading.
 
 The panel always names the model it will spend on, and says plainly when that model is paid.
+
+## 3D models and animations
+
+The **Models** tab writes model JSON directly — no model call, because a cube is
+arithmetic, not a judgement call. Pick block, item, mob or mob-plus-walk-cycle, give it a name, and press
+the button.
+
+**Everything is validated before it is written.** This matters more for models than for code, because
+the failures are silent: a block model whose texture is not namespaced, a bone whose parent does not
+exist, an animation identifier without its `animation.` prefix and a file in the wrong folder all produce
+*an invisible model and nothing in the log*. So each file is parsed and checked, and the reason is
+returned instead of the file being written.
+
+**The paths depend on your Minecraft version**, and the tab reads it from `gradle.properties` rather
+than assuming:
+
+| | 1.13 and newer | 1.12 and older |
+|---|---|---|
+| Block model | `assets/<modid>/models/block/<n>.json` | same |
+| Item model | `assets/<modid>/models/item/<n>.json` | same |
+| Blockstate | `{"variants": {"": {"model": …}}}` | `{"variants": {"normal": …, "inventory": …}}` |
+| Entity geometry | `assets/<modid>/geo/<n>.geo.json` | **does not exist** — a mob is a Java `ModelBase` class |
+| Animation | `assets/<modid>/animations/<n>.animation.json` | **does not exist** — animate `ModelRenderer` rotations |
+
+On a 1.12 project the tab hides the mob options and says why instead of writing files the game never
+reads. That is not a limitation being worked around; those formats were added in 1.13.
+
+**It tells you the texture to draw.** A model that references a texture that does not exist renders as
+the black-and-pink checkerboard — the model is still correct. The panel prints the exact path, e.g.
+`assets/ruby/textures/block/ruby_block.png`.
+
+**Now the honest part.** This generates structure, not art. A quadruped rig is a body, a head and four
+legs with the feet on the floor and the head at the front — it is *correct*, and it will not look like a
+particular creature. Entity geometry is the format Blockbench exports, so the intended workflow is:
+generate the rig, open the `.geo.json` in Blockbench, sculpt it. When you want something with a
+silhouette, the panel has a button that hands the job to the agent, which can write multi-bone geometry
+and a walk cycle with `make_model` and check it with `check_model`.
 
 ## The evolving agent — and what it actually evolves
 
