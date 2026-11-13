@@ -16,6 +16,38 @@ import type {
 
 export type Loader = 'neoforge' | 'forge' | 'fabric'
 
+export type RunMode = 'code' | 'learn' | 'research'
+
+export interface LessonSummary {
+  id: string
+  rule: string
+  fix?: string
+  avoid?: string
+  kind?: 'failure' | 'topic' | 'research'
+  topic?: string
+  sources?: string[]
+  loader?: string
+  mcVersion?: string
+  seen: number
+  confirmed?: boolean
+}
+
+export interface ModesStatus {
+  mode: RunMode
+  learningMode: boolean
+  deepResearch: boolean
+  autoSwitch: boolean
+  autoSwitchLimit: number
+  autoSwitchIncludeLocal: boolean
+  researchTopic: string
+  /** Human-readable model the next run will use. */
+  runningOn: string
+  /** What deep research would spend, if it were turned on. */
+  best: { provider: string; model: string; label: string; free: boolean; why: string } | null
+  lessons: number
+  research: { topic: string; startedAt: number; model: string; notes: { file: string; title: string; updatedAt: number }[] } | null
+}
+
 /** One line in the diagnostics panel. */
 export interface DiagEntry {
   id: string
@@ -419,6 +451,21 @@ export interface McfApi {
     tree: (id: string) => Promise<{ path: string; dir: boolean }[]>
     readFile: (opts: { id: string; path: string }) => Promise<{ ok: boolean; text?: string; error?: string }>
     writeFile: (opts: { id: string; path: string; text: string }) => Promise<{ ok: boolean; error?: string }>
+  }
+  modes: {
+    status: () => Promise<ModesStatus>
+    set: (patch: { learningMode?: boolean; deepResearch?: boolean; researchTopic?: string }) => Promise<{
+      ok: boolean
+      mode: RunMode
+      needsTopic: boolean
+      researchTopic: string
+    }>
+    knowledge: (topic?: string) => Promise<LessonSummary[]>
+    startResearch: (topic: string) => Promise<{ ok: boolean; topic?: string; dir?: string; error?: string }>
+    stopResearch: () => Promise<{ ok: boolean }>
+    researchDir: () => Promise<string>
+    onChanged: (cb: (p: { mode: RunMode }) => void) => () => void
+    onModelSwitch: (cb: (p: { from: string; to: string; provider: string; reason: string; kind: string }) => void) => () => void
   }
   diag: {
     level: () => Promise<DiagState>

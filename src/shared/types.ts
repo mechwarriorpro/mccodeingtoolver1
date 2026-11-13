@@ -38,6 +38,24 @@ export interface AppConfig {
   showThinking: boolean
   /** Token budget for that thinking (0 = the provider's default). */
   thinkingTokens: number
+
+  /**
+   * When a run dies from something another model could survive — out of credit,
+   * rate limited, a retired model — carry on with the next free one instead of
+   * ending the chat.
+   */
+  autoSwitch: boolean
+  /** How many switches to allow in one turn before giving up and saying so. */
+  autoSwitchLimit: number
+  /** Local models take part in the chain, and come first when offline. */
+  autoSwitchIncludeLocal: boolean
+
+  /** Study a topic instead of coding, and keep what is learned as lessons. */
+  learningMode: boolean
+  /** Research hard with the strongest model available, writing lessons for weaker ones. */
+  deepResearch: boolean
+  /** What a deep-research run should investigate. Set when the mode is turned on. */
+  researchTopic: string
   /** Default autonomy for new conversations. */
   autonomy: AutonomyMode
 
@@ -169,6 +187,16 @@ export interface ToolTrace {
   agent?: string
 }
 
+/** Why the agent is running on a different model than the user picked. */
+export interface ModelSwitch {
+  at: number
+  from: { provider: string; model: string }
+  to: { provider: string; model: string }
+  reason: string
+  /** The failure class that triggered it, from classifyRunError(). */
+  kind: string
+}
+
 export interface Conversation {
   id: string
   title: string
@@ -176,6 +204,8 @@ export interface Conversation {
   updatedAt: number
   messages: ChatMessage[]
   sessionId?: string
+  /** Model switches that happened in this conversation, newest last. */
+  switches?: ModelSwitch[]
 }
 
 export interface ScreenshotInfo {

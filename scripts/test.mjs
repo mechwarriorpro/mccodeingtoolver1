@@ -28,6 +28,8 @@ const sources = [
   'src/main/mod/props.ts',
   'src/main/mod/port.ts',
   'src/main/diag.ts',
+  'src/main/agent/autoswitch.ts',
+  'src/main/agent/modes.ts',
   'src/main/game/clip.ts',
   'src/main/learn.ts',
   'src/main/agent/engine.ts',

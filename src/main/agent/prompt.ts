@@ -25,6 +25,12 @@ export function buildSystemPrompt(opts: {
   mcVersion?: string
   /** A warning when the session is not running on Claude, e.g. a free model. */
   providerNote?: string
+  /**
+   * Learning or deep-research instructions. Non-empty only in those modes, and
+   * appended last so they override the ordinary coding agenda rather than
+   * competing with it.
+   */
+  modeBlock?: string
 }): string {
   const autonomyRules =
     opts.autonomy === 'auto'
@@ -120,6 +126,7 @@ Never claim a build succeeded without checking the returned exit code / errors. 
 ${eraRules(loader, mc, era)}
 
 ${lessonsBlock(loader, mc)}
+${opts.modeBlock ? `\n${opts.modeBlock}\n\n---\n` : ''}
 # Style
 
 - Small, focused files. Name things after what they do.

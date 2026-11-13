@@ -123,6 +123,9 @@ import {
   touchFork
 } from '../mod/fork'
 import { convertProject, detectProject, migrationReport, planPort } from '../mod/port'
+import { bestAvailable, describeRunTarget } from '../agent/autoswitch'
+import { loadResearch, researchDir, saveResearch, runMode } from '../agent/modes'
+import { knowledgeOn } from '../learn'
 import {
   checkForUpdates,
   clearUpdaterCache,
@@ -244,6 +247,23 @@ ${text}` : text
       },
       // System remarks (retries, warnings) belong in the chat, but not as the
       // model's own words.
+      onModelSwitch: (info) => {
+        // Kept on the conversation: a turn that finished on a different model
+        // than the user chose is something they need to be able to see later.
+        const conv = conversation()
+        conv.switches = [
+          ...(conv.switches ?? []),
+          {
+            at: Date.now(),
+            from: { provider: info.from.split('/')[0], model: info.from.split('/').slice(1).join('/') },
+            to: { provider: info.provider, model: info.to.split('/').slice(1).join('/') },
+            reason: info.reason,
+            kind: info.kind
+          }
+        ].slice(-20)
+        persist()
+        send('agent:model-switch', info)
+      },
       onNotice: (text) => send('agent:notice', { text }),
       onOutput: (line, source) => {
         // Build and game output is the first thing anyone asks about after "it
@@ -706,6 +726,74 @@ export function registerIpc(): void {
     const clip = getClip(id)
     return clip ? { ok: true, text: clipDigest(clip) } : { ok: false, error: 'Unknown clip.' }
   })
+
+  /* --------------------------------------------- modes and model switching */
+
+  /**
+   * What each mode would do right now, before the user commits to it.
+   *
+   * Deep research in particular needs to say *which* model it will spend on —
+   * "the best available" is only honest if the user can see what that means on
+   * their own keys, and that it will cost money.
+   */
+  ipcMain.handle('modes:status', () => {
+    const cfg = loadConfig()
+    const best = bestAvailable(cfg)
+    return {
+      mode: runMode(cfg),
+      learningMode: cfg.learningMode,
+      deepResearch: cfg.deepResearch,
+      autoSwitch: cfg.autoSwitch,
+      autoSwitchLimit: cfg.autoSwitchLimit,
+      autoSwitchIncludeLocal: cfg.autoSwitchIncludeLocal,
+      researchTopic: cfg.researchTopic,
+      runningOn: describeRunTarget(cfg),
+      best: best
+        ? { provider: best.provider, model: best.model, label: best.label, free: best.free, why: best.why }
+        : null,
+      lessons: listLessons().length,
+      research: loadResearch()
+    }
+  })
+
+  ipcMain.handle('modes:set', (_e, patch: { learningMode?: boolean; deepResearch?: boolean; researchTopic?: string }) => {
+    const next = saveConfig(patch)
+    log('app', 'info', 'mode changed', { mode: runMode(next), patch }, 2)
+    // Turning deep research on without a topic would make the next run research
+    // nothing in particular, which wastes the most expensive model available.
+    return {
+      ok: true,
+      mode: runMode(next),
+      needsTopic: next.deepResearch && !next.researchTopic.trim(),
+      researchTopic: next.researchTopic
+    }
+  })
+
+  /** Lessons written by study or research, so the panel can show the payoff. */
+  ipcMain.handle('modes:knowledge', (_e, topic?: string) => {
+    if (topic?.trim()) return knowledgeOn(topic)
+    return listLessons().filter((l) => l.kind === 'topic' || l.kind === 'research')
+  })
+
+  ipcMain.handle('modes:startResearch', (_e, topic: string) => {
+    const clean = topic.trim()
+    if (!clean) return { ok: false, error: 'Give the research run a topic first.' }
+    const cfg = loadConfig()
+    const next = saveConfig({ deepResearch: true, researchTopic: clean })
+    const dir = researchDir(cfg.workspaceDir)
+    saveResearch({ topic: clean, startedAt: Date.now(), notes: [], model: describeRunTarget(next) })
+    send('modes:changed', { mode: runMode(next) })
+    return { ok: true, topic: clean, dir }
+  })
+
+  ipcMain.handle('modes:stopResearch', () => {
+    const next = saveConfig({ deepResearch: false })
+    saveResearch(null)
+    send('modes:changed', { mode: runMode(next) })
+    return { ok: true }
+  })
+
+  ipcMain.handle('modes:researchDir', () => researchDir(loadConfig().workspaceDir))
 
   /* ------------------------------------------------------- editable forks */
 

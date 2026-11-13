@@ -107,6 +107,18 @@ const api = {
     writeFile: (opts: unknown) => ipcRenderer.invoke('fork:writeFile', opts)
   },
 
+  /** Learning mode, deep research, and the model-switch feed. */
+  modes: {
+    status: () => ipcRenderer.invoke('modes:status'),
+    set: (patch: unknown) => ipcRenderer.invoke('modes:set', patch),
+    knowledge: (topic?: string) => ipcRenderer.invoke('modes:knowledge', topic),
+    startResearch: (topic: string) => ipcRenderer.invoke('modes:startResearch', topic),
+    stopResearch: () => ipcRenderer.invoke('modes:stopResearch'),
+    researchDir: () => ipcRenderer.invoke('modes:researchDir'),
+    onChanged: (cb: (p: unknown) => void) => on('modes:changed', cb),
+    onModelSwitch: (cb: (p: unknown) => void) => on('agent:model-switch', cb)
+  },
+
   /** Three-level diagnostic output, plus the rolling log file. */
   diag: {
     level: () => ipcRenderer.invoke('diag:level'),

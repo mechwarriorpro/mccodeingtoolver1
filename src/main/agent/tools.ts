@@ -11,7 +11,7 @@ import { buildTechnicPackZip, detectTechnicInstances, launchTechnic } from '../g
 import { captureGameWindow, listScreenshots } from '../game/capture'
 import { analyseClip, attachAnalysis, clipDigest, getClip, listClips, startClip, stopClip } from '../game/clip'
 import { resolveVisionModel } from '../game/vision'
-import { confirmLesson, listLessons, recall, recordFailure } from '../learn'
+import { confirmLesson, listLessons, recall, recordFailure, saveKnowledge } from '../learn'
 import { captureFrameBuffer } from '../game/capture'
 import { gameStatus, launchDevClient, readGameLog, stopGame } from '../game/launcher'
 import { installNeoForge, isNeoForgeInstalled } from '../game/neoforge'
@@ -416,6 +416,53 @@ export function createAgentTools(ctx: ToolContext) {
         if (!rec.lesson) return err(`Not recorded: ${rec.ignored ?? 'unusable error text'}`)
         if (avoid || rule) confirmLesson(rec.lesson.id, { rule, avoid, fix })
         return text(`${rec.added ? 'Learned a new' : 'Updated an existing'} lesson (seen ${rec.lesson.seen}×): ${rec.lesson.rule}`)
+      }
+    ),
+
+    tool(
+      'save_lesson',
+      'Write a lesson into the app\'s permanent store, so every future run — including on a weaker model — starts knowing it. ' +
+        'Use this in learning mode and deep research mode for each fact worth keeping, and any time you work out something the next model would otherwise have to rediscover. ' +
+        'A lesson is a rule the reader can act on without rereading your sources.',
+      {
+        rule: z.string().min(8).describe('The fact, in one imperative sentence. E.g. "Register items with DeferredRegister.Items."'),
+        fix: z.string().optional().describe('Exactly what to do instead — include the code shape or the API call.'),
+        avoid: z.string().optional().describe('The mistake this prevents, so the reader recognises it.'),
+        detail: z.string().optional().describe('Longer explanation or example. Stored, not shown in the prompt.'),
+        topic: z.string().optional().describe('What this is about, e.g. "item registration", "datagen", "mixin".'),
+        sources: z.array(z.string()).optional().describe('Reference mods or URLs that back it up.'),
+        loader: z.string().optional().describe('Loader this applies to, if it is loader-specific.'),
+        mcVersion: z.string().optional().describe('Minecraft version this applies to, if version-specific.')
+      },
+      async ({ rule, fix, avoid, detail, topic, sources, loader, mcVersion }) => {
+        const cfg = loadConfig()
+        const props = readProps(path.join(cfg.workspaceDir, 'gradle.properties'))
+        try {
+          const res = saveKnowledge({
+            rule,
+            fix,
+            avoid,
+            detail,
+            topic,
+            sources,
+            sourceNote: 'written by the agent',
+            // Deep research writes lessons the strong model has verified; study
+            // is unconfirmed until it is used successfully, so they are marked
+            // differently and ranked accordingly.
+            kind: cfg.deepResearch ? 'research' : 'topic',
+            confirmed: cfg.deepResearch,
+            loader: loader ?? (props.loader ?? ''),
+            mcVersion: mcVersion ?? (props.minecraft_version ?? '')
+          })
+          ctx.notify('lessons:changed', {})
+          return text(
+            res.duplicate
+              ? `Already known — strengthened it instead (seen ${res.lesson.seen}×): "${res.lesson.rule}"`
+              : `Saved lesson ${res.lesson.id}: "${res.lesson.rule}"`
+          )
+        } catch (e) {
+          return err((e as Error).message)
+        }
       }
     ),
 

@@ -45,6 +45,18 @@ export interface Lesson {
   confirmed?: boolean
   /** Lessons the user deleted stay deleted: the fingerprint is remembered here. */
   retired?: boolean
+  /**
+   * A fact learned by study or research rather than from a failure. These are the
+   * ones a weak model "cheats" with: Deep Research writes them with the strongest
+   * model, and whatever codes next gets them for free.
+   */
+  kind?: 'failure' | 'topic' | 'research'
+  /** Where the fact came from, in words — a reference mod, a URL, a doc. */
+  sourceNote?: string
+  /** Topic or research slug it belongs to, for grouping. */
+  topic?: string
+  /** Reference mods and URLs that back it up. */
+  sources?: string[]
 }
 
 export interface LearnStore {
@@ -220,6 +232,91 @@ export function recordFailure(opts: RecordOptions): { added: boolean; lesson?: L
   return { added: true, lesson }
 }
 
+/**
+ * Store a *fact*, not a failure.
+ *
+ * `recordFailure` insists on an error fingerprint, which is right for a build
+ * error and useless for "this is how you register an item in 1.21.1". Study has
+ * no error text, so it gets its own door into the same store — which is the
+ * whole point: a lesson written by Deep Research is recalled by whatever model
+ * codes next, through exactly the path a learned build fix takes.
+ *
+ * Deduplication is by normalised rule text rather than by fingerprint, because
+ * two study runs on the same topic should strengthen a lesson, not multiply it.
+ */
+export function saveKnowledge(opts: SaveKnowledgeOptions): { added: boolean; lesson: Lesson; duplicate: boolean } {
+  const rule = opts.rule.trim()
+  if (!rule) throw new Error('A lesson needs a rule — one sentence the next model can act on.')
+  const store = loadLessons()
+  const norm = (t: string): string => t.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+  const key = norm(rule)
+  const now = Date.now()
+  const existing = store.lessons.find((l) => !l.retired && norm(l.rule) === key)
+  if (existing) {
+    // Seen again: keep it near the top and fill in anything this run knows that
+    // the first one did not.
+    existing.seen += 1
+    existing.lastSeen = now
+    existing.fix = opts.fix?.trim() || existing.fix
+    existing.avoid = opts.avoid?.trim() || existing.avoid
+    existing.loader = opts.loader || existing.loader
+    existing.mcVersion = opts.mcVersion || existing.mcVersion
+    if (opts.sources?.length) {
+      existing.sources = [...new Set([...(existing.sources ?? []), ...opts.sources])].slice(0, 12)
+    }
+    existing.confirmed = existing.confirmed || opts.confirmed
+    saveLessons({ lessons: store.lessons })
+    return { added: false, lesson: existing, duplicate: true }
+  }
+  const lesson: Lesson = {
+    id: `lsn_${now.toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+    fingerprint: `topic:${key.slice(0, MAX_FP)}`,
+    rule,
+    fix: opts.fix?.trim(),
+    avoid: opts.avoid?.trim(),
+    // 'manual' is the closest existing source; `kind` carries the real story.
+    source: opts.kind === 'research' ? 'manual' : 'manual',
+    kind: opts.kind,
+    topic: opts.topic,
+    sourceNote: opts.sourceNote,
+    sources: opts.sources?.slice(0, 12),
+    loader: opts.loader,
+    mcVersion: opts.mcVersion,
+    sample: opts.detail?.slice(0, 2000) ?? rule,
+    seen: 1,
+    firstSeen: now,
+    lastSeen: now,
+    confirmed: opts.confirmed
+  }
+  const lessons = [lesson, ...store.lessons]
+    .sort((a, b) => Number(!!b.confirmed) - Number(!!a.confirmed) || b.seen - a.seen || b.lastSeen - a.lastSeen)
+    .slice(0, MAX_LESSONS)
+  saveLessons({ lessons })
+  return { added: true, lesson, duplicate: false }
+}
+
+export interface SaveKnowledgeOptions {
+  rule: string
+  fix?: string
+  avoid?: string
+  /** Extra context, stored but not shown in the prompt block. */
+  detail?: string
+  kind?: 'topic' | 'research'
+  topic?: string
+  sourceNote?: string
+  sources?: string[]
+  loader?: string
+  mcVersion?: string
+  confirmed?: boolean
+}
+
+/** Everything studied on one topic, for the panel. */
+export function knowledgeOn(topic: string): Lesson[] {
+  const t = topic.trim().toLowerCase()
+  if (!t) return []
+  return loadLessons().lessons.filter((l) => !l.retired && (l.topic ?? '').toLowerCase() === t)
+}
+
 /** A first-pass rule from the error text; the agent or the user refines it. */
 export function defaultRule(error: string): string {
   const e = error.toLowerCase()
@@ -271,17 +368,49 @@ export function clearLessons(): void {
 export function lessonsForPrompt(opts: { loader?: string; mcVersion?: string; limit?: number } = {}): string {
   const all = loadLessons().lessons.filter((l) => !l.retired)
   if (!all.length) return ''
-  const ranked = all
-    .slice()
-    .sort((a, b) => Number(!!b.confirmed) - Number(!!a.confirmed) || b.seen - a.seen || b.lastSeen - a.lastSeen)
-    .filter((l) => !opts.loader || !l.loader || l.loader === opts.loader)
-    .slice(0, opts.limit ?? 5)
-  if (!ranked.length) return ''
-  const lines = ranked.map((l) => {
+  const usable = all.filter((l) => !opts.loader || !l.loader || l.loader === opts.loader)
+
+  // Two stores in one file, and they answer different questions. A failure
+  // ("do not use new Item()") is a warning; a studied fact ("register with
+  // DeferredRegister.createItems") is a recipe. Mixing them buries the recipes
+  // under the warnings, so they get separate blocks and the failure list keeps
+  // the top slot it earned.
+  const rank = (l: Lesson): number => Number(!!l.confirmed) - 0 || 0
+  const byUse = (a: Lesson, b: Lesson): number =>
+    rank(b) - rank(a) || b.seen - a.seen || b.lastSeen - a.lastSeen
+
+  const failures = usable.filter((l) => !l.kind || l.kind === 'failure').sort(byUse)
+  const knowledge = usable.filter((l) => l.kind === 'topic' || l.kind === 'research').sort(byUse)
+
+  const limit = opts.limit ?? 5
+  const blocks: string[] = []
+
+  const failLines = failures.slice(0, limit).map((l) => {
     const meta = [l.loader, l.mcVersion, l.seen > 1 ? `seen ${l.seen}×` : '', l.source].filter(Boolean).join(', ')
     return `- **${l.rule}**${l.fix ? ` Fix: ${l.fix}.` : ''}${l.avoid ? ` Avoid: ${l.avoid}.` : ''} (${meta})`
   })
-  return `# Mistakes already made on this project\n\nThese failures have happened in this app before. Do not repeat them; if you hit one, apply the known fix first.\n\n${lines.join('\n')}`
+  if (failLines.length) {
+    blocks.push(
+      `# Mistakes already made on this project\n\nThese failures have happened in this app before. Do not repeat them; if you hit one, apply the known fix first.\n\n${failLines.join('\n')}`
+    )
+  }
+
+  // Knowledge gets a bigger budget than the five failures: this is the block
+  // written by deep research specifically so a limited model does not have to
+  // rediscover it, and truncating it wastes the run that produced it.
+  const knowLines = knowledge.slice(0, Math.max(limit, 12)).map((l) => {
+    const meta = [l.loader, l.mcVersion, l.seen > 1 ? `used ${l.seen}×` : '', l.kind === 'research' ? 'researched' : 'studied']
+      .filter(Boolean)
+      .join(', ')
+    return `- **${l.rule}**${l.fix ? `\n  Do this: ${l.fix}` : ''}${l.avoid ? `\n  Trap: ${l.avoid}` : ''}${meta ? `\n  (${meta})` : ''}`
+  })
+  if (knowLines.length) {
+    blocks.push(
+      `# What has already been worked out here\n\nFacts established by reading real mods and documentation, then written down so you do not have to rediscover them. Follow them; they beat guessing.\n\n${knowLines.join('\n')}`
+    )
+  }
+
+  return blocks.join('\n\n')
 }
 
 /** Compact list for the UI and the agent's `list_lessons` tool. */

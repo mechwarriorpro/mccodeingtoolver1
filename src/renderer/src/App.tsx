@@ -11,10 +11,11 @@ import ReferencePanel from './components/ReferencePanel'
 import ForkPanel from './components/ForkPanel'
 import PortPanel from './components/PortPanel'
 import DiagPanel from './components/DiagPanel'
+import ModesPanel from './components/ModesPanel'
 import ClipPanel from './components/ClipPanel'
 import LearnPanel from './components/LearnPanel'
 
-type RailTab = 'game' | 'project' | 'files' | 'refs' | 'port' | 'clips' | 'learn' | 'diag'
+type RailTab = 'game' | 'project' | 'files' | 'refs' | 'port' | 'clips' | 'learn' | 'modes' | 'diag'
 
 export default function App(): JSX.Element {
   const [config, setConfig] = useState<(AppConfig & { apiKeySet: boolean }) | null>(null)
@@ -166,6 +167,11 @@ export default function App(): JSX.Element {
         })
         void api.chat.list().then(setConversations)
         if (p.isError) toast('The agent run ended with an error', 'err')
+      }),
+      api.modes.onModelSwitch((p) => {
+        // Announce it where the user is looking: the chat they were reading.
+        setNotices((n) => [...n.slice(-4), { id: `sw-${Date.now()}`, text: `AutoSwitch: ${p.from} → ${p.to} (${p.kind})` }])
+        toast(`Switched model — ${p.to.split('/').slice(1).join('/')}`)
       }),
       api.events.onOutput((p) => setConsoleLines((c) => [...c.slice(-900), p])),
       api.events.onGameLine((p) => setConsoleLines((c) => [...c.slice(-900), { line: p.line, source: 'game' }])),
@@ -396,6 +402,13 @@ export default function App(): JSX.Element {
               Lessons
             </button>
             <button
+              className={railTab === 'modes' ? 'on' : ''}
+              onClick={() => setRailTab('modes')}
+              title="AutoSwitch, learning mode and deep research"
+            >
+              Modes
+            </button>
+            <button
               className={railTab === 'diag' ? 'on' : ''}
               onClick={() => setRailTab('diag')}
               title="What the agent is doing, at three levels of detail"
@@ -435,6 +448,12 @@ export default function App(): JSX.Element {
                 onEditProject={(dir) => void afterProjectChange(dir)}
                 activeDir={project?.open ? project.dir : undefined}
               />
+            )}
+            {railTab === 'modes' && (
+              <div className="card">
+                <h4>Modes</h4>
+                <ModesPanel onToast={toast} onSend={(text) => void send(text, [])} />
+              </div>
             )}
             {railTab === 'diag' && (
               <div className="card">

@@ -61,7 +61,7 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.4.7 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.4.8 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
 > v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
 > decompiler picking a Java it could not run.
@@ -85,6 +85,10 @@ Settings or from GitHub's settings at any time.
 > is genuinely left. The original is never touched.
 > **v0.4.7** adds three levels of diagnostic output (and a rolling `logs/agent.log`), lets you watch
 > how the agent thinks and codes, and fixes replies rendering as a bare `0`.
+> **v0.4.8** adds three modes: **AutoSwitch** (a chat that dies from running out of credit, a rate
+> limit or a retired model carries on with another free model), **learning mode** (study instead of
+> coding, with the findings saved as lessons), and **deep research** (the strongest model available
+> writes detailed notes a weaker model can follow).
 >
 > From 0.3.0 on, the app updates itself: once you have it installed, new versions arrive
 > through GitHub releases without downloading the installer again.
@@ -342,6 +346,8 @@ src/main/
     scaffold.ts      vendored-template helpers, mod id/package validation
     fork.ts          turns a decompiled reference mod into an editable project
     port.ts          detects a project's real version/loader, plans and runs a conversion
+    autoswitch.ts    which model to try next when one dies, and why
+    modes.ts         learning and deep-research prompts, research state
     props.ts         gradle.properties reader shared by the build and the converter
     jar.ts           jar metadata (neoforge.mods.toml) and mods-folder install
   versions/
@@ -447,6 +453,59 @@ A fork of a 1.12.2 project is a **1.12.2 Gradle project**, even though the goal 
 - **Finish the upgrade properly**: update `minecraft_version`, the `loader`
   entry and the Gradle wrapper together, then delete `build/` — a stale
   `build.gradle` referencing ForgeGradle will fail even with the right JDK.
+
+## Three modes: AutoSwitch, learning, deep research
+
+The **Modes** tab holds all three. They are one feature, not three: AutoSwitch keeps a turn alive,
+Learning turns study into lessons, Deep Research spends the strongest model to write lessons a weak
+model can follow.
+
+### AutoSwitch — finish the job on another free model
+
+When a chat dies because a free tier ran out, a model was retired, or the provider is overloaded, the
+turn continues on the next free model instead of ending. It is **on by default**.
+
+- **Switches for:** out of credit (`402`), rate limits (`429`), overload (`529`), a retired model
+  (`404`). These are cases where another model genuinely can succeed.
+- **Does not switch for:** a rejected key (`401`), a context overflow, or a symlink warning. Every
+  provider would fail on the same key — rotating would hide a settings problem behind a slow crawl —
+  and a smaller free model holds *less* context, not more. Those fail immediately with a sentence
+  that says what to do.
+- **Order:** other free models on the current provider first (the key already works), then free tiers
+  on other providers you have a key for, then local models if you enabled them, then paid models last
+  and labelled as costing money.
+- **Bounded:** up to 3 switches per turn (configurable), never the same model twice, and it says so
+  when the chain runs out instead of spinning.
+
+A switch is announced in the chat, recorded on the conversation, and logged. The new model sticks for
+the rest of that conversation, so a dead free tier is not rediscovered every turn.
+
+### Learning mode — study instead of coding
+
+The agent reads decompiled reference mods and documentation, writes what it found into **Lessons**,
+and does not touch your project. The restriction is the point: an agent asked to "learn about item
+registration" will otherwise start implementing it halfway through, leaving a half-finished mod and
+thin notes.
+
+Lessons are stored as facts, separate from build failures, and reached every later run through the
+prompt — so what one run studies, the next run starts knowing.
+
+### Deep research — the strongest model, writing notes for a weak one
+
+Uses the best model your keys can reach, whatever it costs, to research one topic properly. The
+audience is deliberately **not you** — it is a smaller, cheaper model that will write the code without
+doing the research:
+
+- **The exact code**, with imports and signatures, not "use the registry API".
+- **Step by step**, in the order it must be done, naming which step breaks the build if skipped.
+- **Traps**, written as wrong approach → the error it produces → the right approach.
+- **Version notes** on anything that differs by Minecraft version, and **"unconfirmed"** where the
+  model could not verify a claim.
+
+It writes the full notes to `docs/research/<slug>.md` in the project, and distils them into lessons.
+That is how a free model punches above its weight: the expensive model did the reading.
+
+The panel always names the model it will spend on, and says plainly when that model is paid.
 
 ## Diagnostics: three levels, and seeing how the agent works
 

@@ -14,6 +14,14 @@ const defaultConfig: AppConfig = {
   diagLevel: 0,
   showThinking: false,
   thinkingTokens: 0,
+  // A chat that dies because a free tier ran out is the most common way this app
+  // stalls, so carrying on with another free model is the default.
+  autoSwitch: true,
+  autoSwitchLimit: 3,
+  autoSwitchIncludeLocal: false,
+  learningMode: false,
+  deepResearch: false,
+  researchTopic: '',
   autonomy: 'review',
   workspaceDir: '',
   github: { owner: '', repo: '', branch: '' },

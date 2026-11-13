@@ -11,6 +11,8 @@ import { providerEnv, providerCaveats, providerById, type ProviderId } from '../
 import { createAgentTools, readProps } from './tools'
 import { listReferences } from '../github/references'
 import { log, safeJson } from '../diag'
+import { effectiveRunTarget, isSwitchWorthy, nextModel, type SwitchTarget } from './autoswitch'
+import { briefProject, learningPrompt, researchPrompt, runMode, saveResearch, loadResearch } from './modes'
 
 export interface EngineEvents {
   onAssistantText: (text: string) => void
@@ -33,6 +35,8 @@ export interface EngineEvents {
     empty?: boolean
   }) => void
   onNotice: (text: string) => void
+  /** The model changed mid-conversation, and why. */
+  onModelSwitch: (info: { from: string; to: string; provider: string; reason: string; kind: string }) => void
   onOutput: (line: string, source: 'build' | 'game') => void
   onGameStatus: (status: import('../../shared/types').GameStatus) => void
 }
@@ -85,6 +89,14 @@ export class AgentSession {
   private thinking = ''
   /** Last subagent seen, so a tool call can be attributed to it. */
   private currentAgent = ''
+  /**
+   * The model this turn is running on. Normally the configured one; AutoSwitch
+   * replaces it mid-turn, and the replacement sticks for the rest of the
+   * conversation so a dead free tier does not have to be rediscovered each turn.
+   */
+  private override: SwitchTarget | null = null
+  /** provider/model pairs tried this turn, so the chain walks forward. */
+  private triedThisTurn = new Set<string>()
 
   constructor(events: EngineEvents, autonomy: AutonomyMode, sessionId: string | undefined, getInstanceId: () => string) {
     this.events = events
@@ -164,6 +176,10 @@ export class AgentSession {
    */
   private async runTurn(): Promise<void> {
     const MAX_ATTEMPTS = 3
+    const cfg = loadConfig()
+    const target = this.override ?? effectiveRunTarget(cfg)
+    this.triedThisTurn = new Set([`${target.provider}/${target.model}`])
+
     for (let attempt = 1; ; attempt++) {
       const q = query({ prompt: this.queue as AsyncIterable<any>, options: this.buildOptions() })
       this.current = q
@@ -179,14 +195,51 @@ export class AgentSession {
       if (this.stopped) throw failure
 
       const info = classifyRunError(failure)
-      if (!info.retryable || attempt >= MAX_ATTEMPTS) throw failure
+      log('provider', info.retryable ? 'warn' : 'error', `run failed: ${info.kind}`, { message: info.message }, 1)
 
-      // Say something: a silent pause looks like a hang, and the notice channel
-      // keeps this out of the model's own words.
-      this.events.onNotice(`The provider is busy. Retrying — attempt ${attempt + 1} of ${MAX_ATTEMPTS}…`)
-      this.events.onStatus('thinking')
-      await new Promise((r) => setTimeout(r, 1500 * attempt))
-      if (this.stopped) throw failure
+      // A retry on the same model is right for a blip (529, dropped socket). It
+      // is pointless when the account is empty or the model is gone: waiting
+      // cannot put credit back. Those go straight to another model.
+      if (info.retryable && attempt < MAX_ATTEMPTS) {
+        // Say something: a silent pause looks like a hang, and the notice
+        // channel keeps this out of the model's own words.
+        this.events.onNotice(`The provider is busy. Retrying — attempt ${attempt + 1} of ${MAX_ATTEMPTS}…`)
+        this.events.onStatus('thinking')
+        await new Promise((r) => setTimeout(r, 1500 * attempt))
+        if (this.stopped) throw failure
+        continue
+      }
+
+      // AutoSwitch: carry the turn on with a different model rather than ending
+      // it. This is the difference between "your chat died because the free tier
+      // ran out" and "the app finished the job on another free model".
+      if (isSwitchWorthy(info.kind, failure)) {
+        const next = nextModel(cfg, target, this.triedThisTurn)
+        if (next) {
+          const from = `${providerById(target.provider).label} ${target.model}`
+          const to = `${providerById(next.provider).label} ${next.model}`
+          log('provider', 'warn', `AutoSwitch ${from} → ${to}`, { reason: info.message, kind: info.kind, why: next.why }, 1)
+          this.events.onNotice(`Switching model — ${next.why}. ${from} → ${next.model}.`)
+          this.events.onModelSwitch({
+            from: `${target.provider}/${target.model}`,
+            to: `${next.provider}/${next.model}`,
+            provider: next.provider,
+            reason: info.message,
+            kind: info.kind
+          })
+          this.override = next
+          this.triedThisTurn.add(`${next.provider}/${next.model}`)
+          attempt = 0
+          continue
+        }
+        // Nothing left to try. Say why in terms of the chain, not the raw error.
+        this.events.onNotice(
+          cfg.autoSwitch
+            ? 'AutoSwitch ran out of models to try. Add a key for another provider in Settings, or wait for the free tier to reset.'
+            : 'AutoSwitch is off — turning it on would have carried this turn on another free model.'
+        )
+      }
+      throw failure
     }
   }
 
@@ -228,14 +281,20 @@ export class AgentSession {
     })
     const agents = buildAgents({ modId: props.mod_id ?? '', workspaceDir: workspace, instancePath: instance?.path })
 
-    const apiKey = effectiveApiKey()
-    const baseUrl = effectiveBaseUrl()
-    const provider = (cfg.provider || 'anthropic') as ProviderId
+    // Which model this turn actually runs on. Deep research deliberately picks
+    // the strongest available regardless of cost; AutoSwitch may have replaced
+    // the model after a failure. Both are visible in the chat, never silent.
+    const configured = effectiveRunTarget(cfg)
+    const target = this.override ?? { provider: configured.provider, model: configured.model, label: '', free: false, why: '' }
+
+    const baseUrl = this.override ? providerBaseUrlFor(this.override.provider) : effectiveBaseUrl()
+    const provider = target.provider as ProviderId
+    const apiKey = this.override ? keyForProvider(cfg, this.override.provider) : effectiveApiKey()
     // For local Ollama the role mapping wins over the single `model` field, so
     // the agent and its background alias can be different downloads.
     const localAgent = provider === 'ollama' ? cfg.local?.roles?.agent?.[0] ?? '' : ''
     const localQuick = provider === 'ollama' ? cfg.local?.roles?.quick?.[0] || localAgent : ''
-    const model = localAgent || cfg.model || ''
+    const model = target.model || localAgent || cfg.model || ''
     // The SDK spawns the Claude Code CLI with a JS runtime. In a packaged build there is
     // no system Node, but the Electron binary itself can run as Node when this is set.
     const isElectronRuntime = !!process.versions.electron
@@ -296,7 +355,10 @@ export class AgentSession {
           githubRepo: cfg.github.repo,
           loader: detectLoader(props),
           mcVersion: detectMcVersion(props),
-          providerNote: providerCaveats(provider, model || providerById(provider).label).join(' ')
+          providerNote: providerCaveats(provider, model || providerById(provider).label).join(' '),
+          // Learning and research change the job, not just the tone, so they are
+          // appended as instructions rather than as a hint.
+          modeBlock: this.modeBlock(cfg)
         })}\n\n${coordinatorPrompt()}`
       },
       settingSources: ['user', 'project', 'local'],
@@ -334,6 +396,17 @@ export class AgentSession {
           }
         : {})
     }
+  }
+
+  /** The mode instructions for this turn, with the project filled in. */
+  private modeBlock(cfg: ReturnType<typeof loadConfig>): string {
+    const props = readProps(path.join(cfg.workspaceDir, 'gradle.properties'))
+    return modePromptFor(cfg, {
+      dir: cfg.workspaceDir,
+      loader: detectLoader(props),
+      mcVersion: detectMcVersion(props),
+      modId: props.mod_id ?? ''
+    })
   }
 
   private buildCanUseTool() {
@@ -491,6 +564,41 @@ export class AgentSession {
         break
     }
   }
+}
+
+/**
+ * The key that belongs to a provider.
+ *
+ * Only the vision provider has a key of its own today; everything else uses the
+ * main one, which is what Settings tells the user to set. Keeping this in one
+ * place means AutoSwitch cannot accidentally send an Ollama request with an
+ * Anthropic key attached.
+ */
+function keyForProvider(cfg: ReturnType<typeof loadConfig>, provider: ProviderId): string {
+  if (providerById(provider).local) return ''
+  if (provider === (cfg.visionProvider as ProviderId) && cfg.visionProviderKey) return cfg.visionProviderKey
+  return cfg.apiKey
+}
+
+function providerBaseUrlFor(provider: ProviderId): string {
+  return providerById(provider).baseUrl
+}
+
+/**
+ * The instruction block for learning or deep research, or nothing in normal use.
+ * Built from the project so the modes talk about *this* mod rather than modding
+ * in general.
+ */
+function modePromptFor(cfg: ReturnType<typeof loadConfig>, ctx: { dir: string; loader: string; mcVersion: string; modId: string }): string {
+  const mode = runMode(cfg)
+  if (mode === 'code') return ''
+  const brief = briefProject(ctx)
+  if (mode === 'research') {
+    const state = loadResearch()
+    const topic = state?.topic || cfg.researchTopic || 'the area the user last asked about'
+    return researchPrompt(topic, brief)
+  }
+  return learningPrompt(brief)
 }
 
 /**
