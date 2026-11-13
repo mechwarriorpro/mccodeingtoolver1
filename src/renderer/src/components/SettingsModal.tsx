@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import type { AppConfig, GameInstance } from '../../../shared/types'
-import { api, type ProviderDef, type ProviderModel, type UpdateState } from '../lib/api'
+import { api, type ProviderDef, type ProviderModel, type UpdateState,
+  type JavaStatus
+} from '../lib/api'
 import LocalModelsPanel from './LocalModelsPanel'
 import GithubLogin from './GithubLogin'
 
@@ -19,7 +21,7 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
   const [apiKey, setApiKey] = useState('')
   const [detected, setDetected] = useState<GameInstance[]>([])
   const [saving, setSaving] = useState(false)
-  const [java, setJava] = useState<{ game: { path: string | null; version?: string; error?: string }; tools: { path: string | null; version?: string; error?: string }; split: boolean } | null>(null)
+  const [java, setJava] = useState<JavaStatus | null>(null)
   const [javaCheck, setJavaCheck] = useState<{ ok: boolean; version?: string; major?: number; error?: string; cleared?: boolean } | null>(null)
   const [providers, setProviders] = useState<ProviderDef[]>([])
   const [models, setModels] = useState<Record<string, ProviderModel[]>>({})
@@ -498,6 +500,18 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
                     </>
                   )}
                   {!java.tools.path && <><br /><span className="warn">{java.tools.error}</span></>}
+                  {java.javaHome?.broken !== null && java.javaHome?.broken !== undefined && (
+                    <div className="hint warn" style={{ marginTop: 6 }}>
+                      Your <code>JAVA_HOME</code> is <code>{java.javaHome.broken || '(empty)'}</code>, which is not a Java
+                      folder. Gradle refuses to start with it (<code>JAVA_HOME is set to an invalid directory</code>), so builds
+                      ignore it and use the Java above. Removing the variable from your environment is the permanent fix.
+                    </div>
+                  )}
+                  {java.javaHome?.set && java.javaHome?.broken === null && (
+                    <div style={{ marginTop: 6 }}>
+                      Builds export <code>JAVA_HOME={java.javaHome.set}</code>.
+                    </div>
+                  )}
                 </div>
               )}
               {javaCheck && (

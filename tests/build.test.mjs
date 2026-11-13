@@ -16,6 +16,7 @@ process.on('uncaughtException', (err) => {
   process.exit(1)
 })
 const { extractErrors, findBuiltJar, gradlewPath } = await import('../out-test/main/build/gradle.js')
+const { javaHomeFor, sanitisedEnv, isBrokenJavaHome } = await import('../out-test/main/util/exec.js')
 const { readJarInfo, installJar } = await import('../out-test/main/mod/jar.js')
 
 async function main() {
@@ -107,3 +108,107 @@ main().catch((err) => {
   console.log(`::error title=build.test.mjs crash::${msg}`)
   process.exit(1)
 })
+
+/* ------------------------------------------------------------------ JAVA_HOME */
+/*
+ * One real log:
+ *
+ *   [build] cwd=C:\Users\Owner\Desktop\thaum 1.21.1\thaumcraft_v4_2_3_5-1.21.1-neoforge
+ *   [build] project=1.21.1 → needs Java 21
+ *   [build] java=java
+ *   ERROR: JAVA_HOME is set to an invalid directory: .
+ *
+ * The planner had found a working Java by running the bare name `java` from
+ * PATH. The spawn code then wrote `dirname(dirname('java'))` into JAVA_HOME,
+ * which is `'.'`, and Gradle refused to start. The probe had the answer and the
+ * derivation threw it away. These checks exist so that cannot happen again
+ * without a failure: a `'.'` must never leave this app, and a bare name must
+ * either resolve to a real home or leave JAVA_HOME alone.
+ */
+section('JAVA_HOME is derived from a real java, never from a bare name')
+
+check('a bare java name never yields "." as its home', (() => {
+  const home = javaHomeFor('java', 'win32')
+  return home !== '.' && home !== ''
+})())
+
+check('a .exe path gives the directory two levels up', (() => {
+  const home = javaHomeFor('C:\\Program Files\\Eclipse Adoptium\\jdk-21\\bin\\java.exe', 'win32')
+  return home === 'C:\\Program Files\\Eclipse Adoptium\\jdk-21'
+})())
+
+check('a POSIX java path gives the same', (() => {
+  return javaHomeFor('/usr/lib/jvm/temurin-21/bin/java', 'linux') === '/usr/lib/jvm/temurin-21'
+})())
+
+check('a path that is not <home>/bin/java is refused rather than guessed', (() => {
+  // Some launchers ship java under a differently-shaped folder; a made-up parent
+  // would be a JAVA_HOME pointing at nothing, which is the bug again.
+  return javaHomeFor('C:\\tools\\jre\\java.exe', 'win32') === null
+})())
+
+check('a relative java path is refused', javaHomeFor('.\\jre\\bin\\java.exe', 'win32') === null)
+
+check('a Java 8 layout with a space in the path still resolves', (() => {
+  const home = javaHomeFor('C:\\Program Files\\Java\\jre1.8.0_411\\bin\\java.exe', 'win32')
+  return home === 'C:\\Program Files\\Java\\jre1.8.0_411'
+})())
+
+section('a broken JAVA_HOME is removed from the environment, not passed on')
+
+check('JAVA_HOME=. is dropped', (() => {
+  const env = sanitisedEnv({ JAVA_HOME: '.' })
+  return !('JAVA_HOME' in env)
+})())
+
+check('an empty JAVA_HOME is dropped', (() => {
+  const env = sanitisedEnv({ JAVA_HOME: '' })
+  return !('JAVA_HOME' in env)
+})())
+
+check('a JAVA_HOME that does not exist is dropped', (() => {
+  const env = sanitisedEnv({ JAVA_HOME: path.join(os.tmpdir(), 'no-such-jdk-' + Date.now()) })
+  return !('JAVA_HOME' in env)
+})())
+
+check('a JAVA_HOME that is a file, not a folder, is dropped', (() => {
+  const f = path.join(os.tmpdir(), `jh-file-${Date.now()}.txt`)
+  fs.writeFileSync(f, 'x')
+  const env = sanitisedEnv({ JAVA_HOME: f })
+  fs.rmSync(f, { force: true })
+  return !('JAVA_HOME' in env)
+})())
+
+check('a working JAVA_HOME is left exactly as it was', (() => {
+  const env = sanitisedEnv({ JAVA_HOME: os.tmpdir() })
+  return env.JAVA_HOME === os.tmpdir()
+})())
+
+check('the related JDK variables get the same treatment', (() => {
+  const env = sanitisedEnv({ JDK_HOME: '.', JDK21_HOME: '.' })
+  return !('JDK_HOME' in env) && !('JDK21_HOME' in env)
+})())
+
+check('the rest of the environment is untouched', (() => {
+  const env = sanitisedEnv({ MCF_TEST_MARKER: 'kept' })
+  return env.MCF_TEST_MARKER === 'kept'
+})())
+
+section('Settings can name a broken JAVA_HOME before a build fails')
+const withJavaHome = (value, fn) => {
+  const saved = process.env.JAVA_HOME
+  if (value === undefined) delete process.env.JAVA_HOME
+  else process.env.JAVA_HOME = value
+  try {
+    return fn()
+  } finally {
+    if (saved === undefined) delete process.env.JAVA_HOME
+    else process.env.JAVA_HOME = saved
+  }
+}
+
+check('isBrokenJavaHome sees a bare dot', withJavaHome('.', () => isBrokenJavaHome() === true))
+check('isBrokenJavaHome accepts a real folder', withJavaHome(os.tmpdir(), () => isBrokenJavaHome() === false))
+check('isBrokenJavaHome is quiet when the variable is absent', withJavaHome(undefined, () => isBrokenJavaHome() === false))
+
+finish('JAVA_HOME handling')

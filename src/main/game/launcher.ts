@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
-import { findJava, run } from '../util/exec'
+import { findJava, run, javaHomeFor, sanitisedEnv } from '../util/exec'
 import { logsDir } from '../config'
 import type { GameStatus } from '../../shared/types'
 import { emitGameLog, emitGameStatus, onGameLog, onGameStatus, setStatusProvider } from './events'
@@ -131,8 +131,9 @@ export async function launchDevClient(opts: DevLaunchOptions): Promise<{ ok: boo
   if (opts.programArgs?.trim()) programArgs.push(...splitArgs(opts.programArgs))
   if (programArgs.length) args.push(`--args=${programArgs.join(' ')}`)
 
-  const env: NodeJS.ProcessEnv = { ...process.env, TERM: 'dumb' }
-  if (java) env.JAVA_HOME = path.dirname(path.dirname(java))
+  const env: NodeJS.ProcessEnv = sanitisedEnv({ TERM: 'dumb' })
+  const home = java ? javaHomeFor(java) : null
+  if (home) env.JAVA_HOME = home
   if (opts.jvmArgs?.trim()) env.JAVA_TOOL_OPTIONS = `${env.JAVA_TOOL_OPTIONS ?? ''} ${opts.jvmArgs}`.trim()
 
   try {

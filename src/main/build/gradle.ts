@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { app } from 'electron'
-import { resolveBuildJava, run, probeJava } from '../util/exec'
+import { resolveBuildJava, run, probeJava, javaHomeFor, sanitisedEnv } from '../util/exec'
 import { readProps } from '../mod/props'
 import { resolveEra, javaForVersion } from '../versions/eras'
 import { compareMcVersions } from '../versions/catalog'
@@ -127,7 +127,13 @@ export function planBuildJava(
     // A project without a declared version is most likely mid-upgrade. Java 17
     // is the safest middle: it runs old Gradle wrappers and can target 8 or 17.
     const fallback = resolveBuildJava(configured, 17, 'this project')
-    return { ...fallback, targetJava: 17, mcVersion: '', note: 'no minecraft_version in gradle.properties' }
+    return {
+      ...fallback,
+      targetJava: 17,
+      mcVersion: '',
+      usingVersion: fallback.version,
+      note: 'no minecraft_version in gradle.properties'
+    }
   }
 
   const era = resolveEra(loader, mcVersion)
@@ -142,12 +148,13 @@ export function planBuildJava(
       ...res,
       targetJava: codeNeeds,
       mcVersion,
+      usingVersion: res.version,
       note: `sources are already Java ${codeNeeds} but gradle.properties still says ${mcVersion} — finish the upgrade`
     }
   }
 
   const res = resolveBuildJava(configured, declaredJava, `Minecraft ${mcVersion}`)
-  return { ...res, targetJava: declaredJava, mcVersion }
+  return { ...res, targetJava: declaredJava, mcVersion, usingVersion: res.version }
 }
 
 /**
@@ -222,10 +229,24 @@ export async function runLocalBuild(opts: BuildOptions): Promise<BuildResult> {
   push(`[build] mode=local task=${task}`)
   push(`[build] cwd=${opts.workspaceDir}`)
   push(`[build] project=${plan.mcVersion || '?'} → needs Java ${plan.targetJava}${plan.note ? ` (${plan.note})` : ''}`)
-  push(`[build] java=${java ?? '(PATH)'}${plan.usingVersion ? ` (Java ${plan.usingVersion})` : ''}`)
+  const homeForLog = java ? javaHomeFor(java) : null
+  push(
+    `[build] java=${java ?? '(PATH)'}` +
+      (plan.usingVersion ? ` (verified Java ${plan.usingVersion})` : '') +
+      (homeForLog ? ` JAVA_HOME=${homeForLog}` : ' JAVA_HOME left as-is')
+  )
 
-  const env: NodeJS.ProcessEnv = { ...process.env }
-  if (java) env.JAVA_HOME = path.dirname(path.dirname(java))
+  // sanitisedEnv drops a JAVA_HOME that points nowhere, which is a common way
+  // for the build to die before Gradle even prints a task.
+  const env: NodeJS.ProcessEnv = sanitisedEnv()
+  // Only when the path really is <home>/bin/java. The planner can legitimately
+  // return the bare name `java` (found on PATH), and `dirname(dirname('java'))`
+  // is `'.'` — which Gradle rejects with "JAVA_HOME is set to an invalid
+  // directory: ." rather than falling back to PATH. Leaving JAVA_HOME as the
+  // user had it is correct: Gradle then resolves java from PATH, which is where
+  // we found it in the first place.
+  const derivedHome = java ? javaHomeFor(java) : null
+  if (derivedHome) env.JAVA_HOME = derivedHome
   env.GRADLE_OPTS = `${env.GRADLE_OPTS ?? ''} ${app.isPackaged ? '' : ''}`.trim()
   // Windows console cannot always render gradle's ANSI output.
   env.TERM = 'dumb'

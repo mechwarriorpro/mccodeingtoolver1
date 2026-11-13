@@ -31,7 +31,9 @@ export function run(cmd: string, args: string[], opts: RunOptions = {}): Promise
     let child: ChildProcessWithoutNullStreams
     const spawnOpts = {
       cwd: opts.cwd,
-      env: { ...process.env, ...opts.env },
+      // sanitisedEnv, not a raw merge: a JAVA_HOME of "." in process.env makes
+      // every java this app starts fail with "invalid directory".
+      env: sanitisedEnv(opts.env),
       windowsHide: true,
       windowsVerbatimArguments: false
     }
@@ -391,6 +393,123 @@ function pick(configured: string | undefined, minMajor: number, purpose: string)
 }
 
 /**
+ * A bare command name, resolved to the first match on PATH.
+ *
+ * Windows needs the extensions tried in order; a match is returned as an
+ * absolute path, which is what a caller needs to derive JAVA_HOME from it.
+ */
+export function resolveOnPath(name: string, platform: string = process.platform): string | null {
+  const win = platform === 'win32'
+  const exts = win ? ['.exe', '.cmd', '.bat', ''] : ['']
+  const dirs = (process.env.PATH ?? process.env.Path ?? '').split(win ? ';' : ':').filter(Boolean)
+  for (const dir of dirs) {
+    for (const ext of exts) {
+      const p = `${dir.replace(/[\\/]+$/, '')}${win ? '\\' : '/'}${name}${ext}`
+      try {
+        if (fs.statSync(p).isFile()) return p
+      } catch {
+        /* keep looking */
+      }
+    }
+  }
+  return null
+}
+
+/**
+ * True when the inherited JAVA_HOME is unusable — the case Settings needs to
+ * name, because it is otherwise only visible as a failed build.
+ */
+export function isBrokenJavaHome(): boolean {
+  const raw = process.env.JAVA_HOME
+  if (raw === undefined) return false
+  const trimmed = raw.trim()
+  if (!trimmed || trimmed === '.') return true
+  try {
+    return !fs.statSync(trimmed).isDirectory()
+  } catch {
+    return true
+  }
+}
+
+/**
+ * The environment a child process should inherit.
+ *
+ * One rule: a JAVA_HOME that is empty, `.` or otherwise not a directory is
+ * removed rather than passed on. The app inherits the user's environment, and a
+ * JAVA_HOME left at `.` — by an editor's terminal, an old installer, or a
+ * previous version of this app — makes every Java process it starts die with
+ *
+ *   ERROR: JAVA_HOME is set to an invalid directory: .
+ *
+ * which is a misleading message: the real java on PATH is fine. Deleting the
+ * broken variable is the honest fix, because it is what the user meant to have
+ * unset. A *working* JAVA_HOME is never touched.
+ */
+export function sanitisedEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ...overrides }
+  for (const key of ['JAVA_HOME', 'JDK_HOME', 'JDK21_HOME']) {
+    const v = env[key]
+    if (v === undefined) continue
+    const trimmed = v.trim()
+    let ok = false
+    if (trimmed && trimmed !== '.') {
+      try {
+        ok = fs.statSync(trimmed).isDirectory()
+      } catch {
+        ok = false
+      }
+    }
+    if (!ok) delete env[key]
+  }
+  return env
+}
+
+/**
+ * Where `java` really lives, for deriving JAVA_HOME from a command name.
+ *
+ * `path.dirname(path.dirname(java))` is the obvious way to turn a java.exe path
+ * into a JAVA_HOME, and it is wrong the moment `java` is not a path:
+ *
+ * ```
+ * [build] java=java
+ * ERROR: JAVA_HOME is set to an invalid directory: .
+ * ```
+ *
+ * `dirname(dirname('java'))` is `'.'`, so the build exported JAVA_HOME=. and
+ * Gradle refused to start — while the very Java it had just probed successfully
+ * was sitting two directories up from a real file. The probe found `java` on
+ * PATH; the JAVA_HOME derivation then threw the answer away.
+ *
+ * Returns null when the path cannot be resolved, and the caller must then leave
+ * JAVA_HOME alone rather than inventing a directory.
+ */
+export function javaHomeFor(java: string, platform: string = process.platform): string | null {
+  const win = platform === 'win32'
+  const isAbs = (p: string): boolean => (win ? /^[A-Za-z]:[\\/]/.test(p) || p.startsWith('\\\\') : p.startsWith('/'))
+
+  // Resolve a bare command name through PATH, the same way the shell would.
+  let exe = java
+  if (!isAbs(java)) {
+    if (java !== 'java') return null // a relative path is not resolvable here
+    const found = resolveOnPath('java', platform)
+    if (!found) return null
+    exe = found
+  }
+
+  // <home>/bin/java(.exe) -> <home>. Anything else is a layout we do not
+  // understand; refuse rather than guess a parent.
+  const bin = pathDirname(exe)
+  if (!/(^|[\\/])bin$/i.test(bin)) return null
+  return bin.replace(/[\\/]bin$/i, '')
+}
+
+/** Minimal dirname, so the path rules above are the ones under test, not Node's. */
+function pathDirname(p: string): string {
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+  return i <= 0 ? p : p.slice(0, i)
+}
+
+/**
  * Java for Minecraft 1.21.1 / NeoForge, which is exactly Java 21.
  * Returns null when nothing suitable exists; use resolveJava() for the reason.
  */
@@ -456,7 +575,11 @@ export function resolveBuildJava(
     // "18+ can target 8" is only true within what the build tool supports, which
     // maxRuntime encodes; below 8 nothing is sane.
     if (probed.major >= 8 && probed.major <= maxRuntime) {
-      return { path: candidate.path, version: String(probed.major) }
+      // A bare `java` was resolved through PATH; hand back the real executable so
+      // the caller can derive a JAVA_HOME and the log names a file the user can
+      // check. Falling back to the bare name only if PATH cannot be searched.
+      const resolved = candidate.path === 'java' ? (javaHomeFor('java') ? resolveOnPath('java') : null) : candidate.path
+      return { path: resolved ?? candidate.path, version: String(probed.major) }
     }
     if (probed.major > maxRuntime) {
       rejected.push(`${candidate.path} (Java ${probed.major} — this project's Gradle cannot run on it)`)

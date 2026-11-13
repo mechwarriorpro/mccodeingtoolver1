@@ -515,6 +515,14 @@ export interface ProjectSummary {
   template?: string
 }
 
+export interface JavaStatus {
+  game: { path: string | null; version?: string; error?: string }
+  tools: { path: string | null; version?: string; error?: string }
+  split: boolean
+  /** What a build will export, and the unusable inherited value if there was one. */
+  javaHome?: { set: string | null; broken: string | null }
+}
+
 export interface McfApi {
   config: { get: () => Promise<AppConfig & { apiKeySet: boolean }>; set: (patch: Partial<AppConfig>) => Promise<AppConfig & { apiKeySet: boolean }> }
   app: { version: () => Promise<{ version: string; electron: string; node: string }> }
@@ -542,11 +550,7 @@ export interface McfApi {
   }
   env: { report: () => Promise<EnvReport> }
   java: {
-    status: () => Promise<{
-      game: { path: string | null; version?: string; error?: string }
-      tools: { path: string | null; version?: string; error?: string }
-      split: boolean
-    }>
+    status: () => Promise<JavaStatus>
     check: (javaPath: string) => Promise<{ ok: boolean; version?: string; major?: number; suitsGame?: boolean; suitsTools?: boolean; error?: string; cleared?: boolean }>
     clearCache: () => Promise<{ ok: boolean }>
   }

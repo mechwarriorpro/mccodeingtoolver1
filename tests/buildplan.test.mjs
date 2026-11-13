@@ -154,5 +154,37 @@ check('the plan always reports what it needs', typeof oldPlan.targetJava === 'nu
 check('a missing JDK yields an actionable error', oldPlan.path !== null || /Java 8|adoptium/i.test(oldPlan.error ?? ''))
 check('an unknown Java level is never NaN', !Number.isNaN(gradle.planBuildJava(old).targetJava))
 
+/* ------------------------------------------------------- the Java that was found */
+/*
+ * From the ThaumCraft log:
+ *
+ *   [build] project=1.21.1 → needs Java 21
+ *   [build] java=java
+ *   ERROR: JAVA_HOME is set to an invalid directory: .
+ *
+ * `java=java` is the whole problem in one line: it names no file, so neither the
+ * user nor the log can tell whether a Java 21 was actually verified, and the
+ * JAVA_HOME derivation had nothing to work with. The plan must either name a
+ * real executable or say plainly that it is relying on PATH.
+ */
+section('the plan reports the Java it verified, not just a command name')
+check('a resolved plan carries the version it probed', (() => {
+  const p = gradle.planBuildJava(neo)
+  return p.path === null ? typeof p.error === 'string' : typeof p.usingVersion === 'string'
+})())
+check('a path, when present, is absolute or a bare command — never "."', (() => {
+  for (const d of [old, neo, java17, fabric16]) {
+    const p = gradle.planBuildJava(d)
+    if (p.path === null) continue
+    if (p.path === 'java') continue
+    if (!/^(?:[A-Za-z]:[\\/]|\/)/.test(p.path)) return false
+  }
+  return true
+})())
+check('the error names what to install when nothing is found', (() => {
+  const p = gradle.planBuildJava(neo)
+  return p.path !== null || /adoptium|Settings/i.test(p.error ?? '')
+})())
+
 fs.rmSync(dir, { recursive: true, force: true })
 finish('build invocation')

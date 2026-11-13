@@ -154,7 +154,7 @@ import { readJarInfo, installJar } from '../mod/jar'
 import { detectTechnicInstances, buildTechnicPackZip, launchTechnic } from '../game/technic'
 import { gameStatus, launchDevClient, onGameLog, onGameStatus, readGameLog, stopGame } from '../game/launcher'
 import { captureGameWindow, listScreenshots } from '../game/capture'
-import { clearJavaCache, probeJava, resolveJava, resolveToolJava, run } from '../util/exec'
+import { clearJavaCache, isBrokenJavaHome, probeJava, resolveJava, resolveToolJava, run, sanitisedEnv } from '../util/exec'
 import { installNeoForge, isNeoForgeInstalled } from '../game/neoforge'
 import { launchNeoForge, runningGame, stopNeoForge } from '../game/client'
 import { send } from './windows'
@@ -383,7 +383,17 @@ export function registerIpc(): void {
       game: { path: game.path, version: game.version, error: game.error },
       tools: { path: tool.path, version: tool.version, error: tool.error },
       /** True when the two disagree, which usually means a stale JAVA_HOME. */
-      split: !!game.path && !!tool.path && game.path !== tool.path
+      split: !!game.path && !!tool.path && game.path !== tool.path,
+      /**
+       * The JAVA_HOME this app would hand to gradle, and whether the one it
+       * inherited was usable. `set` is what a build actually exports; `broken`
+       * is the raw inherited value, shown so a `JAVA_HOME=.` is visible in
+       * Settings rather than only in a failed build log.
+       */
+      javaHome: {
+        set: sanitisedEnv().JAVA_HOME ?? null,
+        broken: isBrokenJavaHome() ? (process.env.JAVA_HOME ?? '') : null
+      }
     }
   })
 
