@@ -55,6 +55,14 @@ export interface PackMod {
   depends: ModDependency[]
   /** True when the jar could not be read as a mod at all. */
   unreadable?: boolean
+  /**
+   * True when the id and version came from the file name because the jar's own
+   * metadata could not be read. Every use of such a mod is a *claim*, and the
+   * caller is told so rather than shown a confident lie.
+   */
+  inferred?: boolean
+  /** How much the file name is trusted, when it is used at all. */
+  confidence?: 'likely' | 'weak'
 }
 
 export interface MissingDependency {
@@ -86,6 +94,13 @@ export interface PackScan {
    * reader, not a folder full of junk, and it must never be reported as healthy.
    */
   unreadableJars: string[]
+  /**
+   * Mod ids guessed from file names for jars that could not be read.
+   *
+   * Kept apart from `mods`' readable entries so a guess is never used where a
+   * fact is required without the caller seeing `inferred: true` as well.
+   */
+  inferred: (InferredIdentity & { path: string; file: string })[]
   /** Loader/version seen in the jars, for the UI to confirm it read the right pack. */
   loaders: ModLoader[]
   gameVersions: string[]
@@ -458,6 +473,8 @@ export function scanModsFolder(inputDir: string): PackScan {
   const mods: PackMod[] = []
   const ignored: string[] = []
   const unreadableJars: string[] = []
+  /** IDs read from file names, kept separately so nothing mistakes them for facts. */
+  const inferred: (InferredIdentity & { path: string; file: string })[] = []
 
   /**
    * Walk the folder, not just its top level.
@@ -489,10 +506,12 @@ export function scanModsFolder(inputDir: string): PackScan {
       }
       const mod = readModJar(full)
       if (mod.unreadable) {
-        // A jar that cannot be read is a *jar*, not junk. Saying "242 files were
-        // not mods" while silently dropping every one of them is how a scan can
-        // report an empty pack as healthy.
+        // A jar that cannot be read is a *jar*, not junk. Its name is still
+        // evidence: packs are full of jars this app cannot parse, and dropping
+        // them made the folder look more complete than it was.
         unreadableJars.push(shown)
+        const guess = inferFromFileName(entry.name)
+        if (guess) inferred.push({ ...guess, path: full, file: shown })
         continue
       }
       mods.push({ ...mod, file: shown })
@@ -500,10 +519,10 @@ export function scanModsFolder(inputDir: string): PackScan {
   }
   try {
     if (!fs.statSync(dir).isDirectory()) {
-      return { dir, mods: [], missing: [], mismatched: [], ignored: [], unreadableJars: [], loaders: [], gameVersions: [] }
+      return { dir, mods: [], missing: [], mismatched: [], ignored: [], unreadableJars: [], inferred: [], loaders: [], gameVersions: [] }
     }
   } catch {
-    return { dir, mods: [], missing: [], mismatched: [], ignored: [], unreadableJars: [], loaders: [], gameVersions: [] }
+    return { dir, mods: [], missing: [], mismatched: [], ignored: [], unreadableJars: [], inferred: [], loaders: [], gameVersions: [] }
   }
   walk(dir, 0, '')
 
@@ -519,6 +538,21 @@ export function scanModsFolder(inputDir: string): PackScan {
     }
   }
 
+  /**
+   * A file-name guess that answers for this mod id.
+   *
+   * Deliberately strict: the whole id must match after normalising, so a file
+   * called `createaddition-…` never stands in for `create`.
+   */
+  const scanGuess = (modId: string): (typeof inferred)[number] | undefined => {
+    const want = normalizeModId(modId)
+    if (!want) return undefined
+    return inferred.find((g) => {
+      const have = normalizeModId(g.modId)
+      return have === want || have.replace(/mod$/, '') === want
+    })
+  }
+
   const missing = new Map<string, MissingDependency>()
   const mismatched: PackScan['mismatched'] = []
   for (const mod of mods) {
@@ -527,6 +561,12 @@ export function scanModsFolder(inputDir: string): PackScan {
       if (dep.kind !== 'required') continue
       const have = provided.get(dep.modId)
       if (!have) {
+        // A jar nobody could parse but whose *name* matches is still evidence the
+        // dependency is there. Reporting it as missing would send the user to
+        // download a mod they already have — under a different name, into the
+        // same folder. It is matched, and the scan says the id is a guess.
+        const guess = scanGuess(dep.modId)
+        if (guess) continue
         const entry = missing.get(dep.modId) ?? { modId: dep.modId, versionRange: dep.versionRange, requiredBy: [] }
         if (dep.versionRange && !entry.versionRange) entry.versionRange = dep.versionRange
         if (!entry.requiredBy.includes(mod.file)) entry.requiredBy.push(mod.file)
@@ -555,6 +595,7 @@ export function scanModsFolder(inputDir: string): PackScan {
     mismatched,
     ignored,
     unreadableJars,
+    inferred,
     loaders: loaders as ModLoader[],
     gameVersions
   }
@@ -735,11 +776,15 @@ export function describeScan(scan: PackScan): { headline: string; detail: string
    */
   if (n === 0) {
     if (scan.unreadableJars.length > 0) {
+      const named = scan.inferred.length
       return {
         headline: `No mod could be read from ${scan.unreadableJars.length} jar${scan.unreadableJars.length === 1 ? '' : 's'}`,
-        detail: `The jars are there, but none of them could be read as a mod — so this is a problem reading them, not an empty folder. First three: ${scan.unreadableJars
-          .slice(0, 3)
-          .join(', ')}.${ignored}`,
+        detail:
+          `The jars are there, but none of them could be read as a mod — so this is a problem reading them, not an empty folder. ` +
+          (named
+            ? `${named} ${named === 1 ? 'is' : 'are'} known only by ${named === 1 ? 'its' : 'their'} file name, which is a guess until the code is decompiled. `
+            : '') +
+          `First three: ${scan.unreadableJars.slice(0, 3).join(', ')}.${ignored}`,
         healthy: false
       }
     }
@@ -751,11 +796,14 @@ export function describeScan(scan: PackScan): { headline: string; detail: string
   }
 
   if (scan.unreadableJars.length > 0) {
+    const named = scan.inferred.length
     return {
       headline: `${modWord} read, ${scan.unreadableJars.length} jar${scan.unreadableJars.length === 1 ? '' : 's'} could not be`,
-      detail: `Dependencies are decided from what could be read, so an unreadable jar's own requirements are invisible to this scan. First: ${scan.unreadableJars
-        .slice(0, 3)
-        .join(', ')}.${ignored}`,
+      detail:
+        (named
+          ? `${named} of those ${named === 1 ? 'is' : 'are'} known only by ${named === 1 ? 'its' : 'their'} file name${named === 1 ? '' : 's'}, so ${named === 1 ? 'its id is a guess and its' : 'their ids are guesses and their'} own dependencies are unknown. `
+          : '') +
+        `An unreadable jar's own requirements are invisible to this scan. First: ${scan.unreadableJars.slice(0, 3).join(', ')}.${ignored}`,
       healthy: false
     }
   }
@@ -841,6 +889,8 @@ export interface DependencyToUpdate {
   needsNewer: boolean
   /** Something worth saying about it — missing, wrong version, unreadable. */
   problem?: string
+  /** True when this was recognised only from the jar's file name. */
+  inferred?: boolean
 }
 
 export interface ModUpdatePreview {
@@ -876,11 +926,39 @@ export function planModUpdate(scan: PackScan, incomingJar: string): { ok: boolea
     const prev = byModId.get(mod.modId)
     if (!prev || compareNumeric(numericParts(mod.version ?? ''), numericParts(prev.version ?? '')) > 0) byModId.set(mod.modId, mod)
   }
+  /** The same search, but also accepting a name guess for an unreadable jar. */
+  const findProvider = (modId: string): { mod?: PackMod; guessed: boolean } => {
+    const exact = byModId.get(modId)
+    if (exact) return { mod: exact, guessed: !!exact.inferred }
+    const want = normalizeModId(modId)
+    for (const g of scan.inferred) {
+      const have = normalizeModId(g.modId)
+      if (have !== want && have.replace(/mod$/, '') !== want) continue
+      // Shaped like a PackMod so the caller does not need a second code path; the
+      // `inferred` flag is what stops it being reported as a fact.
+      return {
+        mod: {
+          path: g.path,
+          file: g.file,
+          modId: g.modId,
+          name: g.name,
+          version: g.version,
+          loader: 'unknown',
+          depends: [],
+          unreadable: true,
+          inferred: true,
+          confidence: g.confidence
+        },
+        guessed: true
+      }
+    }
+    return { guessed: false }
+  }
 
   const dependencies: DependencyToUpdate[] = []
   for (const dep of incoming.depends) {
     if (dep.isLoaderOrGame || dep.kind !== 'required') continue
-    const have = byModId.get(dep.modId)
+    const { mod: have, guessed } = findProvider(dep.modId)
     if (!have) {
       dependencies.push({
         modId: dep.modId,
@@ -890,15 +968,23 @@ export function planModUpdate(scan: PackScan, incomingJar: string): { ok: boolea
       })
       continue
     }
-    const inRange = !dep.versionRange || satisfiesRange(have.version, dep.versionRange)
+    // A version that came from a file name cannot be trusted against a range. The
+    // jar is treated as *possibly* right: it is offered, with the caveat, rather
+    // than silently upgraded over a working install or silently skipped.
+    const rangeCheckedAgainstGuess = guessed && dep.versionRange
+    const inRange = rangeCheckedAgainstGuess ? false : !dep.versionRange || satisfiesRange(have.version, dep.versionRange)
+    const caveat = guessed
+      ? `${have.file} could not be read, so its id and version are read from the file name — decompiling it will confirm or disprove that`
+      : undefined
     dependencies.push({
       modId: dep.modId,
       versionRange: dep.versionRange,
       path: have.path,
       file: have.file,
       version: have.version,
-      needsNewer: !inRange,
-      problem: inRange ? undefined : `the folder has ${have.version ?? 'an older build'}, but this mod needs ${dep.versionRange}`
+      needsNewer: !inRange && !guessed,
+      inferred: guessed || undefined,
+      problem: caveat ?? (inRange ? undefined : `the folder has ${have.version ?? 'an older build'}, but this mod needs ${dep.versionRange}`)
     })
   }
 
@@ -925,4 +1011,193 @@ export function displayNames(scan: PackScan): Record<string, string> {
     if (!out[mod.modId] && mod.name) out[mod.modId] = mod.name
   }
   return out
+}
+
+/* ------------------------------------------------- reading a jar by its name */
+
+/**
+ * A mod identified from its file name, because nothing inside it could be read.
+ *
+ * Real packs contain jars this app cannot parse: obfuscated metadata, unusual
+ * formats, jars whose toml is inside a nested archive. Ignoring them makes a
+ * folder look emptier and more complete than it is, so the name is used instead —
+ * and everything derived from it is marked as a guess, never as a fact.
+ */
+export interface InferredIdentity {
+  /** Best guess at the mod id, lowercased with dashes kept (`icbm-classic`). */
+  modId: string
+  /** The human name the file name suggests. */
+  name: string
+  version?: string
+  /** The Minecraft version the name mentions, when it mentions one. */
+  mcVersion?: string
+  /** Always true: this came from the name, not from the jar. */
+  inferred: true
+  /** How sure the guess is. `weak` means no version token was found at all. */
+  confidence: 'likely' | 'weak'
+}
+
+/** Loader words that appear in file names but are not part of a mod id. */
+const NAME_LOADERS = new Set(['forge', 'neoforge', 'fabric', 'quilt', 'common', 'universal', 'api', 'mc', 'mod'])
+
+/**
+ * `1.20.1`, and `mc1.20.1` — a Minecraft version written in a file name.
+ *
+ * Every Minecraft release so far is 1.x, which is what makes this decidable at
+ * all; a mod's own version is almost never `1.x.y` and is never `mc1.x`.
+ */
+function isMinecraftish(token: string): boolean {
+  const t = token.replace(/^mc/i, '')
+  return /^1\.\d+(\.\d+)?$/.test(t) && (token.toLowerCase().startsWith('mc') || /^1\.\d+(\.\d+)?$/.test(token))
+}
+
+/** `6.0.4`, `15.2.0.27`, `0.5.0+mc1.20.1` — a version of the mod itself. */
+function isVersionish(token: string): boolean {
+  return /\d+\.\d+/.test(token) || /^\d+$/.test(token)
+}
+
+/** Compare mod ids without caring about case, dashes or underscores. */
+export function normalizeModId(id: string): string {
+  return (id ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+/**
+ * Whether a name we guessed really is the mod id a dependency asked for.
+ *
+ * Equality after normalising, deliberately not "contains": a dependency on
+ * `create` must never be satisfied by `createaddition-1.2.0.jar`, or the folder
+ * would claim to have Create when it does not. A trailing `mod`/`-mod` is the one
+ * exception, because file names add it constantly.
+ */
+export function fileNameMatchesMod(fileName: string, modId: string): boolean {
+  const inferred = inferFromFileName(fileName)
+  if (!inferred) return false
+  const want = normalizeModId(modId)
+  if (!want) return false
+  const have = normalizeModId(inferred.modId)
+  if (have === want) return true
+  return have.replace(/mod$/, '') === want
+}
+
+/**
+ * Read a mod id and version out of a jar's file name.
+ *
+ * The patterns that actually occur:
+ *
+ *   create-1.21.1-6.0.4.jar          id, minecraft version, mod version
+ *   flywheel-1.0.4.jar               id, mod version
+ *   ICBM-Classic-1.12.2-4.2.0.jar    multi-word id, minecraft, version
+ *   sodium-fabric-mc1.20.1-0.5.0.jar id, loader, minecraft, version
+ *   jei-1.20.1-forge-15.2.0.27.jar    id, minecraft, loader, version
+ *
+ * Returns null when the name carries nothing id-like, which is better than
+ * inventing an id that could then be matched against a real dependency.
+ */
+export function inferFromFileName(file: string): InferredIdentity | null {
+  const base = path.basename(file).replace(/\.jar$/i, '')
+  if (!base) return null
+  // `-sources`/`-dev` jars describe a mod but are not the mod's runtime jar.
+  const cleaned = base.replace(/-(sources|dev|javadoc|api)$/i, '')
+  const tokens = cleaned.split(/[-_+\s]+/).filter(Boolean)
+  if (!tokens.length) return null
+
+  const idTokens: string[] = []
+  const versions: string[] = []
+  let mcVersion: string | undefined
+
+  let mcIndex = -1
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i]
+    if (isVersionish(token)) {
+      if (isMinecraftish(token) && mcIndex < 0) {
+        mcVersion = token.replace(/^mc/i, '')
+        mcIndex = i
+        continue
+      }
+      // `1.0.4` follows the minecraft version in `flywheel-1.21.1-1.0.4`; the
+      // first version-ish token after it is the mod's own.
+      versions.push(token)
+      continue
+    }
+    // Words after the first version belong to the version or the loader, not the id.
+    if (versions.length || mcVersion) {
+      if (NAME_LOADERS.has(token.toLowerCase())) continue
+      versions.push(token)
+      continue
+    }
+    // Loader words are noise wherever they appear (`jei-forge-...`). The rest of
+    // NAME_LOADERS stays: `some-mod` and `icbm-api` are real ids, and cutting the
+    // second word off would invent a mod that is not in the folder.
+    const word = token.toLowerCase()
+    if (word === 'forge' || word === 'neoforge' || word === 'fabric' || word === 'quilt' || word === 'mc') continue
+    if (word === 'common' || word === 'universal') continue
+    idTokens.push(token)
+  }
+
+  if (!idTokens.length) return null
+  // `some-mod` is an id called `some-mod`; the word `mod` there is part of the
+  // name, not a suffix to strip. Only a bare "mod" token is noise.
+  const modId = idTokens.join('-').toLowerCase()
+  // No version and no Minecraft version means the name is all there is —
+  // `backup.jar`, `mod.jar`, `old.jar`. Nothing about that is a mod id worth
+  // matching a real dependency against, so nothing is claimed.
+  if (!versions.length && !mcVersion) return null
+  // `mod`/`api` alone is a category word, not a name.
+  if (NAME_LOADERS.has(modId)) return null
+
+  return {
+    modId,
+    name: idTokens.join(' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+    version: versions[0],
+    mcVersion,
+    inferred: true,
+    confidence: versions.length ? 'likely' : 'weak'
+  }
+}
+
+/**
+ * Confirm a file-name guess against the code it turned out to contain.
+ *
+ * Decompiling is the only way to *check* an unreadable jar, and it usually says
+ * so plainly: every Forge-family mod carries `@Mod("id")` and every Fabric one a
+ * `fabric.mod.json`-shaped class. Finding the id is proof; finding a different
+ * `@Mod` id is disproof, which is more valuable than either.
+ */
+export function verifyInferredId(sourcesDir: string, expectedModId: string): { verdict: 'confirmed' | 'contradicted' | 'unknown'; found?: string; checked: number } {
+  const want = normalizeModId(expectedModId)
+  let checked = 0
+  const seen: string[] = []
+  const walk = (dir: string, depth: number): void => {
+    if (depth > 6) return
+    let entries: fs.Dirent[] = []
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        walk(full, depth + 1)
+        continue
+      }
+      if (!entry.name.endsWith('.java')) continue
+      checked++
+      // The annotation is in the main class; reading every file of a large mod is
+      // wasted work, and the first few thousand are enough to prove the point.
+      if (checked > 4000) return
+      let text: string
+      try {
+        text = fs.readFileSync(full, 'utf8')
+      } catch {
+        continue
+      }
+      for (const m of text.matchAll(/@Mod\s*\(\s*(?:value\s*=\s*|modid\s*=\s*)?["']([\w.-]+)["']/g)) seen.push(m[1])
+      for (const m of text.matchAll(/@Mod\s*\(\s*modid\s*=\s*["']([\w.-]+)["']/g)) seen.push(m[1])
+    }
+  }
+  walk(sourcesDir, 0)
+  if (!seen.length) return { verdict: 'unknown', checked }
+  if (seen.some((id) => normalizeModId(id) === want)) return { verdict: 'confirmed', found: seen[0], checked }
+  return { verdict: 'contradicted', found: seen[0], checked }
 }

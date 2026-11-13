@@ -154,7 +154,7 @@ import { repoState, suggestRepoName } from '../build/repo'
 import { scanDependencies } from '../mod/deps'
 import { declareJarDependency, findCandidates, findVersionFile, identifyFiles, libsDir, newestVersionFor, projectInfo, sha1Of } from '../mod/dep-resolve'
 import type { PackMod } from '../mod/modpack'
-import { adoptJar, describeScan, displayNames, packVersions, planModUpdate, planUpdate, previewAdoption, readModJar, removeJar, resolveModsDir, scanModsFolder } from '../mod/modpack'
+import { adoptJar, describeScan, displayNames, inferFromFileName, packVersions, verifyInferredId, planModUpdate, planUpdate, previewAdoption, readModJar, removeJar, resolveModsDir, scanModsFolder } from '../mod/modpack'
 import { readJarInfo, installJar } from '../mod/jar'
 import { detectTechnicInstances, buildTechnicPackZip, launchTechnic } from '../game/technic'
 import { gameStatus, launchDevClient, onGameLog, onGameStatus, readGameLog, stopGame } from '../game/launcher'
@@ -1768,6 +1768,84 @@ export function registerIpc(): void {
         ok: results.every((r) => r.ok),
         results,
         sourcesDir: opts.decompile ? outRoot : undefined
+      }
+    }
+  )
+
+  /**
+   * Decompile a pack's unreadable jars and put them into the project as reference.
+   *
+   * The point is the *check* as much as the sources. A jar whose metadata cannot
+   * be parsed is only known by its file name, and a name is a guess; almost every
+   * Forge-family mod carries `@Mod("id")` in the code, so decompiling either
+   * confirms the guess or disproves it. Only confirmed or unknown-but-given
+   * matches are linked, and a contradiction is reported instead of being linked
+   * under the wrong name.
+   */
+  ipcMain.handle(
+    'pack:reference',
+    async (_e, opts: { dir: string; modIds?: string[]; link?: boolean }) => {
+      const scan = scanModsFolder(opts.dir)
+      const cfg = loadConfig()
+      const projectDir = cfg.workspaceDir ?? activeProjectDir(cfg)
+      const wanted = opts.modIds?.length ? new Set(opts.modIds) : null
+      const targets = scan.mods.filter((m) => m.inferred && (!wanted || wanted.has(m.modId ?? '')))
+      const { addFromFile, linkToProject } = await import('../github/references')
+
+      const results: {
+        file: string
+        modId?: string
+        ok: boolean
+        verified?: 'confirmed' | 'contradicted' | 'unknown'
+        found?: string
+        referenceId?: string
+        linked?: boolean
+        sourcesDir?: string
+        error?: string
+      }[] = []
+
+      for (const mod of targets) {
+        const guess = inferFromFileName(mod.file)
+        const added = await addFromFile({
+          jarPath: mod.path,
+          // The guessed name is what the user will search for in a list, and it is
+          // marked as a guess in the id so a confirmed one can supersede it.
+          title: mod.name ?? guess?.name ?? mod.file,
+          javaPath: cfg.javaPath,
+          customJar: cfg.decompilerJar || undefined
+        })
+        if (!added.ok || !added.mod) {
+          results.push({ file: mod.file, modId: mod.modId, ok: false, error: added.error })
+          continue
+        }
+        // `sourcesDir` is where the decompiler actually wrote, which is the only
+        // place the @Mod annotation can be found.
+        const sources = added.mod.sourcesDir
+        const check = sources && fs.existsSync(sources)
+          ? verifyInferredId(sources, mod.modId ?? '')
+          : { verdict: 'unknown' as const, checked: 0 }
+        let linked = false
+        if (opts.link !== false && check.verdict !== 'contradicted' && projectDir) {
+          linked = linkToProject(added.mod.id, projectDir).ok
+        }
+        results.push({
+          file: mod.file,
+          modId: mod.modId,
+          ok: true,
+          verified: check.verdict,
+          found: check.found,
+          referenceId: added.mod.id,
+          linked,
+          sourcesDir: sources,
+          error: check.verdict === 'contradicted' ? `the code says this is ${check.found}, not ${mod.modId}` : undefined
+        })
+      }
+
+      return {
+        ok: results.every((r) => r.ok || r.verified === 'contradicted'),
+        results,
+        projectDir: projectDir ?? undefined,
+        checked: targets.length
       }
     }
   )

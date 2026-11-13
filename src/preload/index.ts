@@ -198,6 +198,8 @@ const api = {
     /** Fetch and replace those dependencies, optionally decompiling them for the agent. */
     updateApply: (opts: unknown) => ipcRenderer.invoke('pack:updateApply', opts),
     decompile: (opts: unknown) => ipcRenderer.invoke('pack:decompile', opts),
+    /** Decompile jars known only by name, verify the guess, and link them as reference. */
+    reference: (opts: unknown) => ipcRenderer.invoke('pack:reference', opts),
     download: (opts: unknown) => ipcRenderer.invoke('pack:download', opts),
     adopt: (opts: unknown) => ipcRenderer.invoke('pack:adopt', opts),
     remove: (file: string) => ipcRenderer.invoke('pack:remove', file)

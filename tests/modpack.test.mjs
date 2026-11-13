@@ -685,6 +685,140 @@ check('the display name a pack already uses is kept for the report', () => {
   assert.equal(names.flywheel, 'flywheel')
 })
 
+/* ------------------------------------------- reading a jar by its file name */
+
+section('a jar nobody can parse is still a jar')
+
+check('the id and version are read out of a normal file name', () => {
+  const v = pack.inferFromFileName('create-1.21.1-6.0.4.jar')
+  assert.equal(v.modId, 'create')
+  assert.equal(v.mcVersion, '1.21.1')
+  assert.equal(v.version, '6.0.4')
+  assert.equal(v.inferred, true)
+})
+check('the mod version after the minecraft version is the one kept', () => {
+  // Reading `1.21.1` as the mod version left every guessed dependency with no
+  // version at all, which made its range uncheckable.
+  assert.equal(pack.inferFromFileName('flywheel-1.21.1-1.0.4.jar').version, '1.0.4')
+  assert.equal(pack.inferFromFileName('flywheel-1.21.1-1.0.4.jar').mcVersion, '1.21.1')
+})
+check('a multi-word id keeps its shape, lowercased with dashes', () => {
+  const v = pack.inferFromFileName('ICBM-Classic-1.12.2-4.2.0.jar')
+  assert.equal(v.modId, 'icbm-classic')
+  assert.equal(v.mcVersion, '1.12.2')
+  assert.equal(v.version, '4.2.0')
+})
+check('loader words are not part of the id', () => {
+  assert.equal(pack.inferFromFileName('jei-1.20.1-forge-15.2.0.27.jar').modId, 'jei')
+  assert.equal(pack.inferFromFileName('sodium-fabric-mc1.20.1-0.5.0.jar').modId, 'sodium')
+  assert.equal(pack.inferFromFileName('jei-1.20.1-forge-15.2.0.27.jar').version, '15.2.0.27')
+})
+check('a name with nothing id-like in it is refused, not invented', () => {
+  assert.equal(pack.inferFromFileName('mod.jar'), null)
+  assert.equal(pack.inferFromFileName('backup.jar'), null, 'no version, no minecraft version, no claim')
+  assert.equal(pack.inferFromFileName('old.jar'), null)
+})
+check('sources and dev jars are not mistaken for the mod itself', () => {
+  const v = pack.inferFromFileName('create-1.21.1-6.0.4-sources.jar')
+  assert.equal(v.modId, 'create')
+  assert.equal(v.version, '6.0.4')
+})
+
+check('matching demands the whole id, so a sibling mod is never mistaken for it', () => {
+  assert.equal(pack.fileNameMatchesMod('create-1.21.1-6.0.4.jar', 'create'), true)
+  assert.equal(pack.fileNameMatchesMod('create-1.21.1-6.0.4.jar', 'CREATE'), true, 'case does not matter')
+  // The bug this prevents: satisfying "create" with "createaddition".
+  assert.equal(pack.fileNameMatchesMod('createaddition-1.2.0.jar', 'create'), false)
+  assert.equal(pack.fileNameMatchesMod('flywheel-1.0.4.jar', 'create'), false)
+})
+
+check('normalising ignores dashes and underscores', () => {
+  assert.equal(pack.normalizeModId('ICBM-Classic'), pack.normalizeModId('icbm_classic'))
+})
+
+section('guesses are used, but never passed off as facts')
+
+check('an unreadable jar still counts toward what the folder provides', () => {
+  const guessed = tmp('guessed')
+  const mods = path.join(guessed, 'mods')
+  fs.mkdirSync(mods, { recursive: true })
+  neoJar(path.join(mods, 'create-1.21.1-6.0.4.jar'), { modId: 'create', version: '6.0.4', depends: [{ id: 'flywheel', range: '[1.0,2.0)' }] })
+  // An old, unparseable Flywheel: only its file name identifies it.
+  fs.writeFileSync(path.join(mods, 'flywheel-1.0.4.jar'), Buffer.from('not a zip'))
+  const scan = pack.scanModsFolder(guessed)
+  assert.equal(scan.unreadableJars.length, 1)
+  assert.deepEqual(scan.inferred.map((i) => i.modId), ['flywheel'])
+  assert.equal(scan.mods.length, 1, 'a guess is not counted as a read mod')
+  assert.equal(scan.missing.length, 0, 'a name match counts, so Create is not reported as broken')
+
+  const incoming = path.join(guessed, 'create-new.jar')
+  neoJar(incoming, { modId: 'create', version: '6.1.0', depends: [{ id: 'flywheel', range: '[1.0,2.0)' }] })
+  const plan = pack.planModUpdate(scan, incoming)
+  const dep = plan.preview.dependencies.find((d) => d.modId === 'flywheel')
+  assert.equal(dep.inferred, true, 'the caller is told this one is a guess')
+  assert.equal(dep.needsNewer, false, 'a guess is not silently upgraded over an installed jar')
+  assert.match(dep.problem, /could not be read/)
+  assert.match(dep.problem, /file name/)
+  fs.rmSync(guessed, { recursive: true, force: true })
+})
+
+check('a readable jar wins over a name guess for the same id', () => {
+  const both = tmp('both')
+  const mods = path.join(both, 'mods')
+  fs.mkdirSync(mods, { recursive: true })
+  // Same id, two files: one readable, one not. The readable one must answer.
+  fs.writeFileSync(path.join(mods, 'flywheel-1.0.0.jar'), Buffer.from('nope'))
+  neoJar(path.join(mods, 'flywheel-2.0.1.jar'), { modId: 'flywheel', version: '2.0.1' })
+  const scan = pack.scanModsFolder(both)
+  const incoming = path.join(both, 'create.jar')
+  neoJar(incoming, { modId: 'create', version: '6.1.0', depends: [{ id: 'flywheel', range: '[2.0,3.0)' }] })
+  const dep = pack.planModUpdate(scan, incoming).preview.dependencies.find((d) => d.modId === 'flywheel')
+  assert.equal(dep.inferred, undefined, 'the readable jar is the one reported')
+  assert.equal(dep.version, '2.0.1')
+  assert.equal(dep.needsNewer, false)
+  fs.rmSync(both, { recursive: true, force: true })
+})
+
+check('a name match does not make an empty folder look complete', () => {
+  const onlyGuesses = tmp('guessonly')
+  const mods = path.join(onlyGuesses, 'mods')
+  fs.mkdirSync(mods, { recursive: true })
+  fs.writeFileSync(path.join(mods, 'some-mod-1.0.0.jar'), Buffer.from('nope'))
+  const v = pack.describeScan(pack.scanModsFolder(onlyGuesses))
+  assert.equal(v.healthy, false, 'nothing here could actually be read')
+  assert.match(v.detail, /file name/)
+  fs.rmSync(onlyGuesses, { recursive: true, force: true })
+})
+
+section('the decompiled code is the judge of the guess')
+
+check('an @Mod id that matches confirms the file name', () => {
+  const src = tmp('src-confirm')
+  fs.mkdirSync(path.join(src, 'com', 'example'), { recursive: true })
+  fs.writeFileSync(path.join(src, 'com', 'example', 'CreateMod.java'), '@Mod("create")\npublic class CreateMod {}\n')
+  const res = pack.verifyInferredId(src, 'create')
+  assert.equal(res.verdict, 'confirmed')
+  assert.equal(res.found, 'create')
+  fs.rmSync(src, { recursive: true, force: true })
+})
+check('an @Mod id that differs disproves it, and says which id it really is', () => {
+  const src = tmp('src-wrong')
+  fs.mkdirSync(src, { recursive: true })
+  fs.writeFileSync(path.join(src, 'Thing.java'), '@Mod(modid = "actuallysomethingelse")\npublic class Thing {}\n')
+  const res = pack.verifyInferredId(src, 'create')
+  assert.equal(res.verdict, 'contradicted')
+  assert.equal(res.found, 'actuallysomethingelse')
+  fs.rmSync(src, { recursive: true, force: true })
+})
+check('code with no @Mod anywhere is unknown, not a pass', () => {
+  const src = tmp('src-unknown')
+  fs.mkdirSync(src, { recursive: true })
+  fs.writeFileSync(path.join(src, 'Lib.java'), 'package com.example;\npublic class Lib {}\n')
+  const res = pack.verifyInferredId(src, 'flywheel')
+  assert.equal(res.verdict, 'unknown')
+  fs.rmSync(src, { recursive: true, force: true })
+})
+
 for (const d of [work, fabricDir, messy, complete, partial, oldDep]) fs.rmSync(d, { recursive: true, force: true })
 
 console.log(`\n${failures.length ? `${failures.length} check(s) failed` : `all ${passed} modpack checks passed`}`)

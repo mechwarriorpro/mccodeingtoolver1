@@ -57,6 +57,10 @@ export default function PackPanel({ onToast }: Props): JSX.Element {
   const [includeDeps, setIncludeDeps] = useState(true)
   const [decompile, setDecompile] = useState(true)
   const [applied, setApplied] = useState<{ modId: string; ok: boolean; error?: string; replaced?: string; sources?: string; sourcesError?: string }[]>([])
+  /** Jars recognised only by name: decompiled, checked, and linked as reference. */
+  const [referenced, setReferenced] = useState<
+    { file: string; modId?: string; verified?: string; found?: string; linked?: boolean; error?: string }[]
+  >([])
 
   const load = useCallback(async (chosen: string) => {
     setBusy(true)
@@ -194,6 +198,25 @@ export default function PackPanel({ onToast }: Props): JSX.Element {
           jars: toDecompile.map((d) => d.path ?? '')
         })
         if (res.ok) onToast(`Decompiled ${res.done ?? toDecompile.length} dependenc${toDecompile.length === 1 ? 'y' : 'ies'} the folder already had.`)
+      }
+
+      // Dependencies that could only be recognised by their file name: the name
+      // is a guess until the code is read, so the decompiled sources are where
+      // the guess gets confirmed — and linked as reference once it is.
+      const guessedDeps = modPlan.dependencies.filter((d) => d.inferred && d.path)
+      if (includeDeps && guessedDeps.length) {
+        const res = await api.pack.reference({ dir: scan.dir, modIds: guessedDeps.map((d) => d.modId) })
+        setReferenced(res.results ?? [])
+        const confirmed = (res.results ?? []).filter((r) => r.verified === 'confirmed').length
+        const contradicted = (res.results ?? []).filter((r) => r.verified === 'contradicted')
+        if (contradicted.length) {
+          onToast(
+            `${contradicted.length} jar${contradicted.length === 1 ? ' was' : 's were'} named wrong in the folder — the code says ${contradicted[0].found}. Left unlinked.`,
+            'err'
+          )
+        } else if (confirmed) {
+          onToast(`Confirmed ${confirmed} dependency id${confirmed === 1 ? '' : 's'} from the decompiled code, and linked them as reference.`)
+        }
       }
       setModPlan(null)
       await load(dir)
@@ -411,6 +434,27 @@ export default function PackPanel({ onToast }: Props): JSX.Element {
               {r.replaced ? ` (replaced ${r.replaced})` : ''}
               {r.sources ? ` · sources in ${r.sources}` : ''}
               {r.sourcesError ? ` · could not decompile: ${r.sourcesError}` : ''}
+            </p>
+          ))}
+        </div>
+      )}
+
+      {referenced.length > 0 && (
+        <div className="card">
+          <b>Read from the code, not the file name</b>
+          <p className="muted small" style={{ marginTop: 4 }}>
+            These jars had no readable metadata, so they were recognised by name and then decompiled to check it.
+          </p>
+          {referenced.map((r) => (
+            <p key={r.file} className={r.verified === 'contradicted' ? 'warn small' : 'muted small'} style={{ marginTop: 3 }}>
+              <b>{r.file}</b>{' '}
+              {r.verified === 'confirmed'
+                ? `— confirmed as ${r.modId}${r.linked ? ', linked as reference' : ''}`
+                : r.verified === 'contradicted'
+                  ? `— the code says ${r.found}, not ${r.modId}; left unlinked`
+                  : r.error
+                    ? `— ${r.error}`
+                    : `— decompiled${r.linked ? ' and linked as reference' : ''}, no @Mod id found to confirm it`}
             </p>
           ))}
         </div>

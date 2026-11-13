@@ -605,6 +605,8 @@ export interface PackDependencyAction {
   version?: string
   needsNewer: boolean
   problem?: string
+  /** Recognised only from the jar's file name — decompiling is what confirms it. */
+  inferred?: boolean
   action: 'keep' | 'download'
   reason: string
   target?: { name: string; url: string; version?: string; projectId?: string }
@@ -972,6 +974,26 @@ export interface McfApi {
       done?: number
       failed: { jar: string; error?: string }[]
       sourcesDir?: string
+    }>
+    /**
+     * Decompile jars that could not be read, check the file-name guess against the
+     * code, and link what survives as read-only reference for the agent.
+     */
+    reference: (opts: { dir: string; modIds?: string[]; link?: boolean }) => Promise<{
+      ok: boolean
+      checked?: number
+      projectDir?: string
+      results: {
+        file: string
+        modId?: string
+        ok: boolean
+        verified?: 'confirmed' | 'contradicted' | 'unknown'
+        found?: string
+        referenceId?: string
+        linked?: boolean
+        sourcesDir?: string
+        error?: string
+      }[]
     }>
     /** What a jar would do to the folder, before it is copied in. Writes nothing. */
     preview: (opts: { dir: string; jar: string }) => Promise<{

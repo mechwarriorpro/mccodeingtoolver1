@@ -62,7 +62,7 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.4.18 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.4.19 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
 > v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
 > decompiler picking a Java it could not run.
@@ -89,6 +89,13 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.4.19** stops the Pack tab ignoring jars it cannot parse. Those jars are now identified **by their file
+> name** — `flywheel-1.21.1-1.0.4.jar` gives id `flywheel`, Minecraft `1.21.1`, version `1.0.4` — and matched
+> against the dependencies the updated mod asks for. A name is a guess, so the jar is **decompiled** and the guess
+> checked against the `@Mod("id")` annotation in the code: a match confirms it and the sources are added to the
+> project as read-only **reference**; a mismatch is reported by the id it really is and nothing is linked. Guesses
+> are always labelled as guesses, are never counted as read mods, and are never used to silently download over a
+> jar you already have.
 > **v0.4.18** makes the Pack tab do the thing it was actually for: **update one mod and bring its dependencies
 > with it**. Pick the mod jar you are updating to; the dependencies *that build* declares are looked for in the
 > pack's `mods` folder, and the ones already there come along — decompiled, so the agent can read the API it is
@@ -527,7 +534,15 @@ to it:
   reaches the network, and the newer jar replaces the old copy.
 
 Older packs are not left out: pre-1.13 Forge jars keep their metadata in
-`mcmod.info` rather than `mods.toml`, and that is read too. Every jar is read the way the loader reads it —
+`mcmod.info` rather than `mods.toml`, and that is read too.
+
+**Jars that cannot be parsed at all** are read by their **file name** instead, and
+the guess is checked rather than trusted. `flywheel-1.21.1-1.0.4.jar` gives
+`flywheel`, Minecraft `1.21.1`, version `1.0.4`; the jar is then decompiled and the
+`@Mod("id")` annotation in the code either confirms that or disproves it. Confirmed
+sources are added to the project as reference so the agent can read the API
+alongside the mod being updated. A contradiction is reported by the real id and
+left unlinked — a wrong name is worse than no name. Every jar is read the way the loader reads it —
 `META-INF/neoforge.mods.toml`, `META-INF/mods.toml` or `fabric.mod.json` — and the
 dependencies each one *declares* are collected, with their version ranges.
 
