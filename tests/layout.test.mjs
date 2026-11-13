@@ -23,6 +23,29 @@ const renderer = path.join(root, 'src', 'renderer', 'src')
  * nothing to do with the layout. Normalise at the boundary and the rules can be
  * written once.
  */
+/**
+ * Count the top-level tracks in a `grid-template-columns` value.
+ * `minmax(0, 1fr)` is one track, not two, and `var(--side-width, 268px)` is
+ * one track, not two.
+ */
+function countTracks(value) {
+  let depth = 0
+  let count = 0
+  let hasContent = false
+  for (const ch of value) {
+    if (ch === '(') depth++
+    else if (ch === ')') depth--
+    if (depth === 0 && /\s/.test(ch)) {
+      if (hasContent) count++
+      hasContent = false
+    } else if (depth === 0) {
+      hasContent = true
+    }
+  }
+  if (hasContent) count++
+  return count
+}
+
 const read = (name) => fs.readFileSync(path.join(renderer, name), 'utf8').replace(/\r\n/g, '\n')
 const css = read('styles.css')
 const app = read('App.tsx')
@@ -101,6 +124,81 @@ check('a narrow window falls back to a stacked layout', () => {
 })
 
 console.log('\npanes can be resized, within the window')
+
+check('every grid defines enough tracks for its children', () => {
+  // This is the bug that shipped in v0.4.10: `.app` declared two columns and
+  // then gained a third child (the sidebar divider), so auto-placement pushed
+  // `main` into an implicit row at one column's width. The rail fell outside its
+  // own box and `overflow: hidden` clipped it: a black band down the right of
+  // the window, no tabs, and a chat column a fraction of its width.
+  //
+  // Counting is the only reliable way to see it without a browser.
+  const appBlock = css.match(/\.app\s*\{([^}]*)\}/)
+  assert.ok(appBlock, '.app rule not found')
+  const cols = appBlock[1].match(/grid-template-columns:\s*([^;]+);/)
+  assert.ok(cols, '.app has no explicit columns')
+  // Count top-level tracks, not whitespace-separated words: `minmax(0, 1fr)`
+  // contains a space and var() contains commas, so a naive split counts 2-3
+  // tracks for one. Parenthesis depth is the reliable delimiter.
+  const trackCount = countTracks(cols[1])
+
+  // Children of <div className="app"> in the body row: everything except the
+  // titlebar, which spans `1 / -1` and therefore takes no individual track, and
+  // fixed-position overlays, which are out of the flow entirely.
+  const jsx = app.slice(app.search(/className="app"/))
+  const children = [...jsx.matchAll(/^      <(aside|main|div)\b/gm)]
+  const bodyRow = children.filter((m) => {
+    const tag = jsx.slice(m.index, m.index + 220)
+    if (/position: 'fixed'/.test(tag)) return false
+    if (/className="titlebar"/.test(tag)) return false
+    return true
+  })
+  assert.ok(bodyRow.length >= 3, `expected sidebar + divider + main, found ${bodyRow.length}`)
+  assert.equal(
+    trackCount,
+    bodyRow.length,
+    `.app declares ${trackCount} column track(s) for ${bodyRow.length} child(ren) in the body row; ` +
+      'auto-placement will push the extra ones into implicit rows and clip them'
+  )
+})
+
+check('the chat/rail grid also matches its children', () => {
+  // Same class of bug one level down: `.main` is chat | divider | rail. Dropping
+  // the rail or adding a pane without a track puts it in an implicit row.
+  const mainBlock = css.match(/\.main\s*\{([^}]*)\}/)
+  assert.ok(mainBlock, '.main rule not found')
+  const cols = mainBlock[1].match(/grid-template-columns:\s*([^;]+);/)
+  assert.ok(cols, '.main has no explicit columns')
+  assert.equal(countTracks(cols[1]), 3, '.main should be chat | divider | rail')
+
+  const jsx = app.slice(app.search(/className="main"/))
+  const chat = jsx.indexOf('<ChatPanel')
+  const divider = jsx.indexOf('className="resizer"', chat)
+  const rail = jsx.indexOf('className="rail"', chat)
+  assert.ok(chat > -1 && divider > chat && rail > divider, 'the chat, divider and rail are not in that order')
+})
+
+check('the divider track and the divider handle agree on a width', () => {
+  // A 6px track holding a 5px handle leaves 1px of pane clipped; a 5px track
+  // holding a 6px handle overlaps the chat. Both are silent.
+  const uses = [...css.matchAll(/grid-template-columns:\s*([^;]+);/g)].map((m) => m[1])
+  for (const track of uses) {
+    if (!/divider/.test(track)) continue
+    assert.match(track, /var\(--divider/, 'a grid reserves a hardcoded divider width instead of --divider')
+  }
+  const resizer = css.match(/\.resizer\s*\{([^}]*)\}/)
+  assert.ok(resizer, '.resizer rule not found')
+  assert.match(resizer[1], /width:\s*var\(--divider/, '.resizer width is not --divider')
+  assert.match(css, /--divider:\s*\d+px;/, '--divider is never defined')
+})
+
+check('the rail does not impose a min-width on its own track', () => {
+  // `min-width: 300px` here beat the grid track and left the divider outside it.
+  const rail = css.match(/\.rail\s*\{([^}]*)\}/)
+  assert.ok(rail, '.rail rule not found')
+  assert.match(rail[1], /min-width:\s*0/, '.rail should let the grid track decide its width')
+  assert.ok(!/min-width:\s*[1-9]/.test(rail[1]), '.rail has a non-zero min-width')
+})
 
 check('both dividers exist and are draggable', () => {
   const resizers = app.match(/className="resizer"/g) ?? []

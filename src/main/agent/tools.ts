@@ -21,7 +21,9 @@ import { addFromGithub, ensureReferenceIgnored, getReference, linkToProject, lis
 import { authToken } from '../github/oauth'
 import { gitSummary } from '../build/gradle'
 import { assetLayout, blockstateJson } from '../mod/assets'
-import { detectMcVersion } from './engine'
+import { detectLoader, detectMcVersion } from './engine'
+import { rendererGuidance, rendererSupport, realismVerdict } from '../mod/renderer'
+import { PATTERNS, PALETTES, texturePathFor, texturePng } from '../mod/textures'
 import {
   QUADRUPED_BONES,
   animationJson,
@@ -572,6 +574,85 @@ export function createAgentTools(ctx: ToolContext) {
         }
         ctx.notify('project:changed', {})
         return text(`Wrote ${res.written.length} file(s):\n${summary.map((l) => `- ${l}`).join('\n')}`)
+      }
+    ),
+
+    tool(
+      'make_texture',
+      'Generate a 16x16 PNG texture in the style Minecraft uses: flat mid-tone, lit from the top-left, a little noise. ' +
+        'Writes it to assets/<modId>/textures/block/ or /item/ so a generated model has something to point at. ' +
+        'Use this instead of telling the user to go draw one — a model whose texture is missing renders as a black-and-pink checkerboard.',
+      {
+        modId: z.string().describe('The mod id, used for the folder.'),
+        name: z.string().describe('Texture name, e.g. "ruby_block". Becomes block/<name>.png.'),
+        kind: z.enum(['block', 'item']).optional().describe('Which texture folder. Item textures can have a cut-out silhouette.'),
+        pattern: z
+          .enum(['flat', 'noise', 'grain', 'brick', 'ore', 'metal', 'planks', 'frame'])
+          .optional()
+          .describe('How the surface looks. Defaults to noise, which reads as stone.'),
+        palette: z.enum(['stone', 'wood', 'metal', 'gem', 'organic', 'dark']).optional().describe('Base colour family.'),
+        size: z.number().optional().describe('Edge length in pixels. 16 is the Minecraft default; 32 or 64 for detail.'),
+        silhouette: z.boolean().optional().describe('For items: clear the corners so it is not a square sprite.')
+      },
+      async ({ modId, name, kind, pattern, palette, size, silhouette }) => {
+        const cfg = loadConfig()
+        const dir = cfg.workspaceDir
+        const k = kind ?? 'block'
+        if (!/^[a-z0-9_]{2,48}$/.test(name)) return err('The texture name must be 2-48 lowercase letters, digits or underscores.')
+        const rel = `src/main/resources/assets/${modId}/textures/${texturePathFor(k, name)}.png`
+        try {
+          const png = texturePng({ name, pattern: pattern ?? 'noise', palette: palette ?? 'stone', size: size ?? 16, transparentBackground: silhouette && k === 'item' })
+          const full = path.join(dir, rel)
+          fs.mkdirSync(path.dirname(full), { recursive: true })
+          fs.writeFileSync(full, png)
+          ctx.notify('project:changed', {})
+          const ref = `${modId}:${texturePathFor(k, name)}`
+          return text(
+            `Wrote ${rel} (${png.length} bytes). Reference it as "${ref}" in a model.\n` +
+              `Pattern: ${PATTERNS[(pattern ?? 'noise') as keyof typeof PATTERNS]}\n` +
+              `Base colour: ${PALETTES[(palette ?? 'stone') as keyof typeof PALETTES].note}\n` +
+              'This is serviceable, not art — it opens in any image editor if the user wants to paint over it.'
+          )
+        } catch (e) {
+          return err(`Could not write the texture: ${(e as Error).message}`)
+        }
+      }
+    ),
+
+    tool(
+      'renderer_capabilities',
+      'What this project can actually render with, and what it cannot. Call this BEFORE promising a visual effect: ' +
+        'the rendering API was replaced twice, so shader code that works on 1.21 does not exist on 1.12. ' +
+        'It also answers "can we make this photorealistic" honestly.',
+      { question: z.string().optional().describe('Optional: what the user wants to achieve, e.g. "reflective water".') },
+      async ({ question }) => {
+        const cfg = loadConfig()
+        const dir = cfg.workspaceDir
+        const props = readProps(path.join(dir, 'gradle.properties'))
+        const mcVersion = detectMcVersion(props)
+        const loader = detectLoader(props)
+        const r = rendererSupport(mcVersion)
+        const verdict = realismVerdict(mcVersion)
+        return text(
+          [
+            `Minecraft ${mcVersion} (${loader})`,
+            `API: ${r.apiLabel}`,
+            `Shading language: ${r.shadingLanguage}`,
+            `How shaders load: ${r.howShadersLoad}`,
+            '',
+            'CAN:',
+            ...r.stage.can.map((c) => `  - ${c}`),
+            'CANNOT:',
+            ...r.stage.cannot.map((c) => `  - ${c}`),
+            '',
+            `Ceiling: ${r.ceiling}`,
+            '',
+            `Photorealistic: ${verdict.achievable ? 'possible' : 'not from mod code'}. ${verdict.how}`,
+            question ? `\nFor "${question}": plan within the CAN list, and say plainly if it falls in CANNOT.` : ''
+          ]
+            .filter(Boolean)
+            .join('\n')
+        )
       }
     ),
 

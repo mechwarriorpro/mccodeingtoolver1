@@ -1,4 +1,7 @@
 :root {
+  /* Width of the drag handles. The grid reserves exactly this much for each, so
+     one value keeps the handle and its track from disagreeing. */
+  --divider: 5px;
   --bg: #0d0f12;
   --bg-2: #12151a;
   --bg-3: #171b21;
@@ -74,9 +77,16 @@ textarea { resize: none; }
 /* ---------- layout ---------- */
 .app {
   display: grid;
-  /* --side-width is dragged by the handle beside the sidebar. */
-  grid-template-columns: var(--side-width, 268px) 1fr;
-  grid-template-rows: 48px 1fr;
+  /* Four tracks for four children in the body row: sidebar, its divider, and
+     `main` (which is itself the chat + rail grid).
+     This was two columns for three children after the sidebar divider was
+     added, so auto-placement pushed `main` into an implicit row below at a
+     single column's width — the rail fell outside its own box and was clipped
+     by `overflow: hidden`. The visible result was a black band down the right
+     side with no tabs at all and a chat column half the screen short.
+     The track count must match the in-flow children; the tests enforce it. */
+  grid-template-columns: var(--side-width, 268px) var(--divider, 5px) minmax(0, 1fr);
+  grid-template-rows: 48px minmax(0, 1fr);
   height: 100%;
   overflow: hidden;
 }
@@ -121,7 +131,7 @@ textarea { resize: none; }
   /* Set from a style attribute at runtime so the divide can be dragged; the
      fallback keeps it sane if the value is missing. `minmax(320px, 1fr)` stops
      the chat from being squeezed to nothing while the rail is dragged wide. */
-  grid-template-columns: minmax(320px, 1fr) 6px var(--rail-width, 380px);
+  grid-template-columns: minmax(320px, 1fr) var(--divider, 5px) var(--rail-width, 380px);
   min-height: 0;
   overflow: hidden;
 }
@@ -226,8 +236,11 @@ textarea { resize: none; }
   display: flex;
   flex-direction: column;
   min-height: 0;
-  min-width: 300px;
-  /* The rail is a resizable pane; the handle sits on its left edge. */
+  /* No min-width: the width comes from the grid track, which is already clamped
+     when dragged. A min-width here made the rail wider than its own track and
+     the overflow was clipped — a 300px rail in a 300px track leaves the 5px
+     divider with nowhere to go. */
+  min-width: 0;
   overflow: hidden;
 }
 
@@ -271,7 +284,9 @@ textarea { resize: none; }
 
 /* Drag handles between the chat and the rail, and beside the sidebar. */
 .resizer {
-  width: 5px;
+  /* Must equal the track reserved for it in .app / .main, or the pane after it
+     overflows its track by the difference and gets clipped. */
+  width: var(--divider, 5px);
   cursor: col-resize;
   background: transparent;
   position: relative;

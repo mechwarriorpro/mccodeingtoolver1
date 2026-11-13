@@ -214,6 +214,14 @@ const api = {
     create: (req: unknown) => ipcRenderer.invoke('models:create', req)
   },
 
+  /** Generated PNG textures, and what this version can actually render. */
+  textures: {
+    create: (req: unknown) => ipcRenderer.invoke('textures:create', req)
+  },
+  renderer: {
+    capabilities: () => ipcRenderer.invoke('renderer:capabilities')
+  },
+
   chat: {
     list: () => ipcRenderer.invoke('chat:list'),
     load: (id: string) => ipcRenderer.invoke('chat:load', id),

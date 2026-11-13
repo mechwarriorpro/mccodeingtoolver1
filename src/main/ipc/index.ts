@@ -123,11 +123,13 @@ import {
   touchFork
 } from '../mod/fork'
 import { convertProject, detectProject, migrationReport, planPort } from '../mod/port'
-import { detectMcVersion } from '../agent/engine'
+import { detectLoader, detectMcVersion } from '../agent/engine'
 import { readProps } from '../mod/props'
 import { assetLayout, blockstateJson } from '../mod/assets'
 import { QUADRUPED_BONES, animationJson, blockModelJson, entityModelJson, modelPaths, quadrupedWalk, writeModels } from '../mod/models'
 import { textureFile, textureRef } from '../mod/texture-ref'
+import { PATTERNS, PALETTES, texturePathFor, texturePng } from '../mod/textures'
+import { rendererSupport, realismVerdict } from '../mod/renderer'
 import { bestAvailable, describeRunTarget } from '../agent/autoswitch'
 import { loadResearch, researchDir, saveResearch, runMode } from '../agent/modes'
 import { knowledgeOn } from '../learn'
@@ -985,6 +987,61 @@ export function registerIpc(): void {
    * agent still gets the tool for cases that need judgement (a mob that matches
    * a described creature); this is the button for the common case.
    */
+  /**
+   * What this project can render, and the honest verdict on realism. Shown next
+   * to the texture and shader controls so the user is not told to write a
+   * coreShaders file for a version that has never loaded one.
+   */
+  ipcMain.handle('renderer:capabilities', () => {
+    const cfg = loadConfig()
+    const props = readProps(path.join(cfg.workspaceDir, 'gradle.properties'))
+    const mcVersion = detectMcVersion(props)
+    return {
+      ok: true,
+      mcVersion,
+      loader: detectLoader(props),
+      support: rendererSupport(mcVersion),
+      verdict: realismVerdict(mcVersion)
+    }
+  })
+
+  /** Write one generated texture as a real PNG in the folder the game reads. */
+  ipcMain.handle(
+    'textures:create',
+    (
+      _e,
+      req: { name: string; kind?: 'block' | 'item'; pattern?: keyof typeof PATTERNS; palette?: keyof typeof PALETTES; size?: number; silhouette?: boolean }
+    ) => {
+      const cfg = loadConfig()
+      const props = readProps(path.join(cfg.workspaceDir, 'gradle.properties'))
+      const modId = (props.mod_id ?? props.modid ?? 'modid').trim()
+      const name = (req.name ?? '').trim().toLowerCase()
+      if (!/^[a-z0-9_]{2,48}$/.test(name)) {
+        return { ok: false, error: 'Use 2-48 lowercase letters, digits or underscores — this becomes the file name and the texture id.' }
+      }
+      if (!/^[a-z0-9_]{2,48}$/.test(modId)) {
+        return { ok: false, error: `The project's mod id (${modId}) is not set in gradle.properties.` }
+      }
+      const kind = req.kind ?? 'block'
+      const rel = `src/main/resources/assets/${modId}/textures/${texturePathFor(kind, name)}.png`
+      try {
+        const png = texturePng({
+          name,
+          pattern: req.pattern ?? 'noise',
+          palette: req.palette ?? 'stone',
+          size: req.size ?? 16,
+          transparentBackground: Boolean(req.silhouette) && kind === 'item'
+        })
+        const full = path.join(cfg.workspaceDir, rel)
+        fs.mkdirSync(path.dirname(full), { recursive: true })
+        fs.writeFileSync(full, png)
+        return { ok: true, path: rel, bytes: png.length, ref: `${modId}:${texturePathFor(kind, name)}` }
+      } catch (e) {
+        return { ok: false, error: (e as Error).message }
+      }
+    }
+  )
+
   ipcMain.handle(
     'models:create',
     (

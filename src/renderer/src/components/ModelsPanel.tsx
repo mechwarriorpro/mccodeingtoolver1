@@ -1,5 +1,32 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, type ModelInfo, type ModelKind } from '../lib/api'
+import {
+  api,
+  type ModelInfo,
+  type ModelKind,
+  type RendererInfo,
+  type TexturePalette,
+  type TexturePattern
+} from '../lib/api'
+
+const PATTERNS: { id: TexturePattern; label: string }[] = [
+  { id: 'noise', label: 'Stone / concrete' },
+  { id: 'flat', label: 'Flat' },
+  { id: 'grain', label: 'Log (end grain)' },
+  { id: 'planks', label: 'Planks' },
+  { id: 'brick', label: 'Brick' },
+  { id: 'ore', label: 'Ore' },
+  { id: 'metal', label: 'Metal' },
+  { id: 'frame', label: 'Machine frame' }
+]
+
+const PALETTES: { id: TexturePalette; label: string }[] = [
+  { id: 'stone', label: 'Stone' },
+  { id: 'wood', label: 'Wood' },
+  { id: 'metal', label: 'Metal' },
+  { id: 'gem', label: 'Gem' },
+  { id: 'organic', label: 'Organic' },
+  { id: 'dark', label: 'Dark' }
+]
 
 interface Props {
   onToast: (text: string, kind?: 'ok' | 'err') => void
@@ -30,6 +57,12 @@ export default function ModelsPanel({ onToast, onSend }: Props): JSX.Element {
   const [fullCube, setFullCube] = useState(true)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<{ written: string[]; textureFile: string | null } | null>(null)
+  const [renderer, setRenderer] = useState<RendererInfo | null>(null)
+  const [texName, setTexName] = useState('')
+  const [texKind, setTexKind] = useState<'block' | 'item'>('block')
+  const [texPattern, setTexPattern] = useState<TexturePattern>('noise')
+  const [texPalette, setTexPalette] = useState<TexturePalette>('stone')
+  const [texResult, setTexResult] = useState<{ path: string; ref: string; bytes: number } | null>(null)
 
   const refresh = useCallback(async () => {
     setInfo(await api.models.info())
@@ -37,6 +70,7 @@ export default function ModelsPanel({ onToast, onSend }: Props): JSX.Element {
 
   useEffect(() => {
     void refresh()
+    void api.renderer.capabilities().then(setRenderer)
   }, [refresh])
 
   const legacy = info?.legacy ?? false
@@ -75,6 +109,22 @@ export default function ModelsPanel({ onToast, onSend }: Props): JSX.Element {
       setResult({ written: res.written ?? [], textureFile: res.textureFile ?? null })
       onToast(`Wrote ${res.written?.length ?? 0} file(s)`)
       await refresh()
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function createTexture(): Promise<void> {
+    setBusy(true)
+    setTexResult(null)
+    try {
+      const res = await api.textures.create({ name: texName, kind: texKind, pattern: texPattern, palette: texPalette })
+      if (!res.ok) {
+        onToast(res.error ?? 'could not write the texture', 'err')
+        return
+      }
+      setTexResult({ path: res.path ?? '', ref: res.ref ?? '', bytes: res.bytes ?? 0 })
+      onToast(`Wrote ${res.path}`)
     } finally {
       setBusy(false)
     }
@@ -207,6 +257,119 @@ export default function ModelsPanel({ onToast, onSend }: Props): JSX.Element {
           )}
         </div>
       )}
+
+      <details className="refs" open>
+        <summary>Texture</summary>
+        <p className="muted small">
+          Minecraft textures are PNGs, 16×16 by default. This writes a real one — flat, lit from the top-left, with a little
+          noise — into the folder your version reads. It is a starting point that looks deliberate, not finished art: open it
+          in any image editor and paint over it.
+        </p>
+        <div className="row wrap">
+          {(['block', 'item'] as const).map((k) => (
+            <button key={k} className={texKind === k ? 'chip on' : 'chip'} onClick={() => setTexKind(k)}>
+              {k === 'block' ? 'Block texture' : 'Item texture'}
+            </button>
+          ))}
+        </div>
+        <label className="field">
+          <span>Texture name</span>
+          <input
+            value={texName}
+            placeholder={texKind === 'block' ? 'ruby_block' : 'ruby_gem'}
+            onChange={(e) => setTexName(e.target.value.trim().toLowerCase())}
+          />
+        </label>
+        <label className="field">
+          <span>Pattern</span>
+          <select value={texPattern} onChange={(e) => setTexPattern(e.target.value as TexturePattern)}>
+            {PATTERNS.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Colour</span>
+          <select value={texPalette} onChange={(e) => setTexPalette(e.target.value as TexturePalette)}>
+            {PALETTES.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button className="primary" disabled={!/^[a-z0-9_]{2,48}$/.test(texName) || busy} onClick={() => void createTexture()}>
+          Write the PNG
+        </button>
+        {texResult && (
+          <div className="card">
+            <code>{texResult.path}</code>
+            <p className="muted small">
+              {texResult.bytes} bytes. Point a model at it with <code>{texResult.ref}</code> — which is what the model
+              generator already does when you give it the same name.
+            </p>
+          </div>
+        )}
+      </details>
+
+      <details className="refs">
+        <summary>Shaders and custom rendering</summary>
+        {renderer && (
+          <>
+            <p className="muted small">
+              <b>{renderer.mcVersion}</b> · {renderer.support.apiLabel}
+            </p>
+            <p className="muted small">
+              <b>Shading language:</b> {renderer.support.shadingLanguage}
+            </p>
+            <p className="muted small">
+              <b>How shaders load:</b> {renderer.support.howShadersLoad}
+            </p>
+            <p className={renderer.verdict.achievable ? 'muted small' : 'warn'}>
+              <b>Photorealistic:</b> {renderer.verdict.achievable ? 'possible' : 'not from mod code'}. {renderer.verdict.how}
+            </p>
+            <details className="refs">
+              <summary>What this version can and cannot do</summary>
+              <p className="muted small">
+                <b>Can</b>
+              </p>
+              <ul className="files">
+                {renderer.support.stage.can.map((c) => (
+                  <li key={c}>{c}</li>
+                ))}
+              </ul>
+              <p className="muted small">
+                <b>Cannot</b>
+              </p>
+              <ul className="files">
+                {renderer.support.stage.cannot.map((c) => (
+                  <li key={c}>{c}</li>
+                ))}
+              </ul>
+              <ul className="files">
+                {renderer.support.constraints.map((c) => (
+                  <li key={c} className="muted small">
+                    {c}
+                  </li>
+                ))}
+              </ul>
+            </details>
+            <button
+              onClick={() =>
+                onSend(
+                  `I want a custom renderer or shader effect for this mod (Minecraft ${renderer.mcVersion}). ` +
+                    `Call renderer_capabilities first and tell me in one sentence what is actually reachable here and what is not. ` +
+                    `Then ask me what the effect should look like, write it for the API this version has, and do not claim photorealism if it needs a shader pack.`
+                )
+              }
+            >
+              Ask the agent for a shader or renderer
+            </button>
+          </>
+        )}
+      </details>
 
       <details className="refs">
         <summary>Where each file goes</summary>

@@ -2,6 +2,7 @@ import type { Loader } from '../versions/catalog'
 import { resolveEra } from '../versions/eras'
 import { lessonsForPrompt } from '../learn'
 import { modelGuidance } from '../mod/assets'
+import { rendererGuidance } from '../mod/renderer'
 
 /**
  * System prompt appended to Claude Code's preset prompt.
@@ -84,6 +85,8 @@ You have Claude Code's normal file tools (Read/Write/Edit/Glob/Grep/LS) plus app
 - \`mcp__mcfrogeagent__list_mistakes\` — the lessons the app has learned so far.
 - \`mcp__mcfrogeagent__make_model\` — generate a block model, item model, entity geometry or animation as valid JSON, **in the right folder**. Use it rather than typing model JSON: the three things that make a model silently invisible are bad coordinates, a non-namespaced texture, and the wrong directory.
 - \`mcp__mcfrogeagent__check_model\` — validate a model or animation file. Call it after writing one by hand.
+- \`mcp__mcfrogeagent__make_texture\` — generate the 16x16 PNG a model needs. Use it rather than telling the user to draw one.
+- \`mcp__mcfrogeagent__renderer_capabilities\` — what this version can render, what it cannot, and whether "photorealistic" is even possible. **Call it before promising any visual effect.**
 
 # 3D models and animations
 
@@ -97,6 +100,13 @@ A model that is structurally wrong does not throw: it renders as nothing, and th
 - **Entity models are Bedrock geometry**, the same format Blockbench exports. Tell the user to open the \`.geo.json\` in Blockbench when the shape needs real art: the rig is correct, but a generator cannot make something look like a dragon.
 - **Animations need a controller.** A file in \`animations/\` does nothing until the entity's renderer or animation controller references it, and rotation values are in degrees.
 ${legacyModelNote(opts.mcVersion ?? '1.21.1', opts.modId)}
+
+# Rendering and shaders
+
+${rendererGuidance(opts.mcVersion ?? '1.21.1')}
+
+- **Textures are PNGs.** Generate one with \`make_texture\` (16x16, Minecraft's size) instead of asking the user to make it. It is serviceable art in a coherent palette, not a finished sprite — say so, and offer to read a replacement if they paint over it.
+- **Do not promise photorealistic output from mod code alone.** On 1.17+ you can write real GLSL, custom RenderTypes and PostChain post-processing, and that is genuinely powerful. Full PBR, shadow maps and reflections come from a shader *pack* (Iris), which is a different deliverable. Say which one the user is getting.
 - \`mcp__mcfrogeagent__add_reference_mod\` — pull another mod from a GitHub release (or a local jar), decompile it with Vineflower, and copy the sources to \`reference/<slug>/\`.
 - \`mcp__mcfrogeagent__list_reference_mods\` / \`search_reference\` / \`reference_status\` — browse and grep those sources.
 

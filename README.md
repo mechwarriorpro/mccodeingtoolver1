@@ -61,7 +61,7 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.4.10 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.4.11 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
 > v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
 > decompiler picking a Java it could not run.
@@ -88,6 +88,10 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.4.11** fixes a layout regression introduced in v0.4.10 (a missing grid track pushed the whole right-hand
+> rail off its own box — a black band, no tabs, a half-width chat), adds **texture generation** (real 16×16 PNGs,
+> written by hand — no image library), and adds per-version **renderer and shader capability** guidance so the
+> agent cannot promise a 1.21 shader on 1.12, or call something photorealistic when it needs a shader pack.
 > **v0.4.10** fixes the tab strip running off the window — the tabs were a single non-wrapping row, so the
 > last ones were unreachable and a window cannot be resized past the monitor. They are now grouped by task
 > (Make / Know / See / Grow), wrap, scroll if the window is short, and both panes have draggable dividers
@@ -359,6 +363,9 @@ src/main/
     assets.ts        per-version asset layout: where a model has to live, and what does not exist yet
     models.ts        block, item, entity and animation JSON, generated and validated
     texture-ref.ts   normalises a pasted texture path into a namespaced id
+    png.ts           PNG encoder and decoder, with no image dependency
+    textures.ts      generated 16x16 texture patterns and palettes
+    renderer.ts      per-version rendering API, shader paths and honest ceilings
     autoswitch.ts    which model to try next when one dies, and why
     modes.ts         learning and deep-research prompts, research state
   evolve/
@@ -562,6 +569,55 @@ particular creature. Entity geometry is the format Blockbench exports, so the in
 generate the rig, open the `.geo.json` in Blockbench, sculpt it. When you want something with a
 silhouette, the panel has a button that hands the job to the agent, which can write multi-bone geometry
 and a walk cycle with `make_model` and check it with `check_model`.
+
+## Textures, and what a renderer can actually do
+
+### Textures are generated, not owed
+
+Minecraft's art is 16×16 PNGs. The **Models** tab writes them: pick a pattern (stone, ore, brick, planks, grain for log
+ends, metal, machine frame) and a colour family, and it writes a real PNG into `assets/<modid>/textures/{block,item}/`.
+Item textures can have a cut-out silhouette instead of being a square.
+
+There is **no image library in the dependency tree** — the encoder is about 120 lines and `zlib`, which Node already has.
+It writes 8-bit RGBA with correct CRCs, and the decoder (written for the tests) undoes real per-scanline filters, so a
+file from an external editor can be read back too.
+
+Honest limit: this is **serviceable, not art**. It produces a deliberate-looking surface with a coherent palette. It does
+not draw a face, a logo, or a convincing ruby. The file is a normal PNG, so anything it generates is a starting point you
+can paint over in any editor.
+
+### Renderers and shaders, per version
+
+The rendering API has been replaced **twice**, and this is where an AI assistant most often lies. The app now answers
+from data instead of enthusiasm:
+
+| Minecraft | API | Shaders load from | Realistic ceiling |
+|---|---|---|---|
+| 1.12 and older | OpenGL 1.1/2.0, LWJGL 2 | Nothing in vanilla — ARB extensions or OptiFine | Custom geometry. Not photorealism. |
+| 1.13 – 1.16 | OpenGL 3.3, LWJGL 3 | Still nothing in vanilla | Hand-written GLSL and framebuffers |
+| 1.17 – 1.21.1 | Blaze3D (`ShaderInstance`, `RenderType`) | `assets/<modid>/shaders/core/` | PostChain effects; PBR via an Iris pack |
+| 1.21.2 and newer | Blaze3D after the rewrite (`CompiledShaderProgram`) | `assets/<modid>/shaders/<name>.vsh` — **not** `core/` | Same ceiling, different API, no backport |
+
+Two things this gets right that are easy to get wrong. **1.17 raised the requirement to OpenGL 3.2 Core**, so a machine
+that ran 1.16 on a GL 2.1 driver cannot run it at all. And **1.21.2 deleted the 1.21.1 shader API** — `ShaderInstance` is
+now `CompiledShaderProgram`, `RenderPipeline` moved, `PostChain` is built by `load`, and the shader path lost its `core/`
+prefix. A 1.21.1 shader there does not load; the game reports "Failed to load required shader programs" and shows a black
+screen.
+
+### On "photorealistic"
+
+Worth being straight about, because it is the request that most often ends in disappointment:
+
+- **Real-time ray tracing: no.** Minecraft is rasterised. No mod changes that. Path-traced screenshots come from
+  external tools rendering the world offline.
+- **Deferred-style rendering, PBR materials, normal and specular maps, shadow maps, screen-space reflections: yes** —
+  through **Iris** (a shader pack), on versions where Iris exists. That is a different deliverable from mod code:
+  a pack, not a Java feature.
+- **From mod code alone:** custom `RenderType`s, your own GLSL, and `PostChain` post-processing. Genuinely powerful, and
+  it will not look like a modern game engine — the vanilla light map is not a PBR pipeline.
+
+The `renderer_capabilities` tool gives the agent this per version, and the prompt tells it to call it **before** promising
+an effect. `realismVerdict` returns a sentence rather than a boolean.
 
 ## The evolving agent — and what it actually evolves
 

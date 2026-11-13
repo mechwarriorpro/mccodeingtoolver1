@@ -120,6 +120,9 @@ export default function App(): JSX.Element {
   }, [])
 
   const [railWidth, setRailWidth] = useState<number>(() => {
+    // The rail track has to hold the divider (6px) as well as the rail, because
+    // `.main` is `chat | divider | rail`. A stored value that only just fits
+    // the rail leaves the divider outside its track and clips the rail edge.
     const saved = Number(localStorage.getItem('railWidth'))
     return Number.isFinite(saved) && saved >= 300 ? saved : 380
   })

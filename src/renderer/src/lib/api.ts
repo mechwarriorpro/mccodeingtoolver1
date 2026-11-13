@@ -119,6 +119,44 @@ export interface VersionChoice {
 
 export type ModelKind = 'block' | 'item' | 'entity' | 'animation'
 
+export type TexturePattern = 'flat' | 'noise' | 'grain' | 'brick' | 'ore' | 'metal' | 'planks' | 'frame'
+export type TexturePalette = 'stone' | 'wood' | 'metal' | 'gem' | 'organic' | 'dark'
+
+export interface TextureResult {
+  ok: boolean
+  error?: string
+  /** Path relative to the project root. */
+  path?: string
+  bytes?: number
+  /** The namespaced id a model should point at. */
+  ref?: string
+}
+
+export interface ShaderStage {
+  can: string[]
+  cannot: string[]
+}
+
+export interface RendererSupport {
+  mcVersion: string
+  api: 'gl11' | 'gl20' | 'gl33' | 'core' | 'blaze3d' | 'pipeline'
+  apiLabel: string
+  shadingLanguage: string
+  howShadersLoad: string
+  needsShaderMod: 'none' | 'iris-sodium' | 'optifine-shaders' | 'both'
+  stage: ShaderStage
+  ceiling: string
+  constraints: string[]
+}
+
+export interface RendererInfo {
+  ok: boolean
+  mcVersion: string
+  loader: string
+  support: RendererSupport
+  verdict: { achievable: boolean; how: string }
+}
+
 export interface ModelInfo {
   ok: boolean
   modId: string
@@ -675,6 +713,19 @@ export interface McfApi {
     launchDirect: () => Promise<{ ok: boolean; error?: string }>
     directStatus: () => Promise<{ running: boolean; pid?: number; titleScreen?: boolean; logPath?: string; exitCode?: number | null }>
     stopAny: () => Promise<{ ok: boolean; error?: string }>
+  }
+  textures: {
+    create: (req: {
+      name: string
+      kind?: 'block' | 'item'
+      pattern?: TexturePattern
+      palette?: TexturePalette
+      size?: number
+      silhouette?: boolean
+    }) => Promise<TextureResult>
+  }
+  renderer: {
+    capabilities: () => Promise<RendererInfo>
   }
   models: {
     info: () => Promise<ModelInfo>
