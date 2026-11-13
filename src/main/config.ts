@@ -22,6 +22,13 @@ const defaultConfig: AppConfig = {
   learningMode: false,
   deepResearch: false,
   researchTopic: '',
+  // Off by default: a loop that rewrites its own prompt is something to opt into.
+  evolving: false,
+  // Quality first, the rest as tie-breakers. These are ratios, not percentages.
+  evolveRules: { quality: 70, speed: 10, size: 10, ram: 10 },
+  evolveCount: 3,
+  evolveMaxGenerations: 20,
+  evolveMaxHeapMb: 1024,
   autonomy: 'review',
   workspaceDir: '',
   github: { owner: '', repo: '', branch: '' },

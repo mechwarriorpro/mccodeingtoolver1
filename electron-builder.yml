@@ -28,6 +28,13 @@ extraResources:
   - from: template
     to: template
     filter: ['**/*']
+  # The app's own sources, so the evolving agent has something to fork. `src` is
+  # excluded from the asar above, so without this the Evolve tab would find
+  # nothing to mutate in a packaged build. Only the three genome files and their
+  # neighbours are read; shipping the tree keeps a generation self-contained.
+  - from: src
+    to: app-src/src
+    filter: ['main/agent/**/*.ts']
   # Optional bundled Ollama installer, so "install local models" works with no
   # download at all. Put OllamaSetup.exe in `vendor/` before packaging; when it is
   # absent this entry is skipped and the app downloads the installer instead.

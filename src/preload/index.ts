@@ -107,6 +107,19 @@ const api = {
     writeFile: (opts: unknown) => ipcRenderer.invoke('fork:writeFile', opts)
   },
 
+  /** A self-evolving agent: generations of its own prompt, scored on four rules. */
+  evolve: {
+    status: () => ipcRenderer.invoke('evolve:status'),
+    rules: (rules: unknown) => ipcRenderer.invoke('evolve:rules', rules),
+    run: (count?: number) => ipcRenderer.invoke('evolve:run', count),
+    pause: (paused: boolean) => ipcRenderer.invoke('evolve:pause', paused),
+    promote: (id: number) => ipcRenderer.invoke('evolve:promote', id),
+    log: () => ipcRenderer.invoke('evolve:log'),
+    genome: (id: number) => ipcRenderer.invoke('evolve:genome', id),
+    onStep: (cb: (p: unknown) => void) => on('evolve:step', cb),
+    onDone: (cb: (p: unknown) => void) => on('evolve:done', cb)
+  },
+
   /** Learning mode, deep research, and the model-switch feed. */
   modes: {
     status: () => ipcRenderer.invoke('modes:status'),

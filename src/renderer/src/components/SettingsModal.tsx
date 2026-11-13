@@ -341,6 +341,49 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
               </div>
 
               <div className="field">
+                <label style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <input
+                    type="checkbox"
+                    style={{ width: 'auto' }}
+                    checked={draft.evolving}
+                    onChange={(e) => set('evolving', e.target.checked)}
+                  />
+                  Let the agent evolve its own prompt
+                </label>
+                <div className="hint">
+                  Adds the <b>Evolve</b> tab. It rewrites the agent's own prompt, tool descriptions and subagent
+                  instructions, then proves each change by compiling real NeoForge code. Off by default; nothing runs
+                  until you press the button, and every generation is reversible.
+                </div>
+                {draft.evolving && (
+                  <div className="row" style={{ flexWrap: 'wrap', gap: 6, marginTop: 6 }}>
+                    <label className="inline" style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 11.5 }}>
+                      generations per run
+                      <input
+                        type="number"
+                        min={1}
+                        max={20}
+                        value={draft.evolveCount}
+                        onChange={(e) => set('evolveCount', Number(e.target.value))}
+                        style={{ width: 56 }}
+                      />
+                    </label>
+                    <label className="inline" style={{ display: 'flex', gap: 5, alignItems: 'center', fontSize: 11.5 }}>
+                      RAM ceiling (MB)
+                      <input
+                        type="number"
+                        min={0}
+                        step={128}
+                        value={draft.evolveMaxHeapMb}
+                        onChange={(e) => set('evolveMaxHeapMb', Number(e.target.value))}
+                        style={{ width: 80 }}
+                      />
+                    </label>
+                  </div>
+                )}
+              </div>
+
+              <div className="field">
                 <label>Diagnostics</label>
                 <select
                   value={draft.diagLevel}

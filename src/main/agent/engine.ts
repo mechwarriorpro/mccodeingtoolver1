@@ -13,6 +13,7 @@ import { listReferences } from '../github/references'
 import { log, safeJson } from '../diag'
 import { effectiveRunTarget, isSwitchWorthy, nextModel, type SwitchTarget } from './autoswitch'
 import { briefProject, learningPrompt, researchPrompt, runMode, saveResearch, loadResearch } from './modes'
+import { candidatePrompt } from '../evolve/candidate'
 
 export interface EngineEvents {
   onAssistantText: (text: string) => void
@@ -407,6 +408,69 @@ export class AgentSession {
       mcVersion: detectMcVersion(props),
       modId: props.mod_id ?? ''
     })
+  }
+
+  /**
+   * Run one prompt and return the text, with no tools and no transcript.
+   *
+   * This exists for the evolution harness: it needs to run a *mutated* prompt
+   * and get back whatever the model wrote, without touching the user's chat, the
+   * user's workspace, or the permission system. Tools are removed rather than
+   * denied, so a prompt injected into a test task cannot run a command no matter
+   * what it says.
+   */
+  async askOnce(prompt: string, opts: { genomeDir?: string } = {}): Promise<string> {
+    const cfg = loadConfig()
+    const provider = (cfg.provider || 'anthropic') as ProviderId
+    const localAgent = provider === 'ollama' ? cfg.local?.roles?.agent?.[0] ?? '' : ''
+    const model = localAgent || cfg.model || ''
+    const isElectronRuntime = !!process.versions.electron
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      CLAUDE_CODE_ENTRYPOINT: 'mcfrogeagent',
+      ...(isElectronRuntime && !process.env.CLAUDE_CODE_PATH ? { ELECTRON_RUN_AS_NODE: '1' } : {})
+    }
+    Object.assign(env, providerEnv(provider, effectiveApiKey(), model))
+    const baseUrl = effectiveBaseUrl()
+    if (baseUrl) env.ANTHROPIC_BASE_URL = baseUrl
+
+    // The candidate's own prompt is used verbatim, so the mutation is what is
+    // being tested. A fallback keeps generation 0 evaluable before the genome
+    // exists.
+    const systemPrompt = opts.genomeDir ? await candidatePrompt(opts.genomeDir) : undefined
+
+    const q = query({
+      prompt,
+      options: {
+        cwd: cfg.workspaceDir || process.cwd(),
+        model: model || undefined,
+        ...(systemPrompt ? { systemPrompt: { type: 'preset', preset: 'claude_code', append: systemPrompt } } : {}),
+        // No tools at all: the answer is the artifact, and the compiler is the judge.
+        allowedTools: [],
+        mcpServers: {},
+        maxTurns: 1,
+        permissionMode: 'default',
+        persistSession: false,
+        includePartialMessages: false,
+        env,
+        ...(isElectronRuntime
+          ? {
+              pathToClaudeCodeExecutable: process.env.CLAUDE_CODE_PATH || resolveBundledCli(),
+              executable: process.execPath as 'node',
+              executableArgs: []
+            }
+          : {})
+      }
+    })
+    let text = ''
+    for await (const msg of q) {
+      if (msg.type === 'result') {
+        if (msg.subtype === 'success') text = msg.result
+        else throw new Error((msg as { errors?: string[] }).errors?.join('\n') || 'the run failed')
+        break
+      }
+    }
+    return text
   }
 
   private buildCanUseTool() {

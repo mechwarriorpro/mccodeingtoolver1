@@ -12,10 +12,21 @@ import ForkPanel from './components/ForkPanel'
 import PortPanel from './components/PortPanel'
 import DiagPanel from './components/DiagPanel'
 import ModesPanel from './components/ModesPanel'
+import EvolvePanel from './components/EvolvePanel'
 import ClipPanel from './components/ClipPanel'
 import LearnPanel from './components/LearnPanel'
 
-type RailTab = 'game' | 'project' | 'files' | 'refs' | 'port' | 'clips' | 'learn' | 'modes' | 'diag'
+type RailTab =
+  | 'game'
+  | 'project'
+  | 'files'
+  | 'refs'
+  | 'port'
+  | 'clips'
+  | 'learn'
+  | 'modes'
+  | 'evolve'
+  | 'diag'
 
 export default function App(): JSX.Element {
   const [config, setConfig] = useState<(AppConfig & { apiKeySet: boolean }) | null>(null)
@@ -409,6 +420,13 @@ export default function App(): JSX.Element {
               Modes
             </button>
             <button
+              className={railTab === 'evolve' ? 'on' : ''}
+              onClick={() => setRailTab('evolve')}
+              title="Let the agent evolve its own prompt against weighted rules"
+            >
+              Evolve
+            </button>
+            <button
               className={railTab === 'diag' ? 'on' : ''}
               onClick={() => setRailTab('diag')}
               title="What the agent is doing, at three levels of detail"
@@ -453,6 +471,12 @@ export default function App(): JSX.Element {
               <div className="card">
                 <h4>Modes</h4>
                 <ModesPanel onToast={toast} onSend={(text) => void send(text, [])} />
+              </div>
+            )}
+            {railTab === 'evolve' && (
+              <div className="card">
+                <h4>Evolving agent</h4>
+                <EvolvePanel onToast={toast} />
               </div>
             )}
             {railTab === 'diag' && (

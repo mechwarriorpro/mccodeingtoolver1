@@ -56,6 +56,17 @@ export interface AppConfig {
   deepResearch: boolean
   /** What a deep-research run should investigate. Set when the mode is turned on. */
   researchTopic: string
+
+  /** Let the agent evolve its own prompt against the four weighted rules. */
+  evolving: boolean
+  /** Weighted rules the evolution optimizes, 0-100 each (normalized). */
+  evolveRules: { quality: number; speed: number; size: number; ram: number }
+  /** How many generations to run in one go. */
+  evolveCount: number
+  /** A hard ceiling on how many generations may exist. */
+  evolveMaxGenerations: number
+  /** Refuse any candidate whose code needs more heap than this to compile. */
+  evolveMaxHeapMb: number
   /** Default autonomy for new conversations. */
   autonomy: AutonomyMode
 

@@ -16,6 +16,50 @@ import type {
 
 export type Loader = 'neoforge' | 'forge' | 'fabric'
 
+export interface EvolveRules {
+  quality: number
+  speed: number
+  size: number
+  ram: number
+}
+
+export interface EvolveStep {
+  phase: string
+  generation?: number
+  detail?: string
+}
+
+export interface EvolveGeneration {
+  id: number
+  createdAt: number
+  thesis: string
+  score?: number
+  parts?: Record<string, number>
+  status: string
+  outcome?: string
+  parent: number | null
+  builds?: boolean
+  classBytes?: number
+  sourceBytes?: number
+  buildMs?: number
+  minHeapMb?: number | null
+  note?: string
+}
+
+export interface EvolveStatus {
+  ok: boolean
+  running: boolean
+  paused: boolean
+  active: { id: number; thesis: string; score?: number; status: string } | null
+  best: { id: number; score?: number } | null
+  generations: EvolveGeneration[]
+  rules: EvolveRules
+  config: { evolving: boolean; evolveCount: number; evolveMaxGenerations: number; evolveMaxHeapMb: number }
+  instructions: string
+  mutator: string
+  sourcesDir: string
+}
+
 export type RunMode = 'code' | 'learn' | 'research'
 
 export interface LessonSummary {
@@ -451,6 +495,23 @@ export interface McfApi {
     tree: (id: string) => Promise<{ path: string; dir: boolean }[]>
     readFile: (opts: { id: string; path: string }) => Promise<{ ok: boolean; text?: string; error?: string }>
     writeFile: (opts: { id: string; path: string; text: string }) => Promise<{ ok: boolean; error?: string }>
+  }
+  evolve: {
+    status: () => Promise<EvolveStatus>
+    rules: (rules: EvolveRules) => Promise<{ ok: boolean; rules: EvolveRules; instructions: string }>
+    run: (count?: number) => Promise<{
+      ok: boolean
+      error?: string
+      results?: { ok: boolean; verdict: string; error?: string; id?: number; promoted?: boolean }[]
+      promoted?: number
+      logPath?: string
+    }>
+    pause: (paused: boolean) => Promise<{ ok: boolean; paused: boolean }>
+    promote: (id: number) => Promise<{ ok: boolean; error?: string; needsRestart?: boolean }>
+    log: () => Promise<{ ok: boolean; text: string }>
+    genome: (id: number) => Promise<{ ok: boolean; error?: string; files?: { path: string; text: string }[] }>
+    onStep: (cb: (p: EvolveStep) => void) => () => void
+    onDone: (cb: (p: { results: number; promoted: number }) => void) => () => void
   }
   modes: {
     status: () => Promise<ModesStatus>

@@ -126,6 +126,9 @@ import { convertProject, detectProject, migrationReport, planPort } from '../mod
 import { bestAvailable, describeRunTarget } from '../agent/autoswitch'
 import { loadResearch, researchDir, saveResearch, runMode } from '../agent/modes'
 import { knowledgeOn } from '../learn'
+import { bestGeneration, evolveMany, ensureBaseline, loadStore, saveStore } from '../evolve/loop'
+import { DEFAULT_RULES, rulesToInstructions } from '../evolve/metrics'
+import { activeGeneration, promote } from '../evolve/genome'
 import {
   checkForUpdates,
   clearUpdaterCache,
@@ -725,6 +728,209 @@ export function registerIpc(): void {
   ipcMain.handle('clip:digest', (_e, id: string) => {
     const clip = getClip(id)
     return clip ? { ok: true, text: clipDigest(clip) } : { ok: false, error: 'Unknown clip.' }
+  })
+
+  /* ----------------------------------------------------------- evolution */
+
+  const evolveLogPath = (): string => path.join(app.getPath('userData'), 'logs', 'evolution.log')
+
+  /**
+   * A classpath for compiling the evaluation task: the Minecraft and NeoForge
+   * jars the user's own dev workspace already downloaded.
+   *
+   * Without them, `javac` cannot resolve `@Mod` or `DeferredRegister`, every
+   * candidate would score zero on quality, and the loop would be measuring
+   * nothing. Returning undefined is honest: evaluation then reports that it could
+   * not verify, instead of silently rewarding compile failure.
+   */
+  const neoClasspath = (workspace: string): string | undefined => {
+    const roots = [
+      path.join(workspace, '.gradle', 'loom-cache'),
+      path.join(workspace, 'build', 'moddev'),
+      path.join(workspace, '.gradle', 'caches', 'modules-2', 'files-2.1')
+    ]
+    const jars: string[] = []
+    const walk = (dir: string, depth: number): void => {
+      if (depth > 6) return
+      let entries: fs.Dirent[]
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true })
+      } catch {
+        return
+      }
+      for (const e of entries) {
+        const full = path.join(dir, e.name)
+        if (e.isDirectory()) walk(full, depth + 1)
+        else if (e.name.endsWith('.jar') && /neoforge|minecraft|client-extra|mcp/i.test(e.name)) jars.push(full)
+      }
+    }
+    for (const r of roots) walk(r, 0)
+    if (!jars.length) return undefined
+    return jars.slice(0, 40).join(path.delimiter)
+  }
+  /* ----------------------------------------------------------- evolution */
+
+  /** The app's own sources, which is what a generation forks from. */
+  const appSourcesDir = app.isPackaged ? path.join(process.resourcesPath, 'app-src') : app.getAppPath()
+
+  let evolving = false
+  let evolveAbort = new AbortController()
+
+  ipcMain.handle('evolve:status', () => {
+    try {
+      ensureBaseline(appSourcesDir)
+    } catch {
+      /* a read-only install still gets to see the store it already has */
+    }
+    const store = loadStore()
+    const active = activeGeneration(store)
+    const cfg = loadConfig()
+    return {
+      ok: true,
+      running: evolving,
+      paused: store.paused,
+      active: active ? { id: active.id, thesis: active.identity.thesis, score: active.score, status: active.status } : null,
+      best: (() => {
+        const b = bestGeneration(store)
+        return b ? { id: b.id, score: b.score } : null
+      })(),
+      generations: store.generations.map((g) => ({
+        id: g.id,
+        createdAt: g.createdAt,
+        thesis: g.identity.thesis,
+        score: g.score,
+        parts: g.parts,
+        status: g.status,
+        outcome: g.outcome,
+        parent: g.parent,
+        builds: g.metrics?.builds,
+        classBytes: g.metrics?.classBytes,
+        sourceBytes: g.metrics?.sourceBytes,
+        buildMs: g.metrics?.buildMs,
+        minHeapMb: g.metrics?.minHeapMb,
+        note: g.metrics?.note
+      })),
+      rules: store.rules ?? DEFAULT_RULES,
+      config: {
+        evolving: cfg.evolving,
+        evolveCount: cfg.evolveCount,
+        evolveMaxGenerations: cfg.evolveMaxGenerations,
+        evolveMaxHeapMb: cfg.evolveMaxHeapMb
+      },
+      /** What the current weights mean in words, so the numbers are not opaque. */
+      instructions: rulesToInstructions(store.rules ?? DEFAULT_RULES, { maxHeapMb: cfg.evolveMaxHeapMb }),
+      /** Which model would do the mutating — the same one the chat uses. */
+      mutator: describeRunTarget(cfg),
+      sourcesDir: appSourcesDir
+    }
+  })
+
+  ipcMain.handle('evolve:rules', (_e, rules: { quality: number; speed: number; size: number; ram: number }) => {
+    const store = loadStore()
+    const clean = {
+      quality: Math.max(0, Math.min(100, Math.round(rules.quality))),
+      speed: Math.max(0, Math.min(100, Math.round(rules.speed))),
+      size: Math.max(0, Math.min(100, Math.round(rules.size))),
+      ram: Math.max(0, Math.min(100, Math.round(rules.ram)))
+    }
+    store.rules = clean
+    saveStore(store)
+    saveConfig({ evolveRules: clean })
+    return { ok: true, rules: clean, instructions: rulesToInstructions(clean, { maxHeapMb: loadConfig().evolveMaxHeapMb }) }
+  })
+
+  ipcMain.handle('evolve:pause', (_e, paused: boolean) => {
+    const store = loadStore()
+    store.paused = !!paused
+    saveStore(store)
+    if (paused) evolveAbort.abort()
+    return { ok: true, paused: store.paused }
+  })
+
+  ipcMain.handle('evolve:promote', (_e, id: number) => {
+    const store = loadStore()
+    const gen = store.generations.find((g) => g.id === id)
+    if (!gen) return { ok: false, error: 'no such generation' }
+    promote(store, id)
+    // Promoting is only bookkeeping until the app restarts: the running process
+    // still has the old prompt loaded. Saying so is better than pretending the
+    // change is live.
+    return { ok: true, needsRestart: id !== store.active || true }
+  })
+
+  /**
+   * Run the loop.
+   *
+   * The mutator is a one-shot agent run with the *current* app prompt (so its own
+   * behaviour is not affected by the mutation it is writing), and the candidate is
+   * evaluated by compiling its prompt and asking it to solve a fixed task.
+   */
+  ipcMain.handle('evolve:run', async (_e, count?: number) => {
+    if (evolving) return { ok: false, error: 'the loop is already running' }
+    const cfg = loadConfig()
+    const store = loadStore()
+    if (!cfg.evolving) return { ok: false, error: 'evolution is off — enable it first' }
+
+    evolving = true
+    evolveAbort = new AbortController()
+    // javac for the probe and the compile check. 17 rather than 21 because the
+    // evaluation task only needs to compile against NeoForge's own level.
+    const java = resolveToolJava(cfg.javaPath).path ?? undefined
+    const classpath = neoClasspath(cfg.workspaceDir)
+    try {
+      const results = await evolveMany(count ?? cfg.evolveCount ?? 3, {
+        appDir: appSourcesDir,
+        askMutator: async (prompt) => {
+          const s = ensureSession()
+          return s.askOnce(prompt)
+        },
+        askCandidate: async (genomeDir, prompt) => {
+          // A fresh session per candidate so one cannot reuse the other's state.
+          const s = ensureSession()
+          return s.askOnce(prompt, { genomeDir })
+        },
+        classpath,
+        javaPath: java,
+        signal: evolveAbort.signal,
+        onStep: (step) => send('evolve:step', step)
+      })
+      const promoted = results.filter((r) => r.promoted).length
+      send('evolve:done', { results: results.length, promoted })
+      return {
+        ok: true,
+        results: results.map((r) => ({ ok: r.ok, verdict: r.verdict, error: r.error, id: r.generation?.id, promoted: r.promoted })),
+        promoted,
+        logPath: evolveLogPath()
+      }
+    } catch (e) {
+      return { ok: false, error: (e as Error).message }
+    } finally {
+      evolving = false
+    }
+  })
+
+  ipcMain.handle('evolve:log', () => {
+    try {
+      return { ok: true, text: fs.readFileSync(evolveLogPath(), 'utf8').slice(-40_000) }
+    } catch {
+      return { ok: true, text: '(no log yet — run one generation first)' }
+    }
+  })
+
+  /** Hand the active generation's genome text to the diff view. */
+  ipcMain.handle('evolve:genome', (_e, id: number) => {
+    const store = loadStore()
+    const gen = store.generations.find((g) => g.id === id)
+    if (!gen) return { ok: false, error: 'no such generation' }
+    const files: { path: string; text: string }[] = []
+    for (const rel of ['src/main/agent/prompt.ts', 'src/main/agent/orchestrator.ts', 'src/main/agent/tools.ts']) {
+      try {
+        files.push({ path: rel, text: fs.readFileSync(path.join(gen.dir, rel), 'utf8') })
+      } catch {
+        /* missing in that generation */
+      }
+    }
+    return { ok: true, files }
   })
 
   /* --------------------------------------------- modes and model switching */

@@ -61,7 +61,7 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.4.8 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.4.9 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
 > v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
 > decompiler picking a Java it could not run.
@@ -85,6 +85,9 @@ Settings or from GitHub's settings at any time.
 > is genuinely left. The original is never touched.
 > **v0.4.7** adds three levels of diagnostic output (and a rolling `logs/agent.log`), lets you watch
 > how the agent thinks and codes, and fixes replies rendering as a bare `0`.
+> **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
+> weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
+> promotes only what wins. The lineage is kept and every step is reversible.
 > **v0.4.8** adds three modes: **AutoSwitch** (a chat that dies from running out of credit, a rate
 > limit or a retired model carries on with another free model), **learning mode** (study instead of
 > coding, with the findings saved as lessons), and **deep research** (the strongest model available
@@ -348,6 +351,12 @@ src/main/
     port.ts          detects a project's real version/loader, plans and runs a conversion
     autoswitch.ts    which model to try next when one dies, and why
     modes.ts         learning and deep-research prompts, research state
+  evolve/
+    metrics.ts       the four rules, measured from disk and from javac
+    genome.ts        which files may evolve, and the generation store
+    evaluate.ts      the fixed task, the compiler as judge, scoring
+    candidate.ts     compiles and imports a candidate's prompt
+    loop.ts          fork, mutate, typecheck, evaluate, promote
     props.ts         gradle.properties reader shared by the build and the converter
     jar.ts           jar metadata (neoforge.mods.toml) and mods-folder install
   versions/
@@ -506,6 +515,55 @@ It writes the full notes to `docs/research/<slug>.md` in the project, and distil
 That is how a free model punches above its weight: the expensive model did the reading.
 
 The panel always names the model it will spend on, and says plainly when that model is paid.
+
+## The evolving agent — and what it actually evolves
+
+The **Evolve** tab lets the agent rewrite its own prompt and tool descriptions, then prove the result by
+writing real code that has to compile. Four weighted rules steer it:
+
+| Rule | Measured as |
+| --- | --- |
+| **Quality of code** | does the candidate's code compile against the real NeoForge jars |
+| **Speed** | how long the evaluation took, including the model's own generation time |
+| **Size** | bytes of `.class` files plus source, from disk |
+| **RAM usage** | the smallest JVM heap that still compiles it, found by halving until it fails |
+
+Set the weights, press run, and for each generation it: forks the active generation's sources → asks
+the mutator to change the genome → **typechecks the result** → makes the candidate solve a fixed task
+(register two items and a creative tab, NeoForge 1.21.1) → compiles the answer → scores it against
+the parent → promotes it only if it compiles *and* wins.
+
+**What can evolve is deliberately narrow:** `agent/prompt.ts`, `agent/orchestrator.ts`,
+`agent/tools.ts`. Nothing else is accepted, and the code that builds, measures and promotes is on a
+protected list — checked *before* the allowlist, so a mutation cannot rewrite its own judge. A
+generation that fails to typecheck is never evaluated; one that fails to compile the task scores
+**zero outright**, whatever the weights say, because otherwise a size-weighted run would happily
+evolve towards code that does not build. (It did, in testing: 0.4 for a broken mutation. That is now
+impossible.)
+
+### Now the honest part
+
+**It cannot evolve into a new *model*.** A prompt is not weights. What improves here is the
+instructions and the tool descriptions — which genuinely matters, and is where a lot of a small
+model's weakness comes from. But a 3B model will not become a 70B model by iterating its prompt.
+
+**"Same quality on less RAM" is true with a caveat.** The RAM rule is *compile-time heap*, measured
+honestly, so generations can and do find lighter ways to write the same thing. In-game RAM needs a
+launched game and is not claimed by any number here. Quality is a compile floor, not proof the mod
+works.
+
+**Speed is dominated by the model.** On a local model the evaluation time is mostly the model
+thinking, so the speed rule will favour a model that answers quickly over code that runs quickly.
+That is why it is weighted lowest by default.
+
+**And the wall.** The loop needs a clear improvement each generation, with errors compounding at
+roughly 30–40% per step across a dozen dimensions. Improvements taper off fast, and a local 8B model
+will find a handful of real ones and then plateau. It is a genuine optimizer — not a road to
+recursive self-improvement. When it plateaus, the answer is a better mutator, not a thousand more
+generations.
+
+Everything is reversible: generation 0 is a snapshot of the shipped prompt, the lineage is kept, and
+any generation can be made active with one click. Switching takes effect on restart.
 
 ## Diagnostics: three levels, and seeing how the agent works
 

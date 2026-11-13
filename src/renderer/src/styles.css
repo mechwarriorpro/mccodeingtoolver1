@@ -710,3 +710,29 @@ button.link:hover { color: var(--accent-2); }
 }
 .knowledge-row .kind.research { color: var(--amber); border-color: #4a3d1e; background: #2a2312; }
 .knowledge-row .kind.topic { color: var(--accent); border-color: #2b5b41; background: var(--accent-dim); }
+
+/* Evolving agent: weights, the loop, and the lineage */
+.evolve { display: flex; flex-direction: column; gap: 10px; }
+.rule-row { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+.rule-head { display: flex; justify-content: space-between; font-size: 12px; }
+.rule-head b { color: var(--accent); font-variant-numeric: tabular-nums; }
+.rule-row input[type='range'] { width: 100%; accent-color: var(--accent); }
+.lineage { display: flex; flex-direction: column; gap: 3px; max-height: 300px; overflow-y: auto; }
+.gen-row {
+  display: grid; grid-template-columns: 38px 64px 48px 1fr auto; gap: 7px; align-items: center;
+  padding: 5px 7px; border-radius: 6px; font-size: 11.5px; cursor: pointer;
+  border: 1px solid transparent; background: var(--bg-3);
+}
+.gen-row:hover { border-color: var(--line-2); }
+.gen-row.active { border-color: #2b5b41; background: var(--accent-dim); }
+.gen-row.failed { opacity: 0.65; }
+.gen-id { color: var(--dim); font-variant-numeric: tabular-nums; }
+.gen-status { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--dim); }
+.gen-status.active { color: var(--accent); }
+.gen-status.retired { color: var(--amber); }
+.gen-status.failed { color: var(--red); }
+.gen-score { color: var(--text); font-variant-numeric: tabular-nums; text-align: right; }
+.gen-thesis { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.genome-view { margin-top: 8px; }
+.evolve details summary { cursor: pointer; font-size: 11.5px; color: var(--muted); }
+.evolve ul li { margin-bottom: 5px; line-height: 1.5; }
