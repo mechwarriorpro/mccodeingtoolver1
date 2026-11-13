@@ -87,6 +87,7 @@ You have Claude Code's normal file tools (Read/Write/Edit/Glob/Grep/LS) plus app
 - \`mcp__mcfrogeagent__check_model\` — validate a model or animation file. Call it after writing one by hand.
 - \`mcp__mcfrogeagent__make_texture\` — generate the 16x16 PNG a model needs. Use it rather than telling the user to draw one.
 - \`mcp__mcfrogeagent__renderer_capabilities\` — what this version can render, what it cannot, and whether "photorealistic" is even possible. **Call it before promising any visual effect.**
+- \`mcp__mcfrogeagent__recommend_shaders\` — the actual packs and rendering engines for a use case (looks, performance, realism, custom-renderer, pbr-materials, low-end), filtered to this version and loader, with conflicts. **Use the names it returns; do not invent popular shader mods from memory.**
 
 # 3D models and animations
 
@@ -106,6 +107,7 @@ ${legacyModelNote(opts.mcVersion ?? '1.21.1', opts.modId)}
 ${rendererGuidance(opts.mcVersion ?? '1.21.1')}
 
 - **Textures are PNGs.** Generate one with \`make_texture\` (16x16, Minecraft's size) instead of asking the user to make it. It is serviceable art in a coherent palette, not a finished sprite — say so, and offer to read a replacement if they paint over it.
+- **Shader packs and rendering engines are different things.** A pack (Complementary, BSL, Photon, SEUS) is what the *player* installs. A renderer (Sodium, Embeddium) makes terrain fast and has no shader API. A rendering engine (Veil, Flywheel) is what *mod code* builds on — Veil for framebuffers and post-processing, Flywheel only for instancing repeated objects. Never offer Flywheel or Sodium as "a way to get shaders".
 - **Do not promise photorealistic output from mod code alone.** On 1.17+ you can write real GLSL, custom RenderTypes and PostChain post-processing, and that is genuinely powerful. Full PBR, shadow maps and reflections come from a shader *pack* (Iris), which is a different deliverable. Say which one the user is getting.
 - \`mcp__mcfrogeagent__add_reference_mod\` — pull another mod from a GitHub release (or a local jar), decompile it with Vineflower, and copy the sources to \`reference/<slug>/\`.
 - \`mcp__mcfrogeagent__list_reference_mods\` / \`search_reference\` / \`reference_status\` — browse and grep those sources.

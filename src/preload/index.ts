@@ -72,6 +72,7 @@ const api = {
   update: {
     state: () => ipcRenderer.invoke('update:state'),
     check: () => ipcRenderer.invoke('update:check'),
+    download: () => ipcRenderer.invoke('update:download'),
     install: () => ipcRenderer.invoke('update:install'),
     setAuto: (enabled: boolean) => ipcRenderer.invoke('update:setAuto', enabled),
     clearCache: () => ipcRenderer.invoke('update:clearCache'),
@@ -220,6 +221,12 @@ const api = {
   },
   renderer: {
     capabilities: () => ipcRenderer.invoke('renderer:capabilities')
+  },
+
+  shaders: {
+    catalogue: () => ipcRenderer.invoke('shaders:catalogue'),
+    check: (ids: string[]) => ipcRenderer.invoke('shaders:check', ids),
+    explain: (useCase: string) => ipcRenderer.invoke('shaders:explain', useCase)
   },
 
   chat: {

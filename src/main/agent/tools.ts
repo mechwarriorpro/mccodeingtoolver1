@@ -23,6 +23,7 @@ import { gitSummary } from '../build/gradle'
 import { assetLayout, blockstateJson } from '../mod/assets'
 import { detectLoader, detectMcVersion } from './engine'
 import { rendererGuidance, rendererSupport, realismVerdict } from '../mod/renderer'
+import { USE_CASES, catalogueFor, compatibilityNotes, recommend, type UseCase } from '../mod/shader-stack'
 import { PATTERNS, PALETTES, texturePathFor, texturePng } from '../mod/textures'
 import {
   QUADRUPED_BONES,
@@ -478,6 +479,43 @@ export function createAgentTools(ctx: ToolContext) {
         } catch (e) {
           return err((e as Error).message)
         }
+      }
+    ),
+
+    tool(
+      'recommend_shaders',
+      'Recommend shader packs and rendering engines for what the user actually wants. ' +
+        'Call this before naming any shader mod: it knows the difference between a shader pack (the player installs it), ' +
+        'a renderer (Sodium/Embeddium, no shader API) and a rendering engine a mod builds on (Veil, Flywheel). ' +
+        'Use cases: looks, performance, realism, custom-renderer, pbr-materials, low-end, compare.',
+      {
+        useCase: z
+          .enum(['looks', 'performance', 'realism', 'custom-renderer', 'pbr-materials', 'low-end', 'compare'])
+          .describe('What the user is after. Pick the closest one rather than asking them to choose from an enum.'),
+        chosen: z
+          .array(z.string())
+          .optional()
+          .describe('Optional: ids the user has already picked, to check for conflicts before they install anything.')
+      },
+      async ({ useCase, chosen }) => {
+        const cfg = loadConfig()
+        const props = readProps(path.join(cfg.workspaceDir, 'gradle.properties'))
+        const mcVersion = detectMcVersion(props)
+        const loader = detectLoader(props)
+        const rec = recommend({ useCase: useCase as UseCase, mcVersion, loader })
+        const lines = [
+          `For "${USE_CASES[useCase as UseCase]}" on Minecraft ${mcVersion} (${loader}):`,
+          '',
+          ...rec.picks.map((p, i) => `${i + 1}. **${p.name}** (${p.kind})\n   why: ${p.why}\n   what to do: ${p.action}`)
+        ]
+        if (rec.avoid) lines.push('', `Avoid: ${rec.avoid}`)
+        if (chosen?.length) {
+          const notes = compatibilityNotes(chosen, mcVersion)
+          lines.push('', `Conflicts in the chosen set [${chosen.join(', ')}]:`)
+          lines.push(...(notes.length ? notes.map((n) => `- ${n.severity === 'error' ? 'ERROR' : 'warn'}: ${n.message}`) : ['- none found']))
+        }
+        lines.push('', 'The full catalogue is in the Models tab, under Shaders. Quote these names exactly; do not invent packs.')
+        return text(lines.join('\n'))
       }
     ),
 

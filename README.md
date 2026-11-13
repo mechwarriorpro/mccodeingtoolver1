@@ -61,7 +61,7 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.4.11 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.4.12 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
 > v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
 > decompiler picking a Java it could not run.
@@ -88,6 +88,17 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.4.12** adds the **Shaders** tab: the popular shader *packs* (Complementary, BSL, Photon, Bliss,
+> Rethinking Voxels, SEUS, MakeUp…) and the *rendering engines* (Iris, Oculus, Sodium, Embeddium, Flywheel,
+> Veil, OptiFine) are two separate, selectable lists — because they are routinely mixed up, and Sodium has no
+> shader API at all. Every entry carries the versions and loaders it actually runs on and what it costs; picking
+> several checks them for conflicts; and the agent recommends from a use case (looks, realism, performance,
+> low-end, custom rendering, PBR) through the same catalogue rather than from memory. **Clips** can now analyse
+> footage as a *look reference* instead of a bug report: it names the light, water and colour it can see, says
+> which part your mod can own and which part the player installs as a pack. It also fixes the **auto-updater**:
+> "check for updates" read a stale field instead of the result, so a new release was not reported; the cache
+> it clears is now the folder electron-updater really uses (`%LOCALAPPDATA%` + `<app>-updater` on Windows); and the
+> ~108 MB installer is no longer downloaded until you ask for it.
 > **v0.4.11** fixes a layout regression introduced in v0.4.10 (a missing grid track pushed the whole right-hand
 > rail off its own box — a black band, no tabs, a half-width chat), adds **texture generation** (real 16×16 PNGs,
 > written by hand — no image library), and adds per-version **renderer and shader capability** guidance so the

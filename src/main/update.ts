@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { loadConfig, saveConfig } from './config'
 import { getMainWindow } from './ipc/windows'
+import { friendlyUpdaterError as friendly, isNewer, updaterCachePath } from './updater-logic'
 
 /**
  * Self-update.
@@ -73,10 +74,13 @@ export function initUpdater(): void {
     return
   }
 
-  autoUpdater.autoDownload = true
-  // Installing on quit is the least surprising behaviour; the UI also offers
-  // "Restart and install" which does it immediately.
-  autoUpdater.autoInstallOnAppQuit = true
+  // Download only when the user asks. The installer is ~108 MB, and silently
+  // pulling that down on someone's metered connection — before they have said
+  // they want the update — is not a background nicety. `checkForUpdates` still
+  // runs at startup and tells the UI an update exists; the download starts from
+  // the button.
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = false
   autoUpdater.allowPrerelease = false
   autoUpdater.logger = {
     info: (m?: unknown) => push(String(m)),
@@ -91,7 +95,11 @@ export function initUpdater(): void {
     broadcast({ status: 'available', version: info.version, notes: noteText(info) })
   })
   autoUpdater.on('update-not-available', () => broadcast({ status: 'none', checkedAt: Date.now(), version: undefined }))
-  autoUpdater.on('download-progress', (p) => broadcast({ status: 'downloading', percent: Math.round(p.percent) }))
+  autoUpdater.on('download-progress', (p) =>
+    // Keep the version: the progress bar is shown next to "downloading 0.4.11",
+    // and dropping it made the label flicker back to "unknown".
+    broadcast({ status: 'downloading', percent: Math.round(p.percent) })
+  )
   autoUpdater.on('update-downloaded', (info: UpdateInfo) => {
     push(`update downloaded: ${info.version}`)
     broadcast({ status: 'ready', version: info.version, percent: 100, notes: noteText(info) })
@@ -118,13 +126,65 @@ function noteText(info: UpdateInfo): string | undefined {
     .slice(0, 4000)
 }
 
+/**
+ * Ask GitHub whether there is a newer release.
+ *
+ * The returned state must not be read from the module's `state`: electron-updater
+ * dispatches `update-available` on a *later tick* than the promise resolves, so
+ * reading `state` here returned whatever it was before the check. That is the
+ * "checking for updates does nothing" bug — a check that found 0.4.11 still
+ * reported `idle`, and the Settings panel showed no update.
+ *
+ * So the authoritative answer is the value the API returns, and the events are
+ * only used to report progress *during* a download.
+ */
 export async function checkForUpdates(): Promise<UpdateState> {
   if (!updatesSupported()) {
     broadcast({ status: 'idle', supported: false, error: undefined })
     return currentUpdateState()
   }
   try {
-    await autoUpdater.checkForUpdates()
+    const result = await autoUpdater.checkForUpdates()
+    // null means the updater considered itself inactive (a dev build, or a
+    // config with no feed) rather than "no update".
+    if (result === null) {
+      broadcast({ status: 'idle', supported: updatesSupported(), checkedAt: Date.now() })
+      return currentUpdateState()
+    }
+    const info = result?.updateInfo
+    if (info?.version) {
+      // isUpdateAvailable is the API's own comparison, so a downgrade or an
+      // equal version is not reported as an update.
+      // Local numeric comparison rather than the semver instance: it is the
+      // same decision, and it is the one covered by tests.
+      const newer = isNewer(info.version, autoUpdater.currentVersion.version)
+      if (newer) {
+        push(`update available: ${info.version}`)
+        broadcast({ status: 'available', version: info.version, notes: noteText(info), checkedAt: Date.now(), error: undefined })
+      } else {
+        broadcast({ status: 'none', version: undefined, checkedAt: Date.now(), error: undefined })
+      }
+    } else {
+      broadcast({ status: 'none', version: undefined, checkedAt: Date.now(), error: undefined })
+    }
+  } catch (e) {
+    broadcast({ status: 'error', error: friendlyUpdaterError((e as Error).message), checkedAt: Date.now() })
+  }
+  return currentUpdateState()
+}
+
+/**
+ * Start downloading the update that `checkForUpdates` found.
+ *
+ * Separate from installing on purpose: downloading is 108 MB, installing
+ * restarts the app. Both are the user's decision, and the UI shows progress in
+ * between via the `download-progress` event.
+ */
+export async function downloadUpdate(): Promise<UpdateState> {
+  if (!updatesSupported()) return currentUpdateState()
+  try {
+    broadcast({ status: 'downloading', percent: 0 })
+    await autoUpdater.downloadUpdate()
   } catch (e) {
     broadcast({ status: 'error', error: friendlyUpdaterError((e as Error).message), checkedAt: Date.now() })
   }
@@ -141,14 +201,11 @@ export function installUpdate(): { ok: boolean; error?: string } {
 
 /**
  * electron-updater's raw errors mention provider internals that mean nothing to
- * a mod developer. Map the two that actually happen to plain English.
+ * a mod developer. The mapping lives in updater-logic so it can be tested
+ * without Electron; this re-exports it for the callers that already use it.
  */
 export function friendlyUpdaterError(message: string): string {
-  const m = message || 'unknown error'
-  if (/404|latest\.yml|Cannot find channel/i.test(m)) return 'No published release was found to update from yet.'
-  if (/net::|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|InternetException/i.test(m)) return 'Could not reach GitHub. Check your connection and try again.'
-  if (/code signature|sha512|checksum/i.test(m)) return 'The downloaded update failed its integrity check. Try again from the GitHub release page.'
-  return m.slice(0, 400)
+  return friendly(message)
 }
 
 /** Toggle used by Settings; persisted so it survives restarts. */
@@ -173,9 +230,21 @@ export function versionLabel(): string {
   return app.isPackaged ? app.getVersion() : `${app.getVersion()} (dev)`
 }
 
-/** Where electron-updater caches downloads; exposed so Settings can show/clear it. */
+/**
+ * Where electron-updater caches downloads; exposed so Settings can show/clear it.
+ *
+ * Resolved the way electron-updater resolves it — `%LOCALAPPDATA%\<name>-updater`
+ * on Windows, not `app.getPath('userData')` (which is Roaming, and was the reason
+ * "Clear downloaded files" always freed nothing).
+ */
 export function updaterCacheDir(): string {
-  return path.join(app.getPath('userData'), '..', `${app.getName()}-updater`)
+  return updaterCachePath({
+    platform: process.platform,
+    appName: app.getName(),
+    env: process.env as Record<string, string | undefined>,
+    home: app.getPath('home'),
+    join: path.join
+  })
 }
 
 export function clearUpdaterCache(): { ok: boolean; bytes?: number; error?: string } {

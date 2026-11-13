@@ -314,62 +314,11 @@ export default function ModelsPanel({ onToast, onSend }: Props): JSX.Element {
         )}
       </details>
 
-      <details className="refs">
-        <summary>Shaders and custom rendering</summary>
-        {renderer && (
-          <>
-            <p className="muted small">
-              <b>{renderer.mcVersion}</b> · {renderer.support.apiLabel}
-            </p>
-            <p className="muted small">
-              <b>Shading language:</b> {renderer.support.shadingLanguage}
-            </p>
-            <p className="muted small">
-              <b>How shaders load:</b> {renderer.support.howShadersLoad}
-            </p>
-            <p className={renderer.verdict.achievable ? 'muted small' : 'warn'}>
-              <b>Photorealistic:</b> {renderer.verdict.achievable ? 'possible' : 'not from mod code'}. {renderer.verdict.how}
-            </p>
-            <details className="refs">
-              <summary>What this version can and cannot do</summary>
-              <p className="muted small">
-                <b>Can</b>
-              </p>
-              <ul className="files">
-                {renderer.support.stage.can.map((c) => (
-                  <li key={c}>{c}</li>
-                ))}
-              </ul>
-              <p className="muted small">
-                <b>Cannot</b>
-              </p>
-              <ul className="files">
-                {renderer.support.stage.cannot.map((c) => (
-                  <li key={c}>{c}</li>
-                ))}
-              </ul>
-              <ul className="files">
-                {renderer.support.constraints.map((c) => (
-                  <li key={c} className="muted small">
-                    {c}
-                  </li>
-                ))}
-              </ul>
-            </details>
-            <button
-              onClick={() =>
-                onSend(
-                  `I want a custom renderer or shader effect for this mod (Minecraft ${renderer.mcVersion}). ` +
-                    `Call renderer_capabilities first and tell me in one sentence what is actually reachable here and what is not. ` +
-                    `Then ask me what the effect should look like, write it for the API this version has, and do not claim photorealism if it needs a shader pack.`
-                )
-              }
-            >
-              Ask the agent for a shader or renderer
-            </button>
-          </>
-        )}
-      </details>
+      <p className="muted small">
+        Shader packs and rendering engines have their own tab now — <b>Shaders</b> — because a pack is the player's
+        install and an engine is what your code is written against, and a single list of both is how people end up
+        believing Sodium is a shader API.
+      </p>
 
       <details className="refs">
         <summary>Where each file goes</summary>

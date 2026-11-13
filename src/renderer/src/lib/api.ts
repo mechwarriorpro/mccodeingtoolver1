@@ -157,6 +157,71 @@ export interface RendererInfo {
   verdict: { achievable: boolean; how: string }
 }
 
+/* ------------------------------------------------------------------ shaders */
+
+export type UseCase = 'looks' | 'performance' | 'realism' | 'custom-renderer' | 'pbr-materials' | 'low-end' | 'compare'
+
+export interface ShaderPackInfo {
+  id: string
+  name: string
+  author: string
+  style: 'vanilla-plus' | 'realistic' | 'fantasy' | 'cinematic' | 'performance'
+  weight: 'light' | 'medium' | 'heavy' | 'extreme'
+  runsOn: ('iris' | 'optifine')[]
+  minGpu: string
+  bestFor: string
+  caveat: string
+  url: string
+  popularity: number
+}
+
+export interface RenderEngineInfo {
+  id: string
+  name: string
+  kind: 'pack-loader' | 'perf' | 'sdk' | 'instancing' | 'legacy'
+  gives: string
+  misread: string
+  loaders: ('fabric' | 'forge' | 'neoforge')[]
+  versions: { min: string; max?: string }
+  dependOn: boolean
+  needs?: string[]
+  conflicts?: string[]
+  url: string
+  cost: string
+}
+
+export interface ShaderPick {
+  id: string
+  name: string
+  kind: 'pack' | 'engine'
+  why: string
+  action: string
+}
+
+export interface ShaderRecommendation {
+  useCase: UseCase
+  mcVersion: string
+  loader: string
+  picks: ShaderPick[]
+  avoid?: string
+  userInstalls: boolean
+}
+
+export interface ShaderCatalogue {
+  ok: boolean
+  mcVersion: string
+  loader: string
+  useCases: Record<UseCase, string>
+  available: { packs: ShaderPackInfo[]; engines: RenderEngineInfo[] }
+  all: { packs: ShaderPackInfo[]; engines: RenderEngineInfo[] }
+  recommendations: Record<UseCase, ShaderRecommendation>
+}
+
+export interface CompatibilityNote {
+  severity: 'error' | 'warning'
+  message: string
+}
+
 export interface ModelInfo {
   ok: boolean
   modId: string
@@ -364,7 +429,7 @@ export interface ClipRecord {
   ended: 'duration' | 'stopped' | 'error'
   error?: string
   note?: string
-  analysis?: { at: number; model: string; text: string; frames: number }
+  analysis?: { at: number; model: string; text: string; frames: number; mode?: 'bug' | 'look' }
 }
 
 export type ModuleLayout = 'neoforge' | 'forge-gradle' | 'architectury' | 'fabric' | 'unknown'
@@ -523,6 +588,7 @@ export interface McfApi {
   update: {
     state: () => Promise<UpdateState & { versionLabel: string }>
     check: () => Promise<UpdateState>
+    download: () => Promise<UpdateState>
     install: () => Promise<{ ok: boolean; error?: string }>
     setAuto: (enabled: boolean) => Promise<UpdateState>
     clearCache: () => Promise<{ ok: boolean; bytes?: number; error?: string }>
@@ -541,7 +607,7 @@ export interface McfApi {
     list: () => Promise<ClipRecord[]>
     get: (id: string) => Promise<ClipRecord | null>
     remove: (id: string) => Promise<ClipRecord[]>
-    analyse: (opts: { id: string; goal?: string; model?: string }) => Promise<{ ok: boolean; text?: string; model?: string; frames?: number; error?: string }>
+    analyse: (opts: { id: string; goal?: string; model?: string; mode?: 'bug' | 'look' }) => Promise<{ ok: boolean; text?: string; model?: string; frames?: number; error?: string }>
     digest: (id: string) => Promise<{ ok: boolean; text?: string; error?: string }>
   }
   forks: {
@@ -726,6 +792,11 @@ export interface McfApi {
   }
   renderer: {
     capabilities: () => Promise<RendererInfo>
+  }
+  shaders: {
+    catalogue: () => Promise<ShaderCatalogue>
+    check: (ids: string[]) => Promise<{ ok: boolean; notes: CompatibilityNote[] }>
+    explain: (useCase: UseCase) => Promise<{ ok: boolean; recommendation: ShaderRecommendation }>
   }
   models: {
     info: () => Promise<ModelInfo>

@@ -14,6 +14,7 @@ import DiagPanel from './components/DiagPanel'
 import ModesPanel from './components/ModesPanel'
 import EvolvePanel from './components/EvolvePanel'
 import ModelsPanel from './components/ModelsPanel'
+import ShaderPanel from './components/ShaderPanel'
 import ClipPanel from './components/ClipPanel'
 import LearnPanel from './components/LearnPanel'
 
@@ -31,8 +32,17 @@ const TAB_GROUPS: { label: string; tabs: { id: RailTab; label: string; hint: str
     tabs: [
       { id: 'game', label: 'Game', hint: 'Game window, launch, vision' },
       { id: 'project', label: 'Build', hint: 'Build, jar, install and project files' },
-      { id: 'port', label: 'Update', hint: 'Port an existing mod to another version or loader' },
-      { id: 'models', label: 'Models', hint: '3D block, item and mob models, plus animations' }
+      { id: 'port', label: 'Update', hint: 'Port an existing mod to another version or loader' }
+    ]
+  },
+  {
+    // Two tabs that are both "make the thing look like something". Kept out of
+    // Make so that group stays at four — the cap is what stops a group
+    // overflowing its row, which is the bug the wrapping tab strip fixed.
+    label: 'Render',
+    tabs: [
+      { id: 'models', label: 'Models', hint: '3D block, item and mob models, plus animations' },
+      { id: 'shaders', label: 'Shaders', hint: 'Shader packs and rendering engines, picked by use case' }
     ]
   },
   {
@@ -68,6 +78,7 @@ type RailTab =
   | 'modes'
   | 'evolve'
   | 'models'
+  | 'shaders'
   | 'diag'
 
 export default function App(): JSX.Element {
@@ -568,6 +579,16 @@ export default function App(): JSX.Element {
               <div className="card">
                 <h4>3D models &amp; animations</h4>
                 <ModelsPanel onToast={toast} onSend={(text) => void send(text, [])} />
+              </div>
+            )}
+            {railTab === 'shaders' && (
+              <div className="card">
+                <h4>Shaders &amp; rendering</h4>
+                <ShaderPanel
+                  onToast={toast}
+                  onSend={(text) => void send(text, [])}
+                  onRecordLook={() => setRailTab('clips')}
+                />
               </div>
             )}
             {railTab === 'evolve' && (

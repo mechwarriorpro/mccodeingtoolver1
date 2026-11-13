@@ -711,6 +711,23 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
               >
                 {checking ? 'Checking…' : 'Check for updates'}
               </button>
+              {update?.status === 'available' ? (
+                <button
+                  className="small primary"
+                  disabled={checking}
+                  onClick={async () => {
+                    const next = await api.update.download()
+                    setUpdate({ ...next, versionLabel: update?.versionLabel })
+                  }}
+                >
+                  Download {update.version}
+                </button>
+              ) : null}
+              {update?.status === 'downloading' ? (
+                <button className="small" disabled>
+                  Downloading… {update.percent ?? 0}%
+                </button>
+              ) : null}
               {update?.status === 'ready' ? (
                 <button className="small primary" onClick={() => void api.update.install()}>
                   Restart and install {update.version}

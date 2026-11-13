@@ -63,6 +63,20 @@ check('it includes the developer goal', prompt.includes('ruby sword swing'))
 check('it asks where in the code to fix', /code or resource/i.test(prompt))
 check('it warns against calling ordinary gameplay a bug', /not a problem/i.test(prompt))
 
+section('a look reference produces a rendering plan, not a bug report')
+const look = clips.analysisPrompt({ goal: 'warm sunset with reflective water', durationMs: 30_000, frameTimes: [0, 500], fps: 2, mode: 'look' })
+check('it is asked for the look, not for bugs', /LOOK REFERENCE/.test(look) && !/missing textures/i.test(look))
+check('it carries the desired look', look.includes('warm sunset with reflective water'))
+check('it asks what the frames actually show', /actually show|can see for certain/i.test(look))
+check(
+  'it cannot promise a pack in the jar',
+  /mod cannot ship or depend on a shader pack/i.test(look)
+)
+check('it is honest that vanilla is rasterised', /rasteris/i.test(look) && /path-traced/i.test(look))
+check('it separates what the mod owns from what the player installs', /What the mod can own/i.test(look) && /player has to install/i.test(look))
+check('it names PBR maps as something a mod can ship', /_n.*_s|PBR/i.test(look))
+check('bug mode is unaffected by the new flag', /Do not describe ordinary gameplay as a bug/.test(prompt) && !/LOOK REFERENCE/.test(prompt))
+
 section('API failures are explained in the user’s terms')
 check('401 mentions the key', /key/i.test(clips.translateAnalysisError(401, 'unauthorized')))
 check('429 mentions rate limiting', /rate limit/i.test(clips.translateAnalysisError(429, '')))

@@ -27,6 +27,12 @@ export default function ClipPanel({ onToast, onOpenImage, onSendToAgent }: Props
   const [selected, setSelected] = useState<ClipRecord | null>(null)
   const [analysing, setAnalysing] = useState(false)
   const [goal, setGoal] = useState('')
+  /**
+   * 'bug' reads the frames for what is broken; 'look' reads them as a look
+   * reference and produces a shader plan. The same footage answers both, so the
+   * choice belongs next to the analyse button rather than in a second recorder.
+   */
+  const [mode, setMode] = useState<'bug' | 'look'>('bug')
   const [error, setError] = useState<string | null>(null)
   const stopRef = useRef(false)
 
@@ -85,7 +91,7 @@ export default function ClipPanel({ onToast, onOpenImage, onSendToAgent }: Props
     setAnalysing(true)
     setError(null)
     try {
-      const res = await api.clips.analyse({ id: clip.id, goal: goal || undefined })
+      const res = await api.clips.analyse({ id: clip.id, goal: goal || undefined, mode })
       if (!res.ok) {
         setError(res.error ?? 'Analysis failed')
         return
@@ -190,12 +196,27 @@ export default function ClipPanel({ onToast, onOpenImage, onSendToAgent }: Props
           </div>
 
           {selected.id !== 'live' && !selected.analysis ? (
-            <input
-              style={{ marginBottom: 8 }}
-              value={goal}
-              placeholder="Optional: what should the model focus on?"
-              onChange={(e) => setGoal(e.target.value)}
-            />
+            <>
+              <div className="row" style={{ marginBottom: 8 }}>
+                <button className={mode === 'bug' ? 'small primary' : 'small'} onClick={() => setMode('bug')}>
+                  Find bugs
+                </button>
+                <button className={mode === 'look' ? 'small primary' : 'small'} onClick={() => setMode('look')}>
+                  Use as a look reference
+                </button>
+              </div>
+              <p className="dim small" style={{ marginBottom: 8 }}>
+                {mode === 'bug'
+                  ? 'What broke: missing textures, wrong models, crash screens.'
+                  : 'What it should look like: light, water, colour, atmosphere — and which real pack and renderer get there. A mod cannot ship a shader pack, and the analysis says which part is the player’s install.'}
+              </p>
+              <input
+                style={{ marginBottom: 8 }}
+                value={goal}
+                placeholder={mode === 'look' ? 'Optional: the look you are after, e.g. "warm sunset with reflective water"' : 'Optional: what should the model focus on?'}
+                onChange={(e) => setGoal(e.target.value)}
+              />
+            </>
           ) : null}
 
           <div className="filmstrip">
@@ -212,6 +233,7 @@ export default function ClipPanel({ onToast, onOpenImage, onSendToAgent }: Props
             <div style={{ marginTop: 10 }}>
               <div className="dim small" style={{ marginBottom: 4 }}>
                 {selected.analysis.model} · {selected.analysis.frames} frames · {new Date(selected.analysis.at).toLocaleTimeString()}
+                {selected.analysis.mode === 'look' ? ' · look reference' : ''}
               </div>
               <pre className="clip-analysis">{selected.analysis.text}</pre>
             </div>

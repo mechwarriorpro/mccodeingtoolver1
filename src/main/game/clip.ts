@@ -46,7 +46,7 @@ export interface ClipRecord {
   ended: 'duration' | 'stopped' | 'error'
   error?: string
   /** The model's analysis, once it has been run. */
-  analysis?: { at: number; model: string; text: string; frames: number }
+  analysis?: { at: number; model: string; text: string; frames: number; mode?: 'bug' | 'look' }
   /** Optional note the user typed before capturing. */
   note?: string
 }
@@ -293,6 +293,11 @@ export interface AnalysisRequest {
   clip: ClipRecord
   /** What the user was testing, if they said. */
   goal?: string
+  /**
+   * Read the frames as a *look reference* rather than a bug report: what the
+   * footage looks like, and which real packs and renderers reproduce it.
+   */
+  mode?: 'bug' | 'look'
   apiKey: string
   baseUrl?: string
   model?: string
@@ -322,8 +327,9 @@ export const DEFAULT_VISION_MODEL = 'claude-sonnet-4-5-20250929'
  * domain: "analyse this video" invites a film review, which is useless here.
  * What the developer needs is "what happened, what broke, what should change".
  */
-export function analysisPrompt(opts: { goal?: string; durationMs: number; frameTimes: number[]; fps: number }): string {
+export function analysisPrompt(opts: { goal?: string; durationMs: number; frameTimes: number[]; fps: number; mode?: 'bug' | 'look' }): string {
   const times = opts.frameTimes.map((t) => `${(t / 1000).toFixed(1)}s`).join(', ')
+  if (opts.mode === 'look') return lookPrompt(opts, times)
   return [
     `You are analysing a short Minecraft gameplay recording (${(opts.durationMs / 1000).toFixed(1)} seconds, captured at ${opts.fps} fps).`,
     `The images are frames ${times} into the clip, in order.`,
@@ -344,6 +350,43 @@ export function analysisPrompt(opts: { goal?: string; durationMs: number; frameT
     .join('\n')
 }
 
+/**
+ * The look-reference prompt.
+ *
+ * This is the path to "make it look like this" — the developer supplies footage
+ * of a look they want (their own or someone else's), and the analysis turns it
+ * into a concrete plan. Two honesty rules are baked in and must stay:
+ *
+ *  - A shader *pack* is the player's install. The analysis can name the pack and
+ *    tell the player to install it; it cannot put the look in the mod.
+ *  - Vanilla Minecraft is rasterised. Reflection, refraction and path-traced
+ *    light in that footage came from a pack, a resource pack, or footage that was
+ *    not Minecraft at all. The prompt says so rather than letting the agent
+ *    promise a renderer feature the game does not have.
+ */
+export function lookPrompt(opts: { goal?: string; durationMs: number; frameTimes: number[]; fps: number }, times: string): string {
+  return [
+    `These are frames ${times} from a ${(opts.durationMs / 1000).toFixed(1)}s Minecraft recording, supplied as a LOOK REFERENCE — the developer wants their mod or world to look like this.`,
+    opts.goal ? `\nWhat they want reproduced: ${opts.goal}\n` : '',
+    'Describe the look, then turn it into a plan. Use these headings:',
+    '',
+    '1. **The look** — light: warm or cool, high or low sun, hard or soft shadows; water and glass: reflections, refraction, opacity;',
+    '   weather and atmosphere: fog, volumetric light, clouds; colour: saturation, contrast, a specific grade. Say which of these the frames actually show rather than guessing.',
+    '2. **What is producing it** — separate what you can see for certain from what you are inferring. Name a specific shader pack only if the frames show its signature',
+    '   (e.g. Photon or Complementary-style shadow softness, BSL warmth, Rethinking Voxels\u2019 hard voxel shadows), and say it is a guess when it is one. If the footage looks like',
+    '   it was captured in a different engine entirely, say that instead of pretending to match it.',
+    '3. **What the mod can own** — textures with PBR materials (a pack reads `_n`/`_s` maps from the mod\'s own textures), block and item models, particle and emissive-style',
+    '   tricks that vanilla supports. Be specific about the file or the API.',
+    '4. **What the player has to install** — the pack and renderer by name, if the look depends on them. State plainly that a mod cannot ship or depend on a shader pack,',
+    '   and that vanilla Minecraft is rasterised: no reflection, refraction or path-traced lighting comes from mod code alone without an external renderer.',
+    '5. **Concrete next step** — the smallest change with the biggest visual difference, and which pack or setting to try it with.',
+    '',
+    'Do not claim the mod can reproduce the footage on its own if it cannot. A plan that says "this part needs a pack" is more useful than a promise.'
+  ]
+    .filter((line) => line !== '')
+    .join('\n')
+}
+
 /** Real Claude Messages API call with the frames as image blocks. */
 export async function analyseClip(req: AnalysisRequest): Promise<AnalysisResult> {
   const model = req.model || DEFAULT_VISION_MODEL
@@ -355,7 +398,8 @@ export async function analyseClip(req: AnalysisRequest): Promise<AnalysisResult>
     goal: req.goal ?? req.clip.note,
     durationMs: req.clip.durationMs,
     frameTimes: frames.map((f) => f.t),
-    fps: req.clip.fps
+    fps: req.clip.fps,
+    mode: req.mode
   })
 
   const images = frames
@@ -428,7 +472,10 @@ export function translateAnalysisError(status: number, body: string, providerLab
 }
 
 /** Persist an analysis onto its clip. */
-export function attachAnalysis(id: string, analysis: { model: string; text: string; frames: number }): ClipRecord | null {
+export function attachAnalysis(
+  id: string,
+  analysis: { model: string; text: string; frames: number; mode?: 'bug' | 'look' }
+): ClipRecord | null {
   const store = loadClips()
   let updated: ClipRecord | null = null
   const clips = store.clips.map((c) => {
@@ -448,7 +495,9 @@ export function clipDigest(clip: ClipRecord): string {
   const facts = [
     `Clip ${clip.id}: ${(clip.durationMs / 1000).toFixed(1)}s at ${clip.fps} fps, ${clip.frames.length} frames.`,
     clip.note ? `The developer was testing: ${clip.note}` : '',
-    clip.analysis ? `Analysis (${clip.analysis.model}):\n${clip.analysis.text}` : 'Not analysed yet.'
+    clip.analysis
+      ? `Analysis (${clip.analysis.model}${clip.analysis.mode === 'look' ? ', look reference' : ''}):\n${clip.analysis.text}`
+      : 'Not analysed yet.'
   ]
   return facts.filter(Boolean).join('\n')
 }

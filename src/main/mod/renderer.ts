@@ -1,4 +1,5 @@
 import { atLeast } from './assets'
+import { stackGuidance } from './shader-stack'
 
 /**
  * What a project can actually render with.
@@ -259,6 +260,9 @@ export function rendererGuidance(mcVersion: string): string {
         '. Say so plainly rather than promising photorealistic output from mod code alone.'
     )
   }
+  // The catalogue rules: which pack or engine for which use case, and which of
+  // the popular mods are not shader APIs at all.
+  lines.push(stackGuidance(mcVersion))
   return lines.join('\n')
 }
 

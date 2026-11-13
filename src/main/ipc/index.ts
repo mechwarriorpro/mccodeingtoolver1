@@ -130,6 +130,7 @@ import { QUADRUPED_BONES, animationJson, blockModelJson, entityModelJson, modelP
 import { textureFile, textureRef } from '../mod/texture-ref'
 import { PATTERNS, PALETTES, texturePathFor, texturePng } from '../mod/textures'
 import { rendererSupport, realismVerdict } from '../mod/renderer'
+import { USE_CASES, catalogueFor, compatibilityNotes, fullCatalogue, recommend, type UseCase } from '../mod/shader-stack'
 import { bestAvailable, describeRunTarget } from '../agent/autoswitch'
 import { loadResearch, researchDir, saveResearch, runMode } from '../agent/modes'
 import { knowledgeOn } from '../learn'
@@ -141,6 +142,7 @@ import {
   clearUpdaterCache,
   currentUpdateState,
   initUpdater,
+  downloadUpdate,
   installUpdate,
   setAutoUpdate,
   updatesSupported,
@@ -708,7 +710,7 @@ export function registerIpc(): void {
   ipcMain.handle('clip:remove', (_e, id: string) => deleteClip(id))
 
   /** Send the clip's frames to a vision model and store the write-up. */
-  ipcMain.handle('clip:analyse', async (_e, opts: { id: string; goal?: string; model?: string }) => {
+  ipcMain.handle('clip:analyse', async (_e, opts: { id: string; goal?: string; model?: string; mode?: 'bug' | 'look' }) => {
     const clip = getClip(opts.id)
     if (!clip) return { ok: false, error: 'Unknown clip.' }
     if (!clip.frames.length) return { ok: false, error: 'That clip has no frames.' }
@@ -719,6 +721,7 @@ export function registerIpc(): void {
     const res = await analyseClip({
       clip,
       goal: opts.goal,
+      mode: opts.mode,
       model: v.model,
       apiKey: v.apiKey,
       baseUrl: v.baseUrl,
@@ -726,7 +729,7 @@ export function registerIpc(): void {
       providerLabel: v.providerLabel
     })
     if (res.ok && res.text) {
-      attachAnalysis(clip.id, { model: res.model ?? 'vision', text: res.text, frames: res.frames ?? 0 })
+      attachAnalysis(clip.id, { model: res.model ?? 'vision', text: res.text, frames: res.frames ?? 0, mode: opts.mode })
     }
     return res
   })
@@ -1003,6 +1006,43 @@ export function registerIpc(): void {
       support: rendererSupport(mcVersion),
       verdict: realismVerdict(mcVersion)
     }
+  })
+
+  /**
+   * The shader catalogue for this project, plus a recommendation per use case.
+   *
+   * `available` is what actually applies to this version and loader; `all` is
+   * everything, so the UI can show what exists and grey out what does not —
+   * "Photon, not for your version" is more useful than Photon silently vanishing.
+   */
+  ipcMain.handle('shaders:catalogue', () => {
+    const cfg = loadConfig()
+    const props = readProps(path.join(cfg.workspaceDir, 'gradle.properties'))
+    const mcVersion = detectMcVersion(props)
+    const loader = detectLoader(props)
+    const available = catalogueFor(mcVersion, loader)
+    const all = fullCatalogue()
+    const recommendations = Object.fromEntries(
+      (Object.keys(USE_CASES) as UseCase[]).map((useCase) => [useCase, recommend({ useCase, mcVersion, loader })])
+    )
+    return { ok: true, mcVersion, loader, useCases: USE_CASES, available, all, recommendations }
+  })
+
+  /** Conflict check for a set the user has assembled. */
+  ipcMain.handle('shaders:check', (_e, ids: string[]) => {
+    const cfg = loadConfig()
+    const mcVersion = detectMcVersion(readProps(path.join(cfg.workspaceDir, 'gradle.properties')))
+    return { ok: true, notes: compatibilityNotes(ids ?? [], mcVersion) }
+  })
+
+  /** Ask the agent about a specific use case, from the panel. */
+  ipcMain.handle('shaders:explain', (_e, useCase: UseCase) => {
+    const cfg = loadConfig()
+    const props = readProps(path.join(cfg.workspaceDir, 'gradle.properties'))
+    const mcVersion = detectMcVersion(props)
+    const loader = detectLoader(props)
+    const rec = recommend({ useCase, mcVersion, loader })
+    return { ok: true, recommendation: rec }
   })
 
   /** Write one generated texture as a real PNG in the folder the game reads. */
@@ -1733,6 +1773,7 @@ export function registerIpc(): void {
   initUpdater()
   ipcMain.handle('update:state', () => ({ ...currentUpdateState(), versionLabel: versionLabel() }))
   ipcMain.handle('update:check', async () => checkForUpdates())
+  ipcMain.handle('update:download', () => downloadUpdate())
   ipcMain.handle('update:install', () => installUpdate())
   ipcMain.handle('update:setAuto', (_e, enabled: boolean) => setAutoUpdate(enabled))
   ipcMain.handle('update:clearCache', () => clearUpdaterCache())
