@@ -408,11 +408,25 @@ export interface Recommendation {
   userInstalls: boolean
 }
 
-const loaderKey = (loader: string): 'fabric' | 'forge' | 'neoforge' =>
-  loader === 'fabric' ? 'fabric' : loader === 'forge' ? 'forge' : 'neoforge'
+/**
+ * The loader, from whatever the project says.
+ *
+ * `detectLoader` defaults to NeoForge when it sees no evidence either way, and
+ * that default is wrong for old versions: a 1.12.2 project has no `loader` line
+ * in gradle.properties at all, and reporting it as NeoForge answers every shader
+ * question with Veil and Iris on a version where neither exists. Below 1.13 the
+ * only loader that matters here is Forge, so the version wins over the guess.
+ */
+const loaderKey = (loader: string, mc: string): 'fabric' | 'forge' | 'neoforge' => {
+  if (loader === 'fabric') return 'fabric'
+  if (loader === 'forge') return 'forge'
+  if (!atLeast(mc, '1.13')) return 'forge'
+  if (!atLeast(mc, '1.20.2')) return 'forge'
+  return 'neoforge'
+}
 
 function engineApplies(e: RenderEngine, mc: string, loader: string): boolean {
-  if (!e.loaders.includes(loaderKey(loader))) return false
+  if (!e.loaders.includes(loaderKey(loader, mc))) return false
   if (!atLeast(mc, e.versions.min)) return false
   if (e.versions.max && !atLeast(e.versions.max, mc)) return false
   return true
@@ -422,12 +436,15 @@ function packApplies(p: ShaderPack, mc: string, loader: string): boolean {
   // Packs are loader-agnostic in the pack sense, but the *loader* that runs them
   // is not: Iris is Fabric/NeoForge, Oculus is Forge ≤1.20.1, OptiFine is Forge.
   if (p.runsOn.includes('iris')) {
-    if (loaderKey(loader) !== 'forge' && atLeast(mc, '1.16.5')) return true
+    if (loaderKey(loader, mc) !== 'forge' && atLeast(mc, '1.16.5')) return true
+    // NeoForge projects on 1.20.2+ can run Iris; the old Forge ceiling was
+    // Oculus, which Iris replaced there.
+    if (loaderKey(loader, mc) === 'neoforge' && atLeast(mc, '1.20.2')) return true
   }
   if (p.runsOn.includes('optifine')) {
     // OptiFine exists for Forge, and for every version older than Iris.
     if (!atLeast(mc, '1.16.5')) return true
-    if (loaderKey(loader) === 'forge' && !atLeast(mc, '1.16.5')) return true
+    if (loaderKey(loader, mc) === 'forge' && !atLeast(mc, '1.16.5')) return true
   }
   return false
 }
@@ -494,7 +511,7 @@ export function recommend(opts: { useCase: UseCase; mcVersion: string; loader?: 
       }
 
     case 'performance': {
-      const eb = loaderKey(loader) === 'fabric' ? 'sodium' : 'embeddium'
+      const eb = loaderKey(loader, mc) === 'fabric' ? 'sodium' : 'embeddium'
       engine(
         eb,
         'The single biggest win for terrain. It replaces the chunk renderer with a far faster one and changes nothing visually.',

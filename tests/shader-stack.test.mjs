@@ -194,6 +194,37 @@ check('catalogueFor never returns an engine outside its own version range', () =
   }
 })
 
+check('a 1.12.2 project is not reported as NeoForge, which would offer Veil and Iris', () => {
+  // detectLoader() defaults to neoforge when gradle.properties says nothing, and
+  // a 1.12.2 project says nothing. The version has to win, or the catalogue
+  // answers with engines that did not exist then.
+  const old = catalogueFor('1.12.2', 'neoforge')
+  assert.ok(!old.engines.some((e) => e.id === 'veil'), 'no Veil on 1.12.2')
+  assert.ok(!old.engines.some((e) => e.id === 'iris'), 'no Iris on 1.12.2')
+  assert.ok(!old.engines.some((e) => e.id === 'sodium'), 'no Sodium on 1.12.2')
+  assert.ok(old.engines.some((e) => e.id === 'optifine'), 'OptiFine is what 1.12.2 has')
+})
+
+check('a 1.20.2+ project with no loader line is treated as NeoForge, and Iris applies', () => {
+  const modern = catalogueFor('1.21.1', 'neoforge')
+  assert.ok(modern.engines.some((e) => e.id === 'iris'), 'Iris ships for NeoForge on 1.21.x')
+})
+
+check('a Fabric project never gets a Forge-only engine', () => {
+  for (const e of catalogueFor('1.21.1', 'fabric').engines) {
+    assert.ok(e.loaders.includes('fabric'), `${e.name} is on the Fabric list but does not ship for Fabric`)
+  }
+})
+
+check('every id compatibilityNotes reasons about exists in the catalogue', () => {
+  // A typo'd id silently disables a rule: the conflict is never reported and the
+  // user finds out by crashing. Assert the rules' subject ids resolve.
+  const ids = new Set([...SHADER_PACKS.map((p) => p.id), ...RENDER_ENGINES.map((e) => e.id)])
+  for (const id of ['oculus', 'sodium', 'rubidium', 'embeddium', 'iris', 'flywheel', 'veil', 'seus-ptgi']) {
+    assert.ok(ids.has(id), `compatibilityNotes names "${id}" but nothing has that id`)
+  }
+})
+
 check('fullCatalogue keeps both categories even when nothing applies', () => {
   const all = fullCatalogue()
   assert.equal(all.packs.length, SHADER_PACKS.length)
