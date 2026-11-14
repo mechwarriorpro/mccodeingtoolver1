@@ -70,14 +70,15 @@ servers, needs one licence per person or per server.
 | Licences | Discount | Per licence |
 |---|---|---|
 | 1–24 | none | $50.00 |
-| 25–49 | 10% | $45.00 |
-| 50–74 | 25% | $37.50 |
-| 75–99 | 40% | $30.00 |
-| 100+ | **50%** | $25.00 |
+| 25–49 | 5% | $47.50 |
+| 50–74 | 10% | $45.00 |
+| 75–99 | 25% | $37.50 |
+| 100+ | **34%** | $33.00 |
 
-Half price is the floor — it never goes below $25 a licence. Ordering more is
-never worse: at a quantity break the total can fall below a smaller order (75
-licences cost less than 74), and you are free to order the larger quantity.
+The absolute ceiling on any discount is 50%, which no combination rate exceeds.
+At a quantity break the total can fall below a smaller order (75 licences cost
+less than 74) — that is ordinary volume pricing, and you are free to order the
+larger quantity.
 
 Open an issue on this repo or message ShadowClanGaming to get one. Renewal after
 12 months is at the then-current rate.

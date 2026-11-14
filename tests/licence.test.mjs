@@ -230,42 +230,52 @@ check('one licence costs the base price, with no discount invented', () => {
   assert.equal(q.tier, undefined)
 })
 
-check('the ladder starts where the user said', () => {
-  // The thresholds are the ones asked for: 25, 50, 75, 100.
+check('the ladder is the set of numbers asked for', () => {
   assert.deepEqual(
-    lic.PRICE_TIERS.map((t) => t.minSeats),
-    [25, 50, 75, 100]
+    lic.PRICE_TIERS.map((t) => [t.minSeats, t.discountPercent]),
+    [
+      [25, 5],
+      [50, 10],
+      [75, 25],
+      [100, 34]
+    ]
   )
 })
 
-check('each threshold gets a real reduction, and 100 is half price', () => {
+check('each threshold gets a real reduction, and the top is 34%', () => {
   const at25 = lic.licencePrice(25)
   const at50 = lic.licencePrice(50)
   const at75 = lic.licencePrice(75)
   const at100 = lic.licencePrice(100)
-  assert.ok(at25.discountPercent > 0, '25 must actually discount')
-  assert.ok(at50.discountPercent > at25.discountPercent)
-  assert.ok(at75.discountPercent > at50.discountPercent)
-  assert.equal(at100.discountPercent, 50, 'the top of the ladder is half price')
-  assert.equal(at100.perSeatAud, 25)
+  assert.equal(at25.discountPercent, 5)
+  assert.equal(at50.discountPercent, 10)
+  assert.equal(at75.discountPercent, 25)
+  assert.equal(at100.discountPercent, 34, 'the top of the ladder is 34% off')
+  assert.equal(at100.perSeatAud, 33)
+})
+
+check('the 50% ceiling stays above the ladder, so no tier can exceed half price', () => {
+  assert.equal(lic.LICENCE_TERMS.commercial.maxDiscountPercent, 50)
+  for (const tier of lic.PRICE_TIERS) assert.ok(tier.discountPercent <= 50)
 })
 
 check('the discount is applied to the whole purchase, not bolted on', () => {
   const q = lic.licencePrice(50)
   assert.equal(q.listAud, 2500)
-  assert.equal(q.totalAud, 1875, '25% off $2500')
-  assert.equal(q.perSeatAud, 37.5)
+  assert.equal(q.totalAud, 2250, '10% off $2500')
+  assert.equal(q.perSeatAud, 45)
 })
 
 check('a quantity break is flagged, because the invoice drops at one', () => {
-  // 75 at $30 is $2250 while 74 at $37.50 is $2775. That is normal volume
-  // pricing — the buyer wanting 74 can order 75 and pay less — but the number
-  // falling between two orders looks like a mistake, so it is labelled.
+  // 75 at $37.50 is $2812.50 while 74 at $45 is $3330. Ordinary volume pricing —
+  // the buyer wanting 74 can order 75 and pay less — but the total falling
+  // between two orders reads like an error, so it is labelled.
   assert.equal(lic.licencePrice(75).atQuantityBreak, true)
   assert.equal(lic.licencePrice(76).atQuantityBreak, false)
   assert.equal(lic.licencePrice(25).atQuantityBreak, true)
   assert.equal(lic.licencePrice(24).atQuantityBreak, false)
   assert.ok(lic.licencePrice(75).totalAud < lic.licencePrice(74).totalAud, 'the break is real')
+  assert.ok(lic.licencePrice(100).totalAud < lic.licencePrice(99).totalAud)
 })
 
 check('per-licence price never rises as more are bought', () => {
@@ -289,9 +299,9 @@ check('the cap cannot be exceeded however many are bought', () => {
 check('a quantity just below a threshold gets the lower rate, not the higher one', () => {
   // The boundary bug that costs someone a customer: 24 must not get the 25 price.
   assert.equal(lic.licencePrice(24).discountPercent, 0)
-  assert.equal(lic.licencePrice(25).discountPercent, 10)
+  assert.equal(lic.licencePrice(25).discountPercent, 5)
   assert.equal(lic.licencePrice(99).discountPercent, lic.PRICE_TIERS[2].discountPercent)
-  assert.equal(lic.licencePrice(100).discountPercent, 50)
+  assert.equal(lic.licencePrice(100).discountPercent, 34)
 })
 
 check('a nonsense quantity is treated as one licence, not as free', () => {
@@ -314,8 +324,8 @@ check('the quote reads as something a person can be sent', () => {
   assert.match(single, /AUD \$50/)
   assert.match(single, /12 months/)
   const team = lic.licencePrice(50).summary
-  assert.match(team, /25%/)
-  assert.match(team, /AUD \$1875/)
+  assert.match(team, /10%/)
+  assert.match(team, /AUD \$2250/)
   assert.match(team, /per licence/i)
 })
 

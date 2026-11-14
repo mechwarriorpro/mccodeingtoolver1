@@ -78,15 +78,13 @@ of charge under the conditions below.
           | Licences | Discount | Price per licence |
           |----------|----------|-------------------|
           | 1–24     | none     | AUD $50.00        |
-          | 25–49    | 10%      | AUD $45.00        |
-          | 50–74    | 25%      | AUD $37.50        |
-          | 75–99    | 40%      | AUD $30.00        |
-          | 100+     | 50%      | AUD $25.00        |
+          | 25–49    | 5%       | AUD $47.50        |
+          | 50–74    | 10%      | AUD $45.00        |
+          | 75–99    | 25%      | AUD $37.50        |
+          | 100+     | 34%      | AUD $33.00        |
 
-        The price is per licence, so the total at a quantity break is less than
-        the total just below it — seventy-five licences at $30 cost less than
-        seventy-four at $37.50. Where that happens, ordering the higher quantity
-        is permitted and cheaper.
+        The price is per licence. The maximum discount is 50%, which no
+        combination rate may exceed.
 
         The maximum discount is 50%. The price never falls below AUD $25 per
         licence, whatever quantity is bought.

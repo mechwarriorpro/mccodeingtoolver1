@@ -83,7 +83,13 @@ export const LICENCE_TERMS = {
     unlicensedMultiple: 2,
     currency: 'AUD',
     summary: 'AUD $50, once, for 12 months — one solo developer or one server, unlimited projects.',
-    /** The most any combination can be discounted, whatever the seat count. */
+    /**
+     * The absolute ceiling on any discount, whatever the seat count.
+     *
+     * The ladder currently tops out at 34%; this stays at 50% so a future edit to
+     * the tiers cannot promise more than half price without changing a constant
+     * that is named in the licence.
+     */
     maxDiscountPercent: 50,
     /** What a year of unlicensed commercial use comes to at the base rate. */
     unlicensedYearAud: 100
@@ -138,13 +144,14 @@ export interface PriceTier {
  * The combination ladder — a price per licence, in steps.
  *
  * ```
- *   1–24     $50.00                    100+    $25.00  (50% off)
- *   25–49    $45.00   (10% off)
- *   50–74    $37.50   (25% off)
- *   75–99    $30.00   (40% off)
+ *   1–24     $50.00       75–99    $37.50   (25% off)
+ *   25–49    $47.50  (5%)  100+    $33.00   (34% off)
+ *   50–74    $45.00  (10%)
  * ```
  *
- * The 50% cap is the floor: $25 a licence, however many are bought.
+ * The ladder tops out at 34% — $33 a licence at 100 and above. The absolute
+ * ceiling stays at 50% in `maxDiscountPercent`, so no future edit of these tiers
+ * can quietly promise more than half price.
  *
  * A quantity break means the *total* at a break can be less than the total just
  * below it — 75 licences at $30 is $2,250 while 74 at $37.50 is $2,775. That is
@@ -154,10 +161,10 @@ export interface PriceTier {
  * reaches the half-price cap that is the point of the ladder.
  */
 export const PRICE_TIERS: PriceTier[] = [
-  { minSeats: 25, discountPercent: 10 },
-  { minSeats: 50, discountPercent: 25 },
-  { minSeats: 75, discountPercent: 40 },
-  { minSeats: 100, discountPercent: 50 }
+  { minSeats: 25, discountPercent: 5 },
+  { minSeats: 50, discountPercent: 10 },
+  { minSeats: 75, discountPercent: 25 },
+  { minSeats: 100, discountPercent: 34 }
 ]
 
 export interface PriceQuote {
@@ -203,17 +210,26 @@ export function licencePrice(seats: number, baseAud: number = LICENCE_TERMS.comm
   // Highest tier whose threshold the purchase reaches.
   const tier = [...PRICE_TIERS].sort((a, b) => b.minSeats - a.minSeats).find((t) => n >= t.minSeats)
   const discount = Math.min(LICENCE_TERMS.commercial.maxDiscountPercent, tier?.discountPercent ?? 0)
-  const total = round2(list * (1 - discount / 100))
+  let total = round2(list * (1 - discount / 100))
   const perSeat = round2(total / n)
-  // A break can make this order cheaper than one licence fewer. That is normal
-  // volume pricing, but the invoice looks like a mistake, so it is flagged and
-  // the UI can say "you could order one fewer and pay more".
-  const breakFlag = !!tier && n > 1 && tierOf(n - 1).total > total
+  /**
+   * A quantity break makes the total dip below a smaller order, and that is left
+   * alone on purpose.
+   *
+   * Seventy-four licences at $45 is $3,330; seventy-five at $37.50 is $2,812.50.
+   * Flattening the dip would only move it — the floor is (n-1) × the previous
+   * price, so every quantity just past a break would sit at a flat total while
+   * the next one rose, which is a stranger price list than the dip itself.
+   * A buyer who wanted 74 can order 75 and pay less for more, so nobody loses.
+   * The point is flagged so the UI can say so rather than leaving the invoice
+   * looking like a mistake.
+   */
+  const atQuantityBreak = !!tier && n > 1 && tierOf(n - 1, baseAud).total > total
   const summary =
     discount === 0
       ? `${n} licence${n === 1 ? '' : 's'} at AUD $${baseAud} — AUD $${total} for 12 months.`
       : `${n} licences at AUD $${baseAud} each less ${discount}% — AUD $${total}, which is AUD $${perSeat.toFixed(2)} per licence, for 12 months.`
-  return { seats: n, baseAud, listAud: list, totalAud: total, perSeatAud: perSeat, discountPercent: discount, atQuantityBreak: breakFlag, tier, summary }
+  return { seats: n, baseAud, listAud: list, totalAud: total, perSeatAud: perSeat, discountPercent: discount, atQuantityBreak, tier, summary }
 }
 
 export interface LaunchResult {
