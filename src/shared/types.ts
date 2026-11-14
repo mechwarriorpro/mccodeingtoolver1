@@ -107,6 +107,15 @@ export interface AppConfig {
   /** Local (Ollama) settings: which model fills each role, and where weights live. */
   local: LocalSettings
 
+  /**
+   * Launch counting and a recorded commercial licence.
+   *
+   * Nothing is gated on this: the app is fully functional either way. It exists so
+   * that someone who has used it for a fortnight is reminded, once, that it is a
+   * solo project and commercial use needs a licence.
+   */
+  licence: { launchCount: number; key: string; lastNagAt: number }
+
   game: {
     /** Every place we can install into: Technic instance, Prism instance, plain run dir. */
     instances: GameInstance[]

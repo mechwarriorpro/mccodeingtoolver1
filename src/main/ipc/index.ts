@@ -17,6 +17,7 @@ import {
   setDiagLogPath,
   type DiagLevel
 } from '../diag'
+import { LICENCE_TERMS, dismissReminder, licenceSummary, looksLikeCommercialKey, mayInterrupt, recordLaunch, reminderText } from '../licence'
 import { activeProjectDir, effectiveApiKey, effectiveBaseUrl, loadConfig, redactConfig, saveConfig, screenshotsDir, attachmentsDir } from '../config'
 import type {
   AppConfig,
@@ -425,6 +426,55 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('app:version', () => ({ version: app.getVersion(), electron: process.versions.electron, node: process.versions.node }))
+
+  /**
+   * Count this launch and say whether to remind.
+   *
+   * Called once from the renderer after the window is up, so the reminder never
+   * slows startup and never appears before the app is usable. Nothing is gated:
+   * the answer only decides whether a sentence is shown.
+   */
+  ipcMain.handle('licence:launch', (_e, opts: { activity?: { agentRunning?: boolean; buildRunning?: boolean; downloadRunning?: boolean }; sessionAlreadyNagged?: boolean } = {}) => {
+    const cfg = loadConfig()
+    const state = cfg.licence ?? { launchCount: 0, key: '', lastNagAt: 0 }
+    const res = recordLaunch(state, { sessionAlreadyNagged: opts.sessionAlreadyNagged })
+    saveConfig({ licence: res.state })
+    const summary = licenceSummary(res.state)
+    // The reminder is only *offered* here; the renderer decides when it can be
+    // shown, because only it knows whether the user is mid-build.
+    const canShow = res.showReminder && mayInterrupt(opts.activity ?? {}) && !summary.licensed
+    return { showReminder: canShow, text: canShow ? reminderText(res.state) : null, summary }
+  })
+
+  /** Dismiss the reminder: the counter resets, so the next one is 15 launches away. */
+  ipcMain.handle('licence:dismiss', () => {
+    const cfg = loadConfig()
+    const next = dismissReminder(cfg.licence ?? { launchCount: 0, key: '', lastNagAt: 0 })
+    saveConfig({ licence: next })
+    return { ok: true, summary: licenceSummary(next) }
+  })
+
+  /** What the licence panel says, and the terms themselves so the UI cannot drift. */
+  ipcMain.handle('licence:status', () => {
+    const cfg = loadConfig()
+    const state = cfg.licence ?? { launchCount: 0, key: '', lastNagAt: 0 }
+    return { summary: licenceSummary(state), launches: state.launchCount, terms: LICENCE_TERMS }
+  })
+
+  /**
+   * Record a commercial licence key.
+   *
+   * Shape-checked only, on purpose: there is no licence server and no phone-home,
+   * so a solo developer on a plane is never locked out. The key is a record for
+   * the user's own paperwork; the terms are enforced by the licence itself.
+   */
+  ipcMain.handle('licence:setKey', (_e, key: string) => {
+    const cfg = loadConfig()
+    const clean = (key ?? '').trim()
+    const next = { ...(cfg.licence ?? { launchCount: 0, key: '', lastNagAt: 0 }), key: clean }
+    saveConfig({ licence: next })
+    return { ok: looksLikeCommercialKey(clean) || clean === '', summary: licenceSummary(next) }
+  })
 
   ipcMain.handle('env:report', async (): Promise<EnvReport> => {
     const cfg = loadConfig()

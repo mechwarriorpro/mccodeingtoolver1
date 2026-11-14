@@ -891,6 +891,28 @@ export interface McfApi {
     status: () => Promise<{ instance: string | null; minecraftDir: string; neoVersion: string; installed: boolean; javaFound: boolean }>
     install: () => Promise<{ ok: boolean; minecraftDir: string; versionId?: string; log: string; error?: string }>
   }
+  /**
+   * The solo-project reminder and a recorded commercial licence.
+   *
+   * There is no feature behind this API: it reports terms and remembers a key.
+   */
+  licence: {
+    launch: (opts?: {
+      sessionAlreadyNagged?: boolean
+      activity?: { agentRunning?: boolean; buildRunning?: boolean; downloadRunning?: boolean }
+    }) => Promise<{
+      showReminder: boolean
+      text: { title: string; body: string[]; free: string[]; commercial: string[]; action: string } | null
+      summary: { licensed: boolean; title: string; detail: string }
+    }>
+    dismiss: () => Promise<{ ok: boolean; summary: { licensed: boolean; title: string; detail: string } }>
+    status: () => Promise<{
+      summary: { licensed: boolean; title: string; detail: string }
+      launches: number
+      terms: { holder: string; freeFor: readonly string[]; commercialFor: readonly string[]; why: string; url: string }
+    }>
+    setKey: (key: string) => Promise<{ ok: boolean; summary: { licensed: boolean; title: string; detail: string } }>
+  }
   deps: {
     scan: (opts?: { dir?: string; buildErrors?: string[] }) => Promise<DependencyScan>
     find: (opts: { package: string; name?: string; dir?: string }) => Promise<{

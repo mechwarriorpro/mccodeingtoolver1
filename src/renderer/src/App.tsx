@@ -5,6 +5,7 @@ import { api } from './lib/api'
 import ChatPanel from './components/ChatPanel'
 import GamePanel from './components/GamePanel'
 import BuildPanel from './components/BuildPanel'
+import LicenceReminder from './components/LicenceReminder'
 import SetupModal from './components/SetupModal'
 import SettingsModal from './components/SettingsModal'
 import ReferencePanel from './components/ReferencePanel'
@@ -102,6 +103,15 @@ export default function App(): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [permission, setPermission] = useState<PermissionPrompt | null>(null)
   const [game, setGame] = useState<GameStatus>({ running: false })
+  /**
+   * Show the solo-project reminder, once per session, only when idle.
+   *
+   * Counting the launch is deferred until nothing is happening: a reminder that
+   * interrupts a build to ask for money is the pattern this deliberately avoids.
+   * A ref keeps it to one check per session even across re-renders.
+   */
+  const [showLicence, setShowLicence] = useState(false)
+  const licenceChecked = useRef(false)
   const [consoleLines, setConsoleLines] = useState<{ line: string; source: 'build' | 'game' }[]>([])
   const [toasts, setToasts] = useState<{ id: number; text: string; kind: 'ok' | 'err' }[]>([])
   const [showSetup, setShowSetup] = useState(false)
@@ -666,6 +676,7 @@ export default function App(): JSX.Element {
         </div>
       </main>
 
+      {showLicence && <LicenceReminder onClose={() => setShowLicence(false)} />}
       {showSetup && <SetupModal onClose={() => setShowSetup(false)} onCreated={(dir) => void afterProjectChange(dir)} onToast={toast} />}
       {showSettings && (
         <SettingsModal

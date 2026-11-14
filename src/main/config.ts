@@ -30,6 +30,7 @@ const defaultConfig: AppConfig = {
   evolveMaxGenerations: 20,
   evolveMaxHeapMb: 1024,
   autonomy: 'review',
+  licence: { launchCount: 0, key: '', lastNagAt: 0 },
   workspaceDir: '',
   activeDir: '',
   github: { owner: '', repo: '', branch: '' },

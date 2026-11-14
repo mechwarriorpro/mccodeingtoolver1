@@ -42,6 +42,32 @@ setup and API key.
 
 ---
 
+## Licence
+
+**Free for solo developers and free projects. A commercial licence is required for anything that earns money.**
+
+| How you use it | Cost |
+|---|---|
+| Building your own mods, however many hours you put in | **Free** |
+| Mods, packs or servers that make no money at all | **Free** |
+| Non-profit, school or charity work | **Free** |
+| Selling what you build with it, or paid work for a client | **Commercial licence** |
+| Inside a company, studio or team of any size | **Commercial licence** |
+
+The full terms are in [LICENSE](LICENSE). The short version: read it, change it, use it
+for free; the right to use it commercially is reserved, and using it commercially
+without a licence is a licence violation.
+
+After fifteen launches the app shows this once, and offers a field for a commercial
+key. **No feature is locked behind it** — the point is that you know who made it and
+what it costs, not that the tool argues with you. There is no account, no phone-home
+and no attempt to work out whether your machine belongs to a company: a company
+using an unlicensed build is a licence question, and the answer is legal, not
+technical.
+
+Releases before v0.5.0 were MIT and remain available under MIT. That grant cannot
+be withdrawn.
+
 ## Requirements (on the Windows machine)
 
 1. **A JDK** — Temurin or Microsoft OpenJDK. **21** for Minecraft 1.20.5+, **17** for 1.18–1.20.4, **8** for older
@@ -62,7 +88,7 @@ Settings or from GitHub's settings at any time.
 **[Latest release →](https://github.com/mechwarriorpro/mccodeingtoolver1/releases/latest)** — grab
 `MC.Forge.Agent-Setup-<version>.exe` (~102 MB, unsigned).
 
-> **Use v0.4.19 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
+> **Use v0.5.0 or newer.** v0.1.1 fixed a crash where 0.1.0 could not start
 > (`ERR_REQUIRE_ESM`: the main process was CommonJS while the Claude Agent SDK is ESM-only).
 > v0.2.0 added in-app GitHub sign-in and the reference-mod decompiler; v0.2.1 fixed the
 > decompiler picking a Java it could not run.
@@ -89,6 +115,13 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.5.0** changes the licence and adds one reminder. The app is now **source-available under a
+> non-commercial licence**: free for solo developers and for any project that does not make money, with a
+> **commercial licence required for anything that does** — selling what you build with it, paid client work, or use
+> inside a company or studio. After fifteen launches the app says so once, in the words it means, and offers a place
+> to record a commercial key. **Nothing is gated**: every feature, every model and every build works whether the
+> reminder is dismissed or never seen. There is no phone-home and no company detection — the licence is the
+> enforcement, not the binary. Releases published before this version were MIT and stay MIT.
 > **v0.4.19** stops the Pack tab ignoring jars it cannot parse. Those jars are now identified **by their file
 > name** — `flywheel-1.21.1-1.0.4.jar` gives id `flywheel`, Minecraft `1.21.1`, version `1.0.4` — and matched
 > against the dependencies the updated mod asks for. A name is a guess, so the jar is **decompiled** and the guess

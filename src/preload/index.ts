@@ -180,6 +180,17 @@ const api = {
     install: () => ipcRenderer.invoke('neoforge:install')
   },
 
+  /**
+   * The reminder that this is a solo project, and a record of a commercial licence.
+   * Nothing is gated on it: every feature works either way.
+   */
+  licence: {
+    launch: (opts?: unknown) => ipcRenderer.invoke('licence:launch', opts),
+    dismiss: () => ipcRenderer.invoke('licence:dismiss'),
+    status: () => ipcRenderer.invoke('licence:status'),
+    setKey: (key: string) => ipcRenderer.invoke('licence:setKey', key)
+  },
+
   deps: {
     scan: (opts?: unknown) => ipcRenderer.invoke('deps:scan', opts),
     find: (opts: unknown) => ipcRenderer.invoke('deps:find', opts),
