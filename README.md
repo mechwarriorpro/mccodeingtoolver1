@@ -58,8 +58,16 @@ The full terms are in [LICENSE](LICENSE). The short version: read it, change it,
 for free; the right to use it commercially is reserved, and using it commercially
 without a licence is a licence violation.
 
-After fifteen launches the app shows this once, and offers a field for a commercial
-key. **No feature is locked behind it** — the point is that you know who made it and
+**If you use it commercially without a licence**, §5 sets the retroactive fee:
+**15% of the revenue from that work, or double the commercial licence fee for the
+period — whichever is greater** — payable within 30 days of a written demand, plus
+recovery costs. The 15% is a royalty for traceable income; the doubled fee is what
+applies when revenue is not disclosed, so the amount never depends on the user
+volunteering a number. Paying it does not make the use lawful — it charges for the
+period already used.
+
+After fifteen launches the app shows this once — including what unlicensed
+commercial use costs — and offers a field for a commercial key. **No feature is locked behind it** — the point is that you know who made it and
 what it costs, not that the tool argues with you. There is no account, no phone-home
 and no attempt to work out whether your machine belongs to a company: a company
 using an unlicensed build is a licence question, and the answer is legal, not

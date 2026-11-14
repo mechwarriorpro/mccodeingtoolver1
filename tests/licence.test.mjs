@@ -149,5 +149,34 @@ check('the app never claims to detect a company', () => {
   assert.doesNotMatch(all, /detect|verify your (company|employer)|machine id/)
 })
 
+/* ------------------------------------------- what unlicensed use costs */
+
+check('the unlicensed fee is stated in the app, not only in the licence file', () => {
+  const text = lic.reminderText({ launchCount: 15, key: '', lastNagAt: 0 })
+  assert.match(text.unlicensed.headline, /15%/)
+  assert.match(text.unlicensed.detail, /whichever is greater/i)
+})
+
+check('the fee says it is a cost, never a way to buy permission', () => {
+  // The distinction that keeps the clause enforceable: paying afterwards does not
+  // make the use lawful, or it would be a licence rather than a penalty.
+  const text = lic.reminderText({ launchCount: 15, key: '', lastNagAt: 0 })
+  assert.match(text.unlicensed.basis, /never permitted/i)
+  assert.match(text.unlicensed.basis, /not a way to buy permission/i)
+})
+
+check('the fee has a calculable fallback, so invisible revenue is still chargeable', () => {
+  // 15% of revenue nobody can see is worth nothing; doubling the list price is a
+  // number that exists whether or not the seller ever discloses anything.
+  const text = lic.reminderText({ launchCount: 15, key: '', lastNagAt: 0 })
+  assert.match(text.unlicensed.detail, /double the commercial licence fee/i)
+  assert.match(text.unlicensed.detail, /30 days/i, 'a demand must start a clock')
+})
+
+check('a licensed user is never told the unlicensed fee applies to them', () => {
+  const res = lic.recordLaunch({ launchCount: 99, key: 'MCFAABCDEFGH1234', lastNagAt: 0 })
+  assert.equal(res.showReminder, false)
+})
+
 console.log(`\n${failures.length ? `${failures.length} check(s) failed` : `all ${passed} licence checks passed`}`)
 if (failures.length) process.exit(1)

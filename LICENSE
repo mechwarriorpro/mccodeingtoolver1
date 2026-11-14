@@ -55,20 +55,63 @@ of charge under the conditions below.
    remove or alter this notice in a way that hides the restriction in section 2.
    Distributing a modified copy is permitted only under this same licence.
 
-5. TERMINATION
+5. UNLICENSED COMMERCIAL USE — RETROACTIVE FEE
+
+   Commercial Use without a valid commercial licence (section 2) is not
+   permitted, and this section sets the fee payable for it. It does not grant
+   permission: the use is a breach of this licence while it continues, and
+   paying the fee does not make past use lawful except as stated here.
+
+   5.1  RETROACTIVE LICENCE FEE. For any period of Commercial Use without a
+        licence, the user is liable for a retroactive licence fee payable to the
+        copyright holder, calculated as the greater of:
+
+          (a) FIFTEEN PER CENT (15%) of all revenue earned from the project or
+              activity during that period, as a royalty; or
+
+          (b) the standard commercial licence fee for that period, at DOUBLE the
+              published rate.
+
+        The greater of the two applies, so the 15% royalty is never the only
+        figure: a project with undisclosed or uncertain revenue is still liable
+        for a sum that can be calculated from the price list.
+
+   5.2  WHAT COUNTS AS REVENUE. Revenue includes sales, subscriptions, service
+        fees, server income, donations received as a fee for the output, and
+        advertising or sponsorship income, in each case for the project or
+        activity for which this software was used, before platform and payment
+        processing fees.
+
+   5.3  PAYMENT. The fee is payable within 30 days of written demand by the
+        copyright holder. The copyright holder may also recover reasonable costs
+        of recovery, including legal costs.
+
+   5.4  RECORDS. A user liable under this section must, on written demand,
+        provide a written statement of the revenue on which the fee is
+        calculated, within 30 days. Failing to provide it does not stop the
+        liability; where revenue cannot be established, limb (b) of section 5.1
+        applies.
+
+   5.5  THIS IS NOT A LICENCE. Nothing in this section permits continued
+        Commercial Use. A user who wishes to continue must obtain a commercial
+        licence under section 3. Section 5.1 charges for the period already used.
+
+6. TERMINATION
 
    Any use in breach of this licence terminates your rights under it
    automatically. On termination you must stop using and distributing the
    software. The copyright holder may pursue any remedy available for use without
-   a licence, including for the period before the breach was discovered.
+   a licence, including for the period before the breach was discovered. Payment
+   of a fee under section 5 does not by itself restore the right to use the
+   software.
 
-6. CONTRIBUTIONS
+7. CONTRIBUTIONS
 
    By submitting a contribution you grant the copyright holder a perpetual,
    irrevocable, worldwide, royalty-free right to use, relicense and distribute it.
    This keeps the project able to offer commercial licences.
 
-7. NO WARRANTY
+8. NO WARRANTY
 
    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
@@ -77,7 +120,7 @@ of charge under the conditions below.
    ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
    WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-8. PRIOR VERSIONS
+9. PRIOR VERSIONS
 
    Releases published before this licence took effect were published under the
    MIT Licence and remain available under those terms. Those grants cannot be

@@ -20,7 +20,14 @@ interface Props {
  */
 export default function LicenceReminder({ onClose }: Props): JSX.Element {
   const [state, setState] = useState<{
-    text: { title: string; body: string[]; free: string[]; commercial: string[]; action: string }
+    text: {
+      title: string
+      body: string[]
+      free: string[]
+      commercial: string[]
+      unlicensed: { headline: string; detail: string; basis: string }
+      action: string
+    }
   } | null>(null)
   const [key, setKey] = useState('')
   const [showKey, setShowKey] = useState(false)
@@ -39,6 +46,7 @@ export default function LicenceReminder({ onClose }: Props): JSX.Element {
           body: [res.terms.why, `You have opened it ${res.launches} times, so this is probably worth a moment:`],
           free: [...res.terms.freeFor],
           commercial: [...res.terms.commercialFor],
+          unlicensed: { ...res.terms.unlicensed },
           action: 'Keep building — this is free unless you are making money from it.'
         }
       })
@@ -109,6 +117,14 @@ export default function LicenceReminder({ onClose }: Props): JSX.Element {
               ))}
             </ul>
           </div>
+        </div>
+
+        <div className="card" style={{ marginTop: 10 }}>
+          <b className="small warn">{state.text.unlicensed.headline}</b>
+          <p className="muted small" style={{ marginTop: 4 }}>
+            {state.text.unlicensed.detail}
+          </p>
+          <p className="muted small">{state.text.unlicensed.basis}</p>
         </div>
 
         <p className="small" style={{ marginTop: 8 }}>

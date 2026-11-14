@@ -902,14 +902,28 @@ export interface McfApi {
       activity?: { agentRunning?: boolean; buildRunning?: boolean; downloadRunning?: boolean }
     }) => Promise<{
       showReminder: boolean
-      text: { title: string; body: string[]; free: string[]; commercial: string[]; action: string } | null
+      text: {
+        title: string
+        body: string[]
+        free: string[]
+        commercial: string[]
+        unlicensed: { headline: string; detail: string; basis: string }
+        action: string
+      } | null
       summary: { licensed: boolean; title: string; detail: string }
     }>
     dismiss: () => Promise<{ ok: boolean; summary: { licensed: boolean; title: string; detail: string } }>
     status: () => Promise<{
       summary: { licensed: boolean; title: string; detail: string }
       launches: number
-      terms: { holder: string; freeFor: readonly string[]; commercialFor: readonly string[]; why: string; url: string }
+      terms: {
+        holder: string
+        freeFor: readonly string[]
+        commercialFor: readonly string[]
+        unlicensed: { headline: string; detail: string; basis: string }
+        why: string
+        url: string
+      }
     }>
     setKey: (key: string) => Promise<{ ok: boolean; summary: { licensed: boolean; title: string; detail: string } }>
   }

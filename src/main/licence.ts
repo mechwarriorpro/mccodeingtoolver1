@@ -46,6 +46,20 @@ export const LICENCE_TERMS = {
     'Building for a client as paid work',
     'Using it inside a company, studio or team of any size, whether or not the output is sold'
   ],
+  /**
+   * What unlicensed commercial use costs.
+   *
+   * Stated in the app, not buried in the licence: a fee nobody knows about is a
+   * fee that reads as a trap. `greaterOf` is the honest shape — a revenue royalty
+   * for work with traceable income, and a calculable multiple of list price for
+   * the far more common case where nobody can see the revenue.
+   */
+  unlicensed: {
+    headline: 'Using it commercially without a licence costs 15% of what you made',
+    detail:
+      'The retroactive fee is 15% of revenue from that work, or double the commercial licence fee for the period — whichever is greater — payable within 30 days of a written demand, plus recovery costs.',
+    basis: 'LICENCE §5. Unlicensed use is never permitted; this is what it costs, not a way to buy permission afterwards.'
+  },
   why: [
     'This is one person building in their spare time, not a studio. The tool is free because',
     'hobbyists keep it alive; commercial use is what pays for the hours it takes.'
@@ -123,7 +137,14 @@ export function dismissReminder(state: LicenceState | undefined): LicenceState {
  * The reminder's text, in the order a person reads it: what this is, who pays,
  * what is free, and what to do about it.
  */
-export function reminderText(state: LicenceState | undefined): { title: string; body: string[]; free: string[]; commercial: string[]; action: string } {
+export function reminderText(state: LicenceState | undefined): {
+  title: string
+  body: string[]
+  free: string[]
+  commercial: string[]
+  unlicensed: { headline: string; detail: string; basis: string }
+  action: string
+} {
   const launches = (state ?? DEFAULT_LICENCE_STATE).launchCount
   return {
     title: 'MC Forge Agent is a solo project',
@@ -133,6 +154,7 @@ export function reminderText(state: LicenceState | undefined): { title: string; 
     ],
     free: [...LICENCE_TERMS.freeFor],
     commercial: [...LICENCE_TERMS.commercialFor],
+    unlicensed: { ...LICENCE_TERMS.unlicensed },
     action: 'Keep building — this is free unless you are making money from it.'
   }
 }
