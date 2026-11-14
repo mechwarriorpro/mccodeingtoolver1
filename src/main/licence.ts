@@ -82,7 +82,9 @@ export const LICENCE_TERMS = {
     /** What unlicensed use costs, per §5.1(b): double, minimum one fee. */
     unlicensedMultiple: 2,
     currency: 'AUD',
-    summary: 'AUD $50, once, for 12 months — one person or one business, unlimited projects.',
+    summary: 'AUD $50, once, for 12 months — one solo developer or one server, unlimited projects.',
+    /** The most any combination can be discounted, whatever the seat count. */
+    maxDiscountPercent: 50,
     /** What a year of unlicensed commercial use comes to at the base rate. */
     unlicensedYearAud: 100
   }
@@ -114,6 +116,105 @@ export interface LicenceState {
 }
 
 export const DEFAULT_LICENCE_STATE: LicenceState = { launchCount: 0, key: '', lastNagAt: 0 }
+
+/**
+ * The combination ladder.
+ *
+ * One licence is $50. Buy them together — a team, a server network, a studio with
+ * contractors — and the price per seat falls at 25, 50, 75 and 100 seats, capped at
+ * half price. The cap is not decoration: at 100 seats a licence is $25, and it
+ * never goes below that however many more are bought. A discount with no floor
+ * eventually becomes "ask me", which is the thing this whole structure exists to
+ * avoid.
+ */
+export interface PriceTier {
+  /** Seats from which this per-licence price applies. */
+  minSeats: number
+  /** Discount off the $50 list price, per licence. */
+  discountPercent: number
+}
+
+/**
+ * The combination ladder — a price per licence, in steps.
+ *
+ * ```
+ *   1–24     $50.00                    100+    $25.00  (50% off)
+ *   25–49    $45.00   (10% off)
+ *   50–74    $37.50   (25% off)
+ *   75–99    $30.00   (40% off)
+ * ```
+ *
+ * The 50% cap is the floor: $25 a licence, however many are bought.
+ *
+ * A quantity break means the *total* at a break can be less than the total just
+ * below it — 75 licences at $30 is $2,250 while 74 at $37.50 is $2,775. That is
+ * normal volume pricing and nobody is worse off, because the buyer who wanted 74
+ * can simply order 75 and pay less for more. Trying to remove it makes the
+ * discounts much shallower (4%, 11.8%, 21%, 34% at these thresholds) and never
+ * reaches the half-price cap that is the point of the ladder.
+ */
+export const PRICE_TIERS: PriceTier[] = [
+  { minSeats: 25, discountPercent: 10 },
+  { minSeats: 50, discountPercent: 25 },
+  { minSeats: 75, discountPercent: 40 },
+  { minSeats: 100, discountPercent: 50 }
+]
+
+export interface PriceQuote {
+  seats: number
+  baseAud: number
+  /** Full price before any combination discount. */
+  listAud: number
+  /** What is actually payable. */
+  totalAud: number
+  /** Per-seat price after the discount, to the cent. */
+  perSeatAud: number
+  discountPercent: number
+  /** True when this quantity crossed a break and the total dipped. */
+  atQuantityBreak: boolean
+  tier?: PriceTier
+  /** One line for the UI and for an invoice. */
+  summary: string
+}
+
+/** Money to the cent, without floating-point noise like 44.999999999. */
+function round2(value: number): number {
+  return Math.round(value * 100) / 100
+}
+
+/**
+ * Price a commercial purchase of one or more licences.
+ *
+ * Pure, so the licence file, the README and the app cannot disagree: this is the
+ * single place the ladder is applied.
+ */
+/** The plain arithmetic, with no break-checking — used by the check itself. */
+function tierOf(seats: number, baseAud: number = LICENCE_TERMS.commercial.baseAud): { total: number; discount: number; perSeat: number } {
+  const n = Math.max(1, Math.floor(Number(seats) || 1))
+  const tier = [...PRICE_TIERS].sort((a, b) => b.minSeats - a.minSeats).find((t) => n >= t.minSeats)
+  const discount = Math.min(LICENCE_TERMS.commercial.maxDiscountPercent, tier?.discountPercent ?? 0)
+  const total = round2(n * baseAud * (1 - discount / 100))
+  return { total, discount, perSeat: round2(total / n) }
+}
+
+export function licencePrice(seats: number, baseAud: number = LICENCE_TERMS.commercial.baseAud): PriceQuote {
+  const n = Number.isFinite(seats) ? Math.max(1, Math.floor(Number(seats))) : 1
+  const list = round2(n * baseAud)
+  // Highest tier whose threshold the purchase reaches.
+  const tier = [...PRICE_TIERS].sort((a, b) => b.minSeats - a.minSeats).find((t) => n >= t.minSeats)
+  const discount = Math.min(LICENCE_TERMS.commercial.maxDiscountPercent, tier?.discountPercent ?? 0)
+  const total = round2(list * (1 - discount / 100))
+  const perSeat = round2(total / n)
+  // A break can make this order cheaper than one licence fewer. That is normal
+  // volume pricing, but the invoice looks like a mistake, so it is flagged and
+  // the UI can say "you could order one fewer and pay more".
+  const breakFlag = !!tier && n > 1 && tierOf(n - 1).total > total
+  const summary =
+    discount === 0
+      ? `${n} licence${n === 1 ? '' : 's'} at AUD $${baseAud} — AUD $${total} for 12 months.`
+      : `${n} licences at AUD $${baseAud} each less ${discount}% — AUD $${total}, which is AUD $${perSeat.toFixed(2)} per licence, for 12 months.`
+  return { seats: n, baseAud, listAud: list, totalAud: total, perSeatAud: perSeat, discountPercent: discount, atQuantityBreak: breakFlag, tier, summary }
+}
 
 export interface LaunchResult {
   state: LicenceState
@@ -171,7 +272,8 @@ export function reminderText(state: LicenceState | undefined): {
     body: [
       LICENCE_TERMS.why,
       `You have opened it ${launches} times, so this is probably worth a moment:`,
-      `A commercial licence is ${LICENCE_TERMS.commercial.summary}`
+      `A commercial licence is ${LICENCE_TERMS.commercial.summary}`,
+      'Buying several together is discounted at 25, 50, 75 and 100 licences, up to half price.'
     ],
     free: [...LICENCE_TERMS.freeFor],
     commercial: [...LICENCE_TERMS.commercialFor],

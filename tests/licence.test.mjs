@@ -221,5 +221,123 @@ check('a licensed user is never sold the licence again', () => {
   assert.doesNotMatch(summary.detail, /\$50/)
 })
 
+/* --------------------------------------------------- combinations and tiers */
+
+check('one licence costs the base price, with no discount invented', () => {
+  const q = lic.licencePrice(1)
+  assert.equal(q.totalAud, 50)
+  assert.equal(q.discountPercent, 0)
+  assert.equal(q.tier, undefined)
+})
+
+check('the ladder starts where the user said', () => {
+  // The thresholds are the ones asked for: 25, 50, 75, 100.
+  assert.deepEqual(
+    lic.PRICE_TIERS.map((t) => t.minSeats),
+    [25, 50, 75, 100]
+  )
+})
+
+check('each threshold gets a real reduction, and 100 is half price', () => {
+  const at25 = lic.licencePrice(25)
+  const at50 = lic.licencePrice(50)
+  const at75 = lic.licencePrice(75)
+  const at100 = lic.licencePrice(100)
+  assert.ok(at25.discountPercent > 0, '25 must actually discount')
+  assert.ok(at50.discountPercent > at25.discountPercent)
+  assert.ok(at75.discountPercent > at50.discountPercent)
+  assert.equal(at100.discountPercent, 50, 'the top of the ladder is half price')
+  assert.equal(at100.perSeatAud, 25)
+})
+
+check('the discount is applied to the whole purchase, not bolted on', () => {
+  const q = lic.licencePrice(50)
+  assert.equal(q.listAud, 2500)
+  assert.equal(q.totalAud, 1875, '25% off $2500')
+  assert.equal(q.perSeatAud, 37.5)
+})
+
+check('a quantity break is flagged, because the invoice drops at one', () => {
+  // 75 at $30 is $2250 while 74 at $37.50 is $2775. That is normal volume
+  // pricing — the buyer wanting 74 can order 75 and pay less — but the number
+  // falling between two orders looks like a mistake, so it is labelled.
+  assert.equal(lic.licencePrice(75).atQuantityBreak, true)
+  assert.equal(lic.licencePrice(76).atQuantityBreak, false)
+  assert.equal(lic.licencePrice(25).atQuantityBreak, true)
+  assert.equal(lic.licencePrice(24).atQuantityBreak, false)
+  assert.ok(lic.licencePrice(75).totalAud < lic.licencePrice(74).totalAud, 'the break is real')
+})
+
+check('per-licence price never rises as more are bought', () => {
+  // The property that actually matters to a buyer comparing orders.
+  let previous = Infinity
+  for (let seats = 1; seats <= 260; seats++) {
+    const per = lic.licencePrice(seats).perSeatAud
+    assert.ok(per <= previous + 0.01, `${seats} licences cost $${per} each, more than ${seats - 1}`)
+    previous = per
+  }
+})
+
+check('the cap cannot be exceeded however many are bought', () => {
+  for (const seats of [100, 500, 10000]) {
+    const q = lic.licencePrice(seats)
+    assert.ok(q.discountPercent <= 50, `${seats} seats got ${q.discountPercent}%`)
+    assert.ok(q.perSeatAud >= 25, `${seats} seats fell to $${q.perSeatAud} each`)
+  }
+})
+
+check('a quantity just below a threshold gets the lower rate, not the higher one', () => {
+  // The boundary bug that costs someone a customer: 24 must not get the 25 price.
+  assert.equal(lic.licencePrice(24).discountPercent, 0)
+  assert.equal(lic.licencePrice(25).discountPercent, 10)
+  assert.equal(lic.licencePrice(99).discountPercent, lic.PRICE_TIERS[2].discountPercent)
+  assert.equal(lic.licencePrice(100).discountPercent, 50)
+})
+
+check('a nonsense quantity is treated as one licence, not as free', () => {
+  for (const bad of [0, -5, Number.NaN, undefined]) {
+    const q = lic.licencePrice(bad)
+    assert.equal(q.seats, 1)
+    assert.equal(q.totalAud, 50)
+  }
+})
+
+check('money comes out to the cent, with no floating-point noise', () => {
+  const q = lic.licencePrice(3)
+  assert.equal(q.totalAud, 150)
+  assert.match(q.summary, /\$150/)
+  assert.doesNotMatch(q.summary, /\d\.\d{6,}/)
+})
+
+check('the quote reads as something a person can be sent', () => {
+  const single = lic.licencePrice(1).summary
+  assert.match(single, /AUD \$50/)
+  assert.match(single, /12 months/)
+  const team = lic.licencePrice(50).summary
+  assert.match(team, /25%/)
+  assert.match(team, /AUD \$1875/)
+  assert.match(team, /per licence/i)
+})
+
+check('the licence file and the ladder agree at every threshold', () => {
+  // A discount in the app that is absent from the terms is unenforceable.
+  const text = fs.readFileSync(path.join(process.cwd(), 'LICENSE'), 'utf8')
+  for (const q of [lic.licencePrice(25), lic.licencePrice(50), lic.licencePrice(75), lic.licencePrice(100)]) {
+    assert.ok(text.includes(`${q.seats}`), `LICENSE must mention the ${q.seats} threshold`)
+    assert.ok(text.includes(`$${q.perSeatAud}`), `LICENSE must state $${q.perSeatAud} per licence at ${q.seats}`)
+  }
+  assert.match(text, /maximum discount is 50%/i)
+  assert.match(text, /one solo developer/i)
+  assert.match(text, /one server/i)
+})
+
+check('unlicensed use is charged at the single-licence rate, never the combo rate', () => {
+  // Otherwise a company could take the 50% discount by breaching the licence.
+  const text = fs.readFileSync(path.join(process.cwd(), 'LICENSE'), 'utf8')
+  assert.match(text, /NOT the discounted combination rate/i)
+  const detail = lic.reminderText({ launchCount: 15, key: '', lastNagAt: 0 }).unlicensed.detail
+  assert.match(detail, /\$100/)
+})
+
 console.log(`\n${failures.length ? `${failures.length} check(s) failed` : `all ${passed} licence checks passed`}`)
 if (failures.length) process.exit(1)

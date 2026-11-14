@@ -54,10 +54,33 @@ setup and API key.
 | Selling what you build with it, or paid work for a client | **AUD $50 / year** |
 | Inside a company, studio or team of any size | **AUD $50 / year** |
 
-The commercial licence is **AUD $50, once, for 12 months** — one person or one
-business, unlimited projects, any revenue level, no royalty. Open an issue on this
-repo or message ShadowClanGaming to get one. Renewal after the 12 months is at the
-then-current rate.
+The commercial licence is **AUD $50, once, for 12 months**, and one licence covers
+**either one solo developer or one server**:
+
+| | |
+|---|---|
+| **One solo developer** | A single individual doing paid work — unlimited projects, no royalty |
+| **One server** | A single Minecraft server, network or hosting operation, however many people work on it internally |
+
+A business with two or more paid developers, or someone running two or more
+servers, needs one licence per person or per server.
+
+**Buying several together is discounted:**
+
+| Licences | Discount | Per licence |
+|---|---|---|
+| 1–24 | none | $50.00 |
+| 25–49 | 10% | $45.00 |
+| 50–74 | 25% | $37.50 |
+| 75–99 | 40% | $30.00 |
+| 100+ | **50%** | $25.00 |
+
+Half price is the floor — it never goes below $25 a licence. Ordering more is
+never worse: at a quantity break the total can fall below a smaller order (75
+licences cost less than 74), and you are free to order the larger quantity.
+
+Open an issue on this repo or message ShadowClanGaming to get one. Renewal after
+12 months is at the then-current rate.
 
 The full terms are in [LICENSE](LICENSE). The short version: read it, change it, use it
 for free; the right to use it commercially is reserved, and using it commercially

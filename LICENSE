@@ -45,8 +45,19 @@ of charge under the conditions below.
 3. COMMERCIAL LICENCE AND PRICE
 
    A commercial licence is available for a base fee of AUD $50 (fifty Australian
-   dollars), payable once, per licensee. It covers one person or one business
-   entity and any number of projects by that licensee.
+   dollars), payable once, per licensee, for a term under section 3.1.
+
+   ONE LICENCE COVERS EITHER:
+
+     (a) ONE SOLO DEVELOPER — a single individual doing paid work, on any number
+         of projects, with no revenue share owed on those projects; or
+
+     (b) ONE SERVER — a single Minecraft server, network or hosting operation,
+         however many people work on it internally, provided the software is not
+         resold or sublicensed to third parties.
+
+   A business with two or more paid developers, or someone operating two or more
+   servers, needs one licence per person or per server respectively.
 
    Obtain one by opening an issue at
    https://github.com/mechwarriorpro/mccodeingtoolver1/issues
@@ -61,15 +72,33 @@ of charge under the conditions below.
         share, no per-seat charge and no royalty on projects covered by a valid
         licence.
 
-   3.3  TEAMS AND RESALE. The base fee covers one person. Additional people within
-        the same business may be added at the published rate. A licensee may not
-        resell, sublicense or redistribute this software to third parties as a
-        commercial offering of their own; that needs a separate agreement.
+   3.3  COMBINATIONS AND VOLUME PRICING. Licences bought together are priced as
+        follows, applied to the total number of licences in the purchase:
 
-   3.4  GST. The price is in Australian dollars. If GST applies to the licensee, it
+          | Licences | Discount | Price per licence |
+          |----------|----------|-------------------|
+          | 1–24     | none     | AUD $50.00        |
+          | 25–49    | 10%      | AUD $45.00        |
+          | 50–74    | 25%      | AUD $37.50        |
+          | 75–99    | 40%      | AUD $30.00        |
+          | 100+     | 50%      | AUD $25.00        |
+
+        The price is per licence, so the total at a quantity break is less than
+        the total just below it — seventy-five licences at $30 cost less than
+        seventy-four at $37.50. Where that happens, ordering the higher quantity
+        is permitted and cheaper.
+
+        The maximum discount is 50%. The price never falls below AUD $25 per
+        licence, whatever quantity is bought.
+
+   3.4  RESALE. A licensee may not resell, sublicense or redistribute this software
+        to third parties as a commercial offering of their own; that needs a
+        separate written agreement.
+
+   3.5  GST. The price is in Australian dollars. If GST applies to the licensee, it
         is charged in addition.
 
-   3.5  PRICE CHANGES. The published rate applies to licences issued after a change
+   3.6  PRICE CHANGES. The published rate applies to licences issued after a change
         is announced. A licence already issued runs to the end of its term at the
         rate that was paid.
 
@@ -93,15 +122,20 @@ of charge under the conditions below.
           (a) FIFTEEN PER CENT (15%) of all revenue earned from the project or
               activity during that period, as a royalty; or
 
-          (b) the base commercial fee under section 3 (AUD $50), pro-rated for the
-              period of unlicensed use and charged at DOUBLE that rate, with a
-              minimum of ONE base fee.
+          (b) the base commercial fee under section 3 (AUD $50 per licence, at the
+              single-licence rate and NOT the discounted combination rate),
+              pro-rated for the period of unlicensed use and charged at DOUBLE that
+              rate, with a minimum of ONE base fee. Where the unlicensed use covers
+              several developers or servers, one licence per person or server is
+              counted.
 
         The greater of the two applies, so the 15% royalty is never the only
         figure: a project with undisclosed or uncertain revenue is still liable
         for a sum that can be calculated from the price list. Worked at the base
-        rate, a year of unlicensed use is AUD $100 (double the annual fee); a
-        quarter is a quarter of that, with the minimum applying.
+        rate, a year of unlicensed use by one developer or server is AUD $100
+        (double the annual fee); a quarter is a quarter of that, with the minimum
+        applying. Unlicensed use is charged at the single-licence rate, so the
+        combination discount can never be used to make a breach cheaper.
 
    5.2  WHAT COUNTS AS REVENUE. Revenue includes sales, subscriptions, service
         fees, server income, donations received as a fee for the output, and
