@@ -7,6 +7,8 @@
  * the tool is a nag, too passive and the licence is invisible.
  */
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
 
 let passed = 0
 const failures = []
@@ -169,13 +171,54 @@ check('the fee has a calculable fallback, so invisible revenue is still chargeab
   // 15% of revenue nobody can see is worth nothing; doubling the list price is a
   // number that exists whether or not the seller ever discloses anything.
   const text = lic.reminderText({ launchCount: 15, key: '', lastNagAt: 0 })
-  assert.match(text.unlicensed.detail, /double the commercial licence fee/i)
+  assert.match(text.unlicensed.detail, /double the licence fee/i)
   assert.match(text.unlicensed.detail, /30 days/i, 'a demand must start a clock')
 })
 
 check('a licensed user is never told the unlicensed fee applies to them', () => {
   const res = lic.recordLaunch({ launchCount: 99, key: 'MCFAABCDEFGH1234', lastNagAt: 0 })
   assert.equal(res.showReminder, false)
+})
+
+/* --------------------------------------------------------------- the price */
+
+check('the price is stated as a number, not a negotiation', () => {
+  const text = lic.reminderText({ launchCount: 15, key: '', lastNagAt: 0 })
+  const all = text.body.join(' ')
+  assert.match(all, /\$50/, 'a reminder that does not say the price loses the people who would pay')
+  assert.match(all, /12 months/i)
+})
+
+check('an unlicensed user is told the price too, not just referred to the licence', () => {
+  const summary = lic.licenceSummary({ launchCount: 20, key: '', lastNagAt: 0 })
+  assert.match(summary.detail, /\$50/)
+})
+
+check('the licence file and the app agree on the price', () => {
+  // The one thing that must not drift: a price in the app and a different price
+  // in LICENSE is a contract argument nobody wins.
+  const text = fs.readFileSync(path.join(process.cwd(), 'LICENSE'), 'utf8')
+  assert.match(text, /AUD \$50/, 'LICENSE must name the base fee')
+  const base = lic.LICENCE_TERMS.commercial.baseAud
+  assert.equal(base, 50)
+  assert.ok(text.includes(`$${base}`), 'the same figure must appear in both')
+  assert.equal(lic.LICENCE_TERMS.commercial.termMonths, 12)
+  assert.match(text, /TWELVE MONTHS/i, 'the term must be in the licence, not just the app')
+})
+
+check('unlicensed commercial use costs double the fee, and says so', () => {
+  const base = lic.LICENCE_TERMS.commercial.baseAud
+  const multiple = lic.LICENCE_TERMS.commercial.unlicensedMultiple
+  assert.equal(multiple, 2)
+  assert.equal(base * multiple, lic.LICENCE_TERMS.commercial.unlicensedYearAud)
+  const text = lic.reminderText({ launchCount: 15, key: '', lastNagAt: 0 })
+  assert.match(text.unlicensed.detail, /\$100/)
+})
+
+check('a licensed user is never sold the licence again', () => {
+  const summary = lic.licenceSummary({ launchCount: 40, key: 'MCFAABCDEFGH1234', lastNagAt: 0 })
+  assert.equal(summary.licensed, true)
+  assert.doesNotMatch(summary.detail, /\$50/)
 })
 
 console.log(`\n${failures.length ? `${failures.length} check(s) failed` : `all ${passed} licence checks passed`}`)

@@ -42,12 +42,36 @@ of charge under the conditions below.
    You may not engage in Commercial Use without a valid commercial licence
    granted in writing by the copyright holder.
 
-3. HOW TO OBTAIN A COMMERCIAL LICENCE
+3. COMMERCIAL LICENCE AND PRICE
 
-   Ask: open an issue at
+   A commercial licence is available for a base fee of AUD $50 (fifty Australian
+   dollars), payable once, per licensee. It covers one person or one business
+   entity and any number of projects by that licensee.
+
+   Obtain one by opening an issue at
    https://github.com/mechwarriorpro/mccodeingtoolver1/issues
-   or contact ShadowClanGaming through GitHub. Terms and pricing are set per case,
-   because a solo contractor and a studio are not the same thing.
+   or contacting ShadowClanGaming through GitHub.
+
+   3.1  PERIOD. The base fee covers a term of TWELVE MONTHS from the date the
+        licence is issued. Continued Commercial Use after the term expires needs a
+        renewal at the then-current rate.
+
+   3.2  WHAT THE BASE FEE COVERS. Use by one licensee, on any number of machines,
+        for any number of projects, with any revenue level. There is no revenue
+        share, no per-seat charge and no royalty on projects covered by a valid
+        licence.
+
+   3.3  TEAMS AND RESALE. The base fee covers one person. Additional people within
+        the same business may be added at the published rate. A licensee may not
+        resell, sublicense or redistribute this software to third parties as a
+        commercial offering of their own; that needs a separate agreement.
+
+   3.4  GST. The price is in Australian dollars. If GST applies to the licensee, it
+        is charged in addition.
+
+   3.5  PRICE CHANGES. The published rate applies to licences issued after a change
+        is announced. A licence already issued runs to the end of its term at the
+        rate that was paid.
 
 4. NO RE-LICENSING
 
@@ -69,12 +93,15 @@ of charge under the conditions below.
           (a) FIFTEEN PER CENT (15%) of all revenue earned from the project or
               activity during that period, as a royalty; or
 
-          (b) the standard commercial licence fee for that period, at DOUBLE the
-              published rate.
+          (b) the base commercial fee under section 3 (AUD $50), pro-rated for the
+              period of unlicensed use and charged at DOUBLE that rate, with a
+              minimum of ONE base fee.
 
         The greater of the two applies, so the 15% royalty is never the only
         figure: a project with undisclosed or uncertain revenue is still liable
-        for a sum that can be calculated from the price list.
+        for a sum that can be calculated from the price list. Worked at the base
+        rate, a year of unlicensed use is AUD $100 (double the annual fee); a
+        quarter is a quarter of that, with the minimum applying.
 
    5.2  WHAT COUNTS AS REVENUE. Revenue includes sales, subscriptions, service
         fees, server income, donations received as a fee for the output, and

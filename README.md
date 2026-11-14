@@ -51,16 +51,21 @@ setup and API key.
 | Building your own mods, however many hours you put in | **Free** |
 | Mods, packs or servers that make no money at all | **Free** |
 | Non-profit, school or charity work | **Free** |
-| Selling what you build with it, or paid work for a client | **Commercial licence** |
-| Inside a company, studio or team of any size | **Commercial licence** |
+| Selling what you build with it, or paid work for a client | **AUD $50 / year** |
+| Inside a company, studio or team of any size | **AUD $50 / year** |
+
+The commercial licence is **AUD $50, once, for 12 months** — one person or one
+business, unlimited projects, any revenue level, no royalty. Open an issue on this
+repo or message ShadowClanGaming to get one. Renewal after the 12 months is at the
+then-current rate.
 
 The full terms are in [LICENSE](LICENSE). The short version: read it, change it, use it
 for free; the right to use it commercially is reserved, and using it commercially
 without a licence is a licence violation.
 
 **If you use it commercially without a licence**, §5 sets the retroactive fee:
-**15% of the revenue from that work, or double the commercial licence fee for the
-period — whichever is greater** — payable within 30 days of a written demand, plus
+**15% of the revenue from that work, or double the licence fee for the period —
+whichever is greater** (at $50, a year unlicensed is $100) — payable within 30 days of a written demand, plus
 recovery costs. The 15% is a royalty for traceable income; the doubled fee is what
 applies when revenue is not disclosed, so the amount never depends on the user
 volunteering a number. Paying it does not make the use lawful — it charges for the

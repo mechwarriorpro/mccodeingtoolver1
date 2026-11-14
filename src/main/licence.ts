@@ -57,7 +57,7 @@ export const LICENCE_TERMS = {
   unlicensed: {
     headline: 'Using it commercially without a licence costs 15% of what you made',
     detail:
-      'The retroactive fee is 15% of revenue from that work, or double the commercial licence fee for the period — whichever is greater — payable within 30 days of a written demand, plus recovery costs.',
+      'The retroactive fee is 15% of revenue from that work, or double the licence fee for the period (at $50 that is $100 for a year) — whichever is greater — payable within 30 days of a written demand, plus recovery costs.',
     basis: 'LICENCE §5. Unlicensed use is never permitted; this is what it costs, not a way to buy permission afterwards.'
   },
   why: [
@@ -65,7 +65,27 @@ export const LICENCE_TERMS = {
     'hobbyists keep it alive; commercial use is what pays for the hours it takes.'
   ].join(' '),
   /** Where the commercial licence is bought. */
-  url: 'https://github.com/mechwarriorpro/mccodeingtoolver1#licence'
+  url: 'https://github.com/mechwarriorpro/mccodeingtoolver1#licence',
+
+  /**
+   * The commercial licence, stated as a price rather than a negotiation.
+   *
+   * A reminder that says "buy a licence" without saying how much loses exactly
+   * the people who would have paid. Named in the licence file too, so the app and
+   * the terms cannot drift apart.
+   */
+  commercial: {
+    /** Base fee, in Australian dollars. */
+    baseAud: 50,
+    /** What one fee covers. */
+    termMonths: 12,
+    /** What unlicensed use costs, per §5.1(b): double, minimum one fee. */
+    unlicensedMultiple: 2,
+    currency: 'AUD',
+    summary: 'AUD $50, once, for 12 months — one person or one business, unlimited projects.',
+    /** What a year of unlicensed commercial use comes to at the base rate. */
+    unlicensedYearAud: 100
+  }
 } as const
 
 /**
@@ -150,7 +170,8 @@ export function reminderText(state: LicenceState | undefined): {
     title: 'MC Forge Agent is a solo project',
     body: [
       LICENCE_TERMS.why,
-      `You have opened it ${launches} times, so this is probably worth a moment:`
+      `You have opened it ${launches} times, so this is probably worth a moment:`,
+      `A commercial licence is ${LICENCE_TERMS.commercial.summary}`
     ],
     free: [...LICENCE_TERMS.freeFor],
     commercial: [...LICENCE_TERMS.commercialFor],
@@ -197,7 +218,7 @@ export function licenceSummary(state: LicenceState | undefined): { licensed: boo
   return {
     licensed: false,
     title: 'Free for solo and non-commercial use',
-    detail: `${LICENCE_TERMS.why} Commercial use needs a licence: ${LICENCE_TERMS.url}`
+    detail: `${LICENCE_TERMS.why} Commercial use needs a licence: ${LICENCE_TERMS.commercial.summary} ${LICENCE_TERMS.url}`
   }
 }
 

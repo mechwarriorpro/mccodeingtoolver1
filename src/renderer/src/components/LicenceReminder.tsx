@@ -134,7 +134,7 @@ export default function LicenceReminder({ onClose }: Props): JSX.Element {
         {showKey ? (
           <div style={{ marginTop: 10 }}>
             <label className="muted small" htmlFor="licence-key">
-              Commercial licence key
+              Commercial licence key — {`AUD $50 for 12 months`}
             </label>
             <div className="row" style={{ marginTop: 4 }}>
               <input
