@@ -134,13 +134,23 @@ const failures = []
 for (const t of tests) {
   console.log(`\n=== ${t} ===`)
   try {
-    // stdio:'inherit' keeps the child's own ::error annotations intact for Actions.
-    execFileSync(process.execPath, [path.join(root, 'tests', t)], { stdio: 'inherit', cwd: root })
+    /*
+     * Capture the child's output and echo it, rather than inheriting stdio.
+     *
+     * With `stdio: 'inherit'` the output goes straight to the console and
+     * `e.stdout`/`e.stderr` are null, so every failure was reported as the
+     * useless "Command failed: node …" with no assertion text. The child's own
+     * `::error` lines are preserved by echoing them, so Actions still sees them.
+     */
+    const out = execFileSync(process.execPath, [path.join(root, 'tests', t)], { cwd: root, encoding: 'utf8' })
+    process.stdout.write(out)
   } catch (e) {
     failed++
+    const captured = `${e.stdout ?? ''}${e.stderr ?? ''}`
+    if (captured) process.stdout.write(captured)
     // Actions log downloads are unreliable behind proxies, but annotations and the
     // step summary always come through, so report there too.
-    const out = `${e.stdout ?? ''}${e.stderr ?? ''}`
+    const out = captured
     // Keep the assertion lines and the indented detail lines that follow them.
     const all = out.split(/\r?\n/).map((l) => l.replace(/\r/g, ''))
     const picked = []
