@@ -2,6 +2,7 @@ import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk'
 import { z } from 'zod'
 import fs from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
 import { loadConfig, effectiveApiKey, effectiveBaseUrl } from '../config'
 import { runLocalBuild } from '../build/gradle'
 import { readProps } from '../mod/props'
@@ -22,6 +23,8 @@ import { authToken } from '../github/oauth'
 import { gitSummary } from '../build/gradle'
 import { assetLayout, blockstateJson } from '../mod/assets'
 import { detectLoader, detectMcVersion } from './engine'
+import { apiConcepts, apiReference } from '../mod/api-reference'
+import { findExistingSources, locateClass, readBuildGradle, sourceTaskFor, unpackSources } from '../mod/game-sources'
 import { rendererGuidance, rendererSupport, realismVerdict } from '../mod/renderer'
 import { USE_CASES, catalogueFor, compatibilityNotes, recommend, type UseCase } from '../mod/shader-stack'
 import { PATTERNS, PALETTES, texturePathFor, texturePng } from '../mod/textures'
@@ -383,6 +386,135 @@ export function createAgentTools(ctx: ToolContext) {
           loaderVersion: props.neo_version ?? '21.1.265'
         })
         return res.ok ? text(`Wrote ${res.zip}`) : err(res.error ?? 'export failed')
+      }
+    ),
+
+    /**
+     * The base classes, per version and loader.
+     *
+     * Models are confident and wrong about these: `World` vs `Level`, `Block`'s
+     * package, `getOrCreateTag()` on 1.20.5+. A table beats a guess, and it costs
+     * one tool call instead of a build cycle.
+     */
+    tool(
+      'api_reference',
+      'Look up the base Minecraft/loader class names for this project version — Block, Level, Player, TileEntity/BlockEntity, registration, NBT/data components, and the loader entry points. Use it before writing an import you are not certain about.',
+      {
+        query: z.string().optional().describe('Concept to look up, e.g. "block", "nbt", "network", "tile entity". Omit for the whole table.'),
+        mcVersion: z.string().optional().describe('Minecraft version; defaults to the project\'s'),
+        loader: z.enum(['neoforge', 'forge', 'fabric']).optional()
+      },
+      async ({ query, mcVersion, loader }) => {
+        const cfg = loadConfig()
+        const dir = ctx.getWorkspace()
+        const props = dir ? readProps(path.join(dir, 'gradle.properties')) : {}
+        const mc = mcVersion ?? detectMcVersion(props) ?? '1.21.1'
+        const ld = loader ?? (detectLoader(props) as 'neoforge' | 'forge' | 'fabric') ?? 'neoforge'
+        const res = apiReference({ query, mcVersion: mc, loader: ld })
+        return text(res.text)
+      }
+    ),
+
+    tool(
+      'list_api_concepts',
+      'What api_reference knows about: the concept names you can look up.',
+      {},
+      async () => text(apiConcepts().join('\n'))
+    ),
+
+    /**
+     * Read the real game classes.
+     *
+     * `genSources` asks Gradle to download and unpack the loader's sources jar
+     * into the project, which is the only way to read a method signature that is
+     * actually true for this version. It is slow once, then instant.
+     */
+    tool(
+      'decompile_api',
+      'Put the real Minecraft and loader sources on disk so you can Read and Grep the actual classes. Run it when api_reference is not enough and a signature has to be exactly right. It looks for a sources jar that is already there first; only if none exists does it ask Gradle to make one.',
+      {
+        className: z.string().optional().describe('Optional class to locate afterwards, e.g. "net.minecraft.world.level.Level" or "Block"')
+      },
+      async ({ className }) => {
+        const cfg = loadConfig()
+        const dir = ctx.getWorkspace()
+        if (!dir) return err('No project folder is open.')
+        const props = readProps(path.join(dir, 'gradle.properties'))
+        const loader = detectLoader(props)
+        const mc = detectMcVersion(props)
+
+        // 1. Already on disk? Nothing to run, and no way to break the project.
+        const gradleHome = process.env.GRADLE_USER_HOME || path.join(os.homedir(), '.gradle')
+        let sources = findExistingSources(dir, gradleHome)
+        let note = ''
+
+        // 2. Otherwise ask the toolchain — but only for a task that exists.
+        if (!sources.length) {
+          const task = sourceTaskFor(loader, readBuildGradle(dir))
+          if (!task) {
+            const ran = await runLocalBuild({
+              workspaceDir: dir,
+              mode: 'local',
+              javaPath: cfg.javaPath,
+              preferWrapper: cfg.preferWrapper,
+              task: 'build',
+              onLine: () => undefined
+            })
+            if (!ran.ok) {
+              return err(
+                `This ${loader} project has no separate decompile task — the sources jar appears as a side effect of building — and the build did not get far enough to make one (${ran.errors.slice(0, 2).join('; ') || 'see the build log'}). ` +
+                  `Fix the build first, then call this again. Until then use api_reference.`
+              )
+            }
+            note = `A ${loader} build does not have a decompile task of its own, so a normal build was run and it produces the sources jar as part of the work. `
+            sources = findExistingSources(dir, gradleHome)
+          } else {
+            const ran = await runLocalBuild({
+              workspaceDir: dir,
+              mode: 'local',
+              javaPath: cfg.javaPath,
+              preferWrapper: cfg.preferWrapper,
+              task: task as 'genSources',
+              onLine: () => undefined
+            })
+            if (!ran.ok) {
+              return err(
+                `\`${task}\` failed (${ran.errors.slice(0, 2).join('; ') || 'see the build log'}). ` +
+                  `Use api_reference meanwhile, and say that the sources could not be generated rather than guessing at a signature.`
+              )
+            }
+            note = `Ran \`${task}\`. `
+            sources = findExistingSources(dir, gradleHome)
+          }
+        }
+
+        if (!sources.length) {
+          return err(
+            `The command finished but no sources jar turned up in \`build/moddev/artifacts\`, \`build/neoform\`, or the Gradle cache. ` +
+              `Some setups never produce one. Use api_reference for names, and say plainly that the sources are unavailable instead of inventing a signature.`
+          )
+        }
+
+        const jar = sources[0]
+        const unpacked = unpackSources(jar.file, dir, mc.replace(/[^0-9a-zA-Z._-]/g, '_'))
+        if (!unpacked.ok) {
+          return err(`Found \`${path.basename(jar.file)}\` but could not unpack it: ${unpacked.error}`)
+        }
+
+        const lines = [
+          `${note}Unpacked ${unpacked.files} Minecraft source files from \`${path.basename(jar.file)}\` (${jar.origin}) into \`reference/minecraft-${mc}/\`, which is git-ignored and not compiled.`
+        ]
+        if (className) {
+          const hit = locateClass(unpacked.dir!, className)
+          lines.push(
+            hit
+              ? `\`${className}\` is at \`${path.relative(dir, hit).split(path.sep).join('/')}\` — read it before writing the import.`
+              : `\`${className}\` was not found by that name. Search instead: \`search_reference\` with the simple name, or Grep \`reference/minecraft-${mc}/\`. The name may be from a different era — check api_reference.`
+          )
+        } else {
+          lines.push('Read or Grep under that folder for the exact class. State what the source says rather than recalling it.')
+        }
+        return text(lines.join('\n\n'))
       }
     ),
 

@@ -80,6 +80,9 @@ You have Claude Code's normal file tools (Read/Write/Edit/Glob/Grep/LS) plus app
 - \`mcp__mcfrogeagent__read_log\` — read the full \`run/logs/latest.log\` or a crash report.
 - \`mcp__mcfrogeagent__capture_clip\` — record up to 30 s of gameplay as frames and analyse it with a vision model. Use it for anything that only shows up over time (animations, mob behaviour, a crash after a few seconds, particles).
 - \`mcp__mcfrogeagent__stop_clip\` / \`list_clips\` / \`clip_report\` — stop the current clip, list past clips, and read one clip's analysis as text.
+- \`mcp__mcfrogeagent__api_reference\` — the base class names for **this** Minecraft version and loader: Block, Level, Player, TileEntity/BlockEntity, registration, NBT vs data components, and the loader's entry points. **Call it before writing an import you are not certain of** — the names moved between versions and memory is unreliable.
+- \`mcp__mcfrogeagent__list_api_concepts\` — what \`api_reference\` can look up.
+- \`mcp__mcfrogeagent__decompile_api\` — put the real Minecraft/loader sources on disk under \`reference/minecraft-<version>/\` so you can Read and Grep the actual base classes. It finds the sources jar your toolchain already made; only if there is none does it run the one Gradle task that exists for that toolchain. Use it when the answer has to be exactly right, and pass the class name to be told the file path.
 - \`mcp__mcfrogeagent__recall_mistakes\` — check whether an error you are looking at has happened before, with the fix that worked. **Call it before debugging a build or runtime failure from scratch.**
 - \`mcp__mcfrogeagent__remember_fix\` — record an error and the fix that actually worked, so it is recognised next time. Call it once the fix is verified.
 - \`mcp__mcfrogeagent__list_mistakes\` — the lessons the app has learned so far.
@@ -138,6 +141,21 @@ in the project root that says which one). When the workspace is a fork:
   licence that does not allow it; check \`FORK.md\` for the licence text that was recorded.
 - Build and run it like any other project (the generated build files match the fork's own loader
   and Minecraft version).
+
+# Never guess a base class
+
+Minecraft's own class names changed at every era, and a confident wrong import costs a build cycle:
+
+- \`World\` → \`Level\` (1.17+), \`EntityPlayer\` → \`PlayerEntity\` → \`Player\`, \`net.minecraft.block.Block\` → \`net.minecraft.world.level.block.Block\` (1.17+).
+- \`ItemStack.getOrCreateTag()\` does not exist on 1.20.5+ — that is data components now.
+- \`RegistryEvent\` was removed in 1.19.3; \`SimpleChannel\` is gone in NeoForge 1.20.6+.
+
+When you are about to write an import, a registry call or an event signature you are not **certain** of, do this in order:
+
+1. \`api_reference\` for this version and loader — it is a table, and it is fast.
+2. \`search_reference\` across the decompiled reference mods, if any are loaded.
+3. \`decompile_api\` and read the real class. Note that \`genSources\` is a **Fabric** task — on NeoForge and Forge it does not exist, so do not try to run it by hand on those projects; the tool knows which task applies.
+4. Only then write it. If none of those answered, say you are unsure and ask, rather than inventing a plausible signature.
 
 # The loop you should follow
 

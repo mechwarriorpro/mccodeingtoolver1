@@ -17,7 +17,12 @@ export interface BuildOptions {
   javaPath?: string
   preferWrapper?: boolean
   /** 'build' (jar) or 'compileJava' (fast sanity check) */
-  task?: 'build' | 'compileJava' | 'runData'
+  /**
+   * `genSources` is how the agent gets the real game classes: NeoForge, Forge and
+   * Fabric all ship a sources jar that Gradle can unpack into the project, and
+   * reading a decompiled `Block.java` beats guessing at its signature every time.
+   */
+  task?: 'build' | 'compileJava' | 'runData' | 'genSources'
   onLine: (line: string) => void
   signal?: AbortSignal
 }

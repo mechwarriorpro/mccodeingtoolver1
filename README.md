@@ -152,6 +152,16 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.5.6** teaches the agent which class is which. It now knows that `World` became `Level`, that
+> `net.minecraft.block.Block` moved to `net.minecraft.world.level.block.Block`, that `getOrCreateTag()` no
+> longer exists on 1.20.5+, that `RegistryEvent` went away in 1.19.3 — and it has three new tools so it can
+> check instead of recall: `api_reference` (a table of the real base class for **your** Minecraft version and
+> loader), `list_api_concepts`, and `decompile_api`, which puts the actual Minecraft and loader sources on
+> disk to be read and searched — it finds the sources jar the toolchain already produced rather than assuming
+> a task name, because `genSources` is a **Fabric** task and NeoForge's ModDevGradle does not have one (it
+> writes `build/moddev/artifacts/…-sources.jar`). The prompt now tells it to look the name up **before**
+> writing an import it is not sure of, and to say when it does not know rather than inventing a signature
+> that looks right.
 > **v0.5.5** stops the agent giving up when a run ends without finishing. Reaching the turn limit used to
 > print **"Run failed."** and go idle in the middle of a build — nothing had failed, the run had simply used its
 > 120 turns. A cut-short run is now recognised for what it is and **continues where it left off**, up to three
@@ -435,6 +445,25 @@ jar* at CFR or another decompiler to use that instead.
 
 Decompiled code belongs to whoever wrote it — check the licence shown next to each reference before
 copying more than an API shape.
+
+### Base classes: the names changed, and the agent now knows it
+
+Minecraft renames its own classes between eras, and a wrong import is a failed build:
+
+| Old | 1.17+ |
+|---|---|
+| `net.minecraft.world.World` | `net.minecraft.world.level.Level` |
+| `net.minecraft.block.Block` | `net.minecraft.world.level.block.Block` |
+| `EntityPlayer` → `PlayerEntity` | `net.minecraft.world.entity.player.Player` |
+| `TileEntity` | `BlockEntity` |
+| `ItemStack.getOrCreateTag()` (gone 1.20.5+) | `DataComponents.CUSTOM_DATA` |
+| `RegistryEvent` (removed 1.19.3) | `RegisterEvent` / `DeferredRegister` |
+
+`api_reference` answers for the project's actual version and loader — the class, the package, and the
+loader's entry point, metadata file and registration call — and it says plainly when a concept **does not
+exist yet** in that era (there is no `DeferredRegister` on 1.12.2). It is a table of names, not a promise about
+signatures: if a signature has to be exactly right, `decompile_api` unpacks the real sources into
+`reference/minecraft-<version>/` — git-ignored, not compiled — and tells you the file the class is in.
 
 ---
 
