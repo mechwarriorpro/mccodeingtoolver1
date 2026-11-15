@@ -499,7 +499,31 @@ check('env_report is readable and flags what is missing', () => {
   assert.match(env.text, /java|JDK|git|gh/i)
 })
 
-fs.rmSync(root, { recursive: true, force: true })
+/*
+ * Clean up, tolerating Windows file locks.
+ *
+ * The launch test starts a real gradle wrapper, and on Windows a process that is
+ * still shutting down keeps a handle on its working directory: `rmdir` then
+ * fails with EBUSY even though the test itself passed. Failing a suite on
+ * cleanup would be reporting the temp directory's state as if it were a defect
+ * in the app. The stop and a short wait usually settle it; when they do not, the
+ * OS cleans the temp folder up and the test still means what it says.
+ */
+try {
+  await call('stop_game')
+} catch {
+  /* nothing running */
+}
+let cleaned = false
+for (let attempt = 0; attempt < 5 && !cleaned; attempt++) {
+  try {
+    fs.rmSync(root, { recursive: true, force: true })
+    cleaned = true
+  } catch {
+    await new Promise((r) => setTimeout(r, 300))
+  }
+}
+if (!cleaned) console.log('  note: the temp project could not be removed (a process still holds it); the checks above still stand')
 
 console.log(`\n${failures.length ? `${failures.length} check(s) failed` : `all ${passed} tool-simulation checks passed`}`)
 if (failures.length) process.exit(1)
