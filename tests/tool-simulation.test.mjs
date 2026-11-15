@@ -469,10 +469,27 @@ check('a launch failure is never a bare "it failed"', () => {
   if (devLaunch.isError) assert.ok(devLaunch.text.length > 40, `not actionable: "${devLaunch.text}"`)
 })
 
-const readLog = await call('read_log', {})
-check('read_log says there is no log instead of returning empty text', () => {
-  assert.ok(readLog.text.length > 20, 'an empty reply is indistinguishable from a broken tool')
-  assert.match(readLog.text, /no |not |missing|empty/i)
+// Stopping first makes the log test independent of whether the launch above
+// survived on this platform — and leaves no process behind on the runner.
+try {
+  await call('stop_game')
+} catch {
+  /* not running, which is the usual case */
+}
+const readLog = await call('read_log', { lines: 50 })
+readLog.text = norm(readLog.text)
+check('read_log answers with either the log or a sentence explaining there is none', () => {
+  // Order-dependent by nature: an earlier launch in this same process may have
+  // created a log, in which case the honest answer is the tail of it. What must
+  // never happen is an empty result, which is indistinguishable from a broken
+  // tool. This failed on Windows for exactly that reason — the launch test ran
+  // first there and left a log behind, so "no log" was no longer the answer.
+  assert.ok(readLog.text.length > 20, `an empty reply is not an answer: "${readLog.text}"`)
+  if (readLog.isError) {
+    assert.match(readLog.text, /no game log|launch the game/i)
+  } else {
+    assert.match(readLog.text, /logPath|tail|crashReport/i, 'a successful read must return the log structure')
+  }
 })
 
 const env = await call('env_report')
