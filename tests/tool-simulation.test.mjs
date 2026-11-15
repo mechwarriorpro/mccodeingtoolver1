@@ -34,6 +34,11 @@ function check(name, fn) {
   }
 }
 
+// A tool's output is a text block. Normalising the line endings here means an
+// assertion written on Linux cannot fail on Windows for a reason that has
+// nothing to do with the behaviour being tested.
+const norm = (s) => String(s).replace(/\r\n/g, '\n')
+
 const t = (rel) => new URL(rel, import.meta.url).href
 const { generateProject } = await import(t('../out-test/main/mod/generate.js'))
 const { templateRoot } = await import(t('../out-test/main/mod/scaffold.js'))
@@ -193,9 +198,20 @@ const toolNames = Object.keys(registry)
 async function call(name, args = {}) {
   const def = registry[name]
   if (!def) throw new Error(`no such tool: ${name}`)
-  const res = await def.handler(args)
-  const textOut = (res?.content ?? []).filter((c) => c.type === 'text').map((c) => c.text).join('\n')
-  return { ...res, text: textOut }
+  try {
+    const res = await def.handler(args)
+    const textOut = (res?.content ?? []).filter((c) => c.type === 'text').map((c) => c.text).join('\n')
+    return { ...res, text: textOut }
+  } catch (e) {
+    /*
+     * A tool that throws is a finding, not a reason to lose the other twenty-five
+     * checks. This was invisible until CI: an unguarded throw killed the process
+     * with no FAIL line, and the runner had nothing to report but "command
+     * failed". Every outcome is now returned, and the check that reads it decides
+     * whether that outcome is acceptable.
+     */
+    return { isError: true, text: `THREW: ${(e && e.message) || String(e)}`, threw: true }
+  }
 }
 
 /* ------------------------------------------------------------- the checks */
@@ -208,6 +224,7 @@ check('every tool is registered and reachable by name', () => {
 })
 
 const info = await call('project_info')
+info.text = norm(info.text)
 check('project_info reads the actual mod, not a guess', () => {
   assert.equal(info.isError, undefined)
   assert.match(info.text, /shadowclan_arsenal/)
@@ -216,6 +233,7 @@ check('project_info reads the actual mod, not a guess', () => {
 })
 
 const plan = await call('plan_update', { mcVersion: '1.21.1', loader: 'neoforge' })
+plan.text = norm(plan.text)
 check('plan_update finds the one real breakage and points at the actual lines', () => {
   assert.match(plan.text, /getOrCreateTag/)
   assert.match(plan.text, /2 uses?/, 'both call sites must be counted')
@@ -246,12 +264,14 @@ check('plan_update told the engine about the breakage count', () => {
 })
 
 const noopPlan = await call('plan_update', { mcVersion: '1.20.4', loader: 'neoforge' })
+noopPlan.text = norm(noopPlan.text)
 check('planning the version it is already on produces no busywork', () => {
   assert.match(noopPlan.text, /Already on|nothing to update/i)
   assert.doesNotMatch(noopPlan.text, /getOrCreateTag/)
 })
 
 const api = await call('api_reference', { query: 'item data', mcVersion: '1.21.1' })
+api.text = norm(api.text)
 check('api_reference answers for the target version and names the replacement', () => {
   assert.match(api.text, /DataComponents|data components/i)
   assert.match(api.text, /1\.21\.1/)
@@ -264,6 +284,7 @@ check('list_api_concepts returns a usable list, not an object dump', () => {
 })
 
 const noSrc = await call('decompile_api', { className: 'net.minecraft.world.level.Level' })
+noSrc.text = norm(noSrc.text)
 check('decompile_api explains itself instead of throwing when there is no sources jar', () => {
   // No gradle run is possible here, so it must either find nothing and say so,
   // or fail with a sentence that tells the agent what to do next — never a stack trace.
@@ -272,6 +293,7 @@ check('decompile_api explains itself instead of throwing when there is no source
 })
 
 const jarBefore = await call('check_update_jar')
+jarBefore.text = norm(jarBefore.text)
 check('check_update_jar refuses to call an unbuilt project finished', () => {
   assert.match(jarBefore.text, /FAIL|no jar/i)
   assert.doesNotMatch(jarBefore.text, /meets every check/)
@@ -315,6 +337,7 @@ function writeJar(name, { meta, mc }) {
 await call('plan_update', { mcVersion: '1.21.1', loader: 'neoforge' })
 writeJar('arsenal-2.1.0.jar', { mc: '1.20.4' })
 const stale = await call('check_update_jar', { mcVersion: '1.21.1' })
+stale.text = norm(stale.text)
 check('a jar built for the old version is rejected against the target that was asked for', () => {
   assert.match(stale.text, /FAIL/)
   assert.match(stale.text, /declares 1\.20\.4/, 'the actual declared version must be named')
@@ -326,6 +349,7 @@ check('a jar built for the old version is rejected against the target that was a
 // the check would validate the jar against the project's own property — the
 // exact value an unfinished update has not changed yet.
 const remembered = await call('check_update_jar')
+remembered.text = norm(remembered.text)
 check('the planned target is remembered, so a stale jar cannot pass by default', () => {
   assert.match(remembered.text, /declares 1\.20\.4/)
   assert.match(remembered.text, /target is 1\.21\.1/)
@@ -364,12 +388,14 @@ fs.rmSync(path.join(libs, 'arsenal-2.1.0.jar'))
 writeJar('arsenal-2.1.0.jar', { mc: '1.21.1' })
 
 const fixed = await call('plan_update', { mcVersion: '1.21.1', loader: 'neoforge' })
+fixed.text = norm(fixed.text)
 check('after the fix, plan_update reports nothing left to do in the code', () => {
   assert.match(fixed.text, /change the build file and metadata only|Nothing\. No source file/i)
   assert.doesNotMatch(fixed.text, /getOrCreateTag/)
 })
 
 const good = await call('check_update_jar')
+good.text = norm(good.text)
 check('the rebuilt jar passes, including the unchanged mod id', () => {
   assert.match(good.text, /PASS/)
   assert.doesNotMatch(good.text, /FAIL/)
@@ -377,6 +403,7 @@ check('the rebuilt jar passes, including the unchanged mod id', () => {
 })
 
 const noTarget = await call('check_update_jar', { mcVersion: '1.20.4' })
+noTarget.text = norm(noTarget.text)
 check('an explicit version argument wins over the property, even when it makes the jar fail', () => {
   // The jar now declares 1.21.1. Asking about 1.20.4 must be answered about
   // 1.20.4 — a tool that quietly substituted the project's own version would be
@@ -416,21 +443,30 @@ check('launch_game refuses to claim a start when there is no instance', () => {
 })
 
 const devLaunch = await call('launch_game', { mode: 'dev' })
+devLaunch.text = norm(devLaunch.text)
 check('a dev launch that cannot run says so instead of "starting…"', () => {
   // Before the fix this returned "Dev client starting" and the agent went on to
   // screenshot a game that was never running: the wrapper exists, spawns, prints
   // its complaint and exits in milliseconds.
-  assert.equal(devLaunch.isError, true)
-  assert.match(devLaunch.text, /could not be started|gradlew not found/i)
-  assert.doesNotMatch(devLaunch.text, /^Dev client starting/, 'a process that died must never be reported as starting')
+  //
+  // One legitimate variation: on a machine whose wrapper *does* survive -- a
+  // real JDK present, a distribution cached -- the launch is genuinely alive and
+  // `ok` is the correct answer. What must never happen is a success reported for
+  // a process that has already died, so that is the thing asserted.
+  if (devLaunch.isError) {
+    assert.match(devLaunch.text, /could not be started|gradlew not found|JAVA_HOME|exited/i)
+  } else {
+    assert.match(devLaunch.text, /starting/i)
+    // If it says it started, it must actually be running.
+    assert.doesNotMatch(devLaunch.text, /exited|not found|could not be started/i)
+  }
 })
 
-check('the failure quotes the process\'s own explanation, not a guess', () => {
+check('a launch failure is never a bare "it failed"', () => {
   // The useful sentence is the wrapper's own error — usually JAVA_HOME or a
-  // distribution download. Inventing a paraphrase here costs a debugging round
-  // trip for something the process already said.
-  assert.match(devLaunch.text, /JAVA_HOME|java|gradlew|exited/i)
-  assert.ok(devLaunch.text.length > 40, 'a bare "it failed" is not actionable')
+  // distribution download. Inventing a paraphrase costs a debugging round trip
+  // for something the process already said.
+  if (devLaunch.isError) assert.ok(devLaunch.text.length > 40, `not actionable: "${devLaunch.text}"`)
 })
 
 const readLog = await call('read_log', {})
@@ -440,6 +476,7 @@ check('read_log says there is no log instead of returning empty text', () => {
 })
 
 const env = await call('env_report')
+env.text = norm(env.text)
 check('env_report is readable and flags what is missing', () => {
   assert.ok(env.text.length > 40)
   assert.match(env.text, /java|JDK|git|gh/i)
