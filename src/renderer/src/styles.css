@@ -326,6 +326,8 @@ textarea { resize: none; }
 .status-pill.live i { background: var(--accent); box-shadow: 0 0 0 3px rgba(110, 231, 168, 0.14); }
 .status-pill.warn i { background: var(--amber); }
 .status-pill.bad i { background: var(--red); }
+/* Elapsed time: proof the turn is alive, not a word that could be stuck. */
+.status-elapsed { font-size: 11px; color: var(--dim); font-variant-numeric: tabular-nums; margin-left: 2px; }
 
 .shot { width: 100%; border-radius: 8px; border: 1px solid var(--line-2); display: block; margin-bottom: 8px; cursor: zoom-in; }
 

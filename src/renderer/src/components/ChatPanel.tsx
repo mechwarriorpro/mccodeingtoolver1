@@ -25,6 +25,12 @@ interface Props {
   status: string
   statusDetail?: string
   busy: boolean
+  /**
+   * When the current turn started, in ms. Rendered as a ticking elapsed time
+   * next to the pill so "working" is visibly alive rather than a word that could
+   * be stuck. A status that never changes is indistinguishable from a frozen UI.
+   */
+  busySince?: number | null
   autonomy: 'auto' | 'review' | 'ask'
   permission: PermissionPrompt | null
   onAutonomy: (m: 'auto' | 'review' | 'ask') => void
@@ -95,6 +101,7 @@ export default function ChatPanel({
   status,
   statusDetail,
   busy,
+  busySince = null,
   autonomy,
   permission,
   onAutonomy,
@@ -109,6 +116,21 @@ export default function ChatPanel({
   const [openThinking, setOpenThinking] = useState<string | null>(null)
   const bodyRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  /*
+   * The elapsed time is re-rendered on a timer rather than read from Date.now()
+   * during render. A status pill whose text never changes is indistinguishable
+   * from a frozen window, and this is the cheapest honest proof that the process
+   * is alive: it moves while the agent works, and stops when it stops.
+   */
+  const [, tick] = useState(0)
+  useEffect(() => {
+    if (!busy || !busySince) return
+    const t = setInterval(() => tick((n) => n + 1), 1000)
+    return () => clearInterval(t)
+  }, [busy, busySince])
+  const elapsed = busySince ? Math.max(0, Math.floor((Date.now() - busySince) / 1000)) : 0
+  const elapsedText = elapsed >= 60 ? `${Math.floor(elapsed / 60)}m ${elapsed % 60}s` : `${elapsed}s`
 
   const lastAssistantId = useMemo(() => [...messages].reverse().find((m) => m.role === 'assistant')?.id, [messages])
   const lastAssistant = messages.find((m) => m.id === lastAssistantId)
@@ -174,10 +196,18 @@ export default function ChatPanel({
     <div className="chat">
       <div className="chat-head">
         <span className="title">Agent</span>
-        <span className={`status-pill ${busy ? 'warn' : 'live'}`}>
+        <span
+          className={`status-pill ${busy ? 'warn' : 'live'}`}
+          title={busy ? statusDetail || 'The agent is working' : 'The agent is not running a task'}
+        >
           <i />
-          {status === 'waiting-permission' ? 'waiting for approval' : busy ? (statusDetail || 'working') : 'idle'}
+          {status === 'waiting-permission'
+            ? 'waiting for approval'
+            : busy
+              ? statusDetail || 'working'
+              : 'idle'}
         </span>
+        {busy && busySince && <span className="status-elapsed" title="Time this turn has been running">{elapsedText}</span>}
         <div style={{ flex: 1 }} />
         <div className="autonomy" title="How much the agent may do without asking">
           <button className={autonomy === 'review' ? 'on' : ''} onClick={() => onAutonomy('review')}>

@@ -99,6 +99,14 @@ export default function App(): JSX.Element {
   /** System remarks from main (retries, warnings) shown inline in the chat. */
   const [notices, setNotices] = useState<{ id: string; text: string }[]>([])
   const [status, setStatus] = useState<string>('idle')
+  /**
+   * When the current turn started, so the header can show a clock that moves.
+   *
+   * Set once when a turn begins and cleared when one ends — not on every status
+   * event, or the number would reset each time the agent switched tool and the
+   * user would be looking at a timer that never gets past a few seconds.
+   */
+  const [busySince, setBusySince] = useState<number | null>(null)
   const [statusDetail, setStatusDetail] = useState<string | undefined>()
   const [busy, setBusy] = useState(false)
   const [permission, setPermission] = useState<PermissionPrompt | null>(null)
@@ -234,6 +242,7 @@ export default function App(): JSX.Element {
         const msg = p as { id: string; role: 'user'; text: string; createdAt: number; attachments?: unknown }
         setMessages((msgs) => (msgs.some((m) => m.id === msg.id) ? msgs : [...msgs, msg as never]))
         setBusy(true)
+        setBusySince((t) => t ?? Date.now())
       }),
       api.events.onAgentText((p) => setStreaming((s) => s + p.text)),
       api.diag.onThinking((p) => setThinking((t) => (t + p.text).slice(-6000))),
@@ -263,15 +272,35 @@ export default function App(): JSX.Element {
         // arrive before this event, and clearing would swallow them mid-word.
         const msg = p as { id: string; role: 'assistant'; text: string; createdAt: number }
         setBusy(true)
+        setBusySince((t) => t ?? Date.now())
         setMessages((msgs) => (msgs.some((m) => m.id === msg.id) ? msgs : [...msgs, { ...msg, tools: [] } as never]))
       }),
       api.events.onStatus((p) => {
         setStatus(p.status)
         setStatusDetail(p.detail)
-        if (p.status === 'idle') setBusy(false)
+        /*
+         * `idle` clears busy, and nothing else here sets it again.
+         *
+         * That was the visible half of "it says idle while it is still working":
+         * main could report idle between two runs of the same turn (a
+         * continuation, an automode retry), the renderer dropped busy, and the
+         * pill then read "idle" for however long the next run took — while the
+         * Stop button vanished, so there was no way to interrupt it either.
+         * `onToolStart` below re-asserts busy, which covers the live half of the
+         * turn; the engine no longer emits idle mid-turn in the first place.
+         */
+        if (p.status === 'idle') {
+          setBusy(false)
+          setBusySince(null)
+        }
         if (p.status !== 'waiting-permission') setPermission(null)
       }),
       api.events.onToolStart((trace) => {
+        // Proof of life: a tool call means the turn is still running, whatever
+        // the last status event said. Without this a single stray `idle` left
+        // the header reading "idle" and hid the Stop button mid-build.
+        setBusy(true)
+        setBusySince((t) => t ?? Date.now())
         setMessages((msgs) => {
           const copy = [...msgs]
           const lastIdx = [...copy].reverse().findIndex((m) => m.role === 'assistant')
@@ -297,6 +326,7 @@ export default function App(): JSX.Element {
         setStreaming('')
         setThinking('')
         setBusy(false)
+        setBusySince(null)
         setMessages((msgs) => {
           const copy = [...msgs]
           const lastIdx = [...copy].reverse().findIndex((m) => m.role === 'assistant')
@@ -351,10 +381,13 @@ export default function App(): JSX.Element {
     setThinking('')
     setNotices([])
     setBusy(true)
+    setBusySince(Date.now())
     setStatus('thinking')
     const res = await api.chat.send({ text, attachments })
     if (!res.ok) {
+      // The turn never started, so the clock must not be left running.
       setBusy(false)
+      setBusySince(null)
       toast(res.error ?? 'could not start the agent', 'err')
     }
   }
@@ -530,6 +563,7 @@ export default function App(): JSX.Element {
           messages={messages}
           streamingText={streaming}
           liveThinking={thinking}
+          busySince={busySince}
           notices={notices}
           liveLines={consoleLines.slice(-4)}
           hasKey={config.apiKeySet || config.provider === 'ollama'}

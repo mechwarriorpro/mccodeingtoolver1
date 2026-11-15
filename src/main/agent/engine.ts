@@ -319,7 +319,9 @@ export class AgentSession {
         continuations++
         log('agent', 'info', 'continuing after interruption', { kind: interruption.kind, continuation: continuations }, 1)
         this.events.onNotice(interruption.notice)
-        this.events.onStatus('thinking')
+        // Say what it is doing, not just that it is doing something: "working"
+        // for four minutes with no reason is what makes the pill untrustworthy.
+        this.events.onStatus('thinking', `continuing (${continuations}/${MAX_CONTINUATIONS})`)
         this.queue.push({
           type: 'user',
           session_id: this.sessionId ?? '',
@@ -357,7 +359,7 @@ export class AgentSession {
           this.updateResumes++
           log('agent', 'info', 'automode continuing toward a finished jar', { reason: verdict.reason, resume: this.updateResumes }, 1)
           this.events.onNotice(`Not finished yet — ${verdict.reason}. Continuing (attempt ${this.updateResumes} of ${MAX_UPDATE_RESUMES}).`)
-          this.events.onStatus('thinking')
+          this.events.onStatus('thinking', `${verdict.reason} — attempt ${this.updateResumes}/${MAX_UPDATE_RESUMES}`)
           this.queue.push({
             type: 'user',
             session_id: this.sessionId ?? '',
@@ -382,7 +384,7 @@ export class AgentSession {
         // Say something: a silent pause looks like a hang, and the notice
         // channel keeps this out of the model's own words.
         this.events.onNotice(`The provider is busy. Retrying — attempt ${attempt + 1} of ${MAX_ATTEMPTS}…`)
-        this.events.onStatus('thinking')
+        this.events.onStatus('thinking', `retrying (${attempt}/${MAX_ATTEMPTS})`)
         await new Promise((r) => setTimeout(r, 1500 * attempt))
         if (this.stopped) throw failure
         continue
@@ -825,8 +827,17 @@ export class AgentSession {
           empty
         })
         this.thinking = ''
-        this.busy = false
-        this.events.onStatus('idle')
+        /*
+         * Deliberately NOT `onStatus('idle')` here.
+         *
+         * A `result` message ends one *run*, and `runTurn` may immediately start
+         * another — a continuation after a cut-short run, another attempt at
+         * automode's unfinished jar, a retry after a busy provider. Announcing
+         * idle at this point told the user the agent had stopped while it was
+         * still working, which is exactly what makes it impossible to tell the
+         * difference. The turn's own end announces idle, in `send()`'s `finally`
+         * — one place, and only when it is true.
+         */
         break
       }
       default:

@@ -152,6 +152,13 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.5.9** fixes the status pill saying **idle while the agent was still working**. Two causes: the
+> result handler announced idle at the end of every *run*, and a turn is made of several — a continuation, an
+> automode retry, a provider retry — so the pill read "idle" between two halves of the same job; and the
+> renderer cleared its busy flag on that idle and nothing re-set it, which also hid the Stop button. Idle is
+> now announced in exactly one place, the turn's own exit, and only when the turn is genuinely over. Resumes
+> and retries carry a reason in the pill instead of a bare "working", and a ticking elapsed clock beside it
+> proves the window is alive rather than frozen.
 > **v0.5.8** is a simulation pass: every agent tool driven through its real handler against a generated
 > NeoForge mod, with the output read the way the model reads it. It found three defects worth having.
 > `check_update_jar` could pass a jar built for the **old** version — it read the target from
