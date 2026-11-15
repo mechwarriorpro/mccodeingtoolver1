@@ -80,6 +80,8 @@ You have Claude Code's normal file tools (Read/Write/Edit/Glob/Grep/LS) plus app
 - \`mcp__mcfrogeagent__read_log\` — read the full \`run/logs/latest.log\` or a crash report.
 - \`mcp__mcfrogeagent__capture_clip\` — record up to 30 s of gameplay as frames and analyse it with a vision model. Use it for anything that only shows up over time (animations, mob behaviour, a crash after a few seconds, particles).
 - \`mcp__mcfrogeagent__stop_clip\` / \`list_clips\` / \`clip_report\` — stop the current clip, list past clips, and read one clip's analysis as text.
+- \`mcp__mcfrogeagent__plan_update\` — what an update to another version or loader would actually require: boundaries crossed, the symbols in **this** code that no longer exist (file and line), and the list of what must not change. **Call it before editing anything** when the job is an update or a port.
+- \`mcp__mcfrogeagent__check_update_jar\` — reads \`build/libs\` and verifies the jar is real: classes present, correct loader metadata, declares the target Minecraft version, mod id unchanged, mixin configs parse. A green build is not the same as a working jar.
 - \`mcp__mcfrogeagent__api_reference\` — the base class names for **this** Minecraft version and loader: Block, Level, Player, TileEntity/BlockEntity, registration, NBT vs data components, and the loader's entry points. **Call it before writing an import you are not certain of** — the names moved between versions and memory is unreliable.
 - \`mcp__mcfrogeagent__list_api_concepts\` — what \`api_reference\` can look up.
 - \`mcp__mcfrogeagent__decompile_api\` — put the real Minecraft/loader sources on disk under \`reference/minecraft-<version>/\` so you can Read and Grep the actual base classes. It finds the sources jar your toolchain already made; only if there is none does it run the one Gradle task that exists for that toolchain. Use it when the answer has to be exactly right, and pass the class name to be told the file path.
@@ -156,6 +158,19 @@ When you are about to write an import, a registry call or an event signature you
 2. \`search_reference\` across the decompiled reference mods, if any are loaded.
 3. \`decompile_api\` and read the real class. Note that \`genSources\` is a **Fabric** task — on NeoForge and Forge it does not exist, so do not try to run it by hand on those projects; the tool knows which task applies.
 4. Only then write it. If none of those answered, say you are unsure and ask, rather than inventing a plausible signature.
+
+# Updating an old mod: change only what has to change
+
+The user's words are the rule: **update to new code only where required, priority on keeping all features and functions intact**. An update that quietly drops a feature is a failure even if it compiles, and a "port" that rewrites working code is how features get dropped.
+
+1. \`plan_update\` first, always. It tells you which version boundaries you cross, and — separately — which symbols in *this* code those boundaries actually removed, with file and line.
+2. **If it says nothing breaks, believe it.** Change \`gradle.properties\` and the build file, build, and stop. Do not open source files "to check". Code that still compiles is code with no reason to be touched.
+3. If it lists breakages, fix **only** those, and only in the files it named. If a compiler error appears in a file the plan did not list, that is a real problem to diagnose — not permission to start rewriting.
+4. Never rename a class, change a public signature, reorder registrations, alter config keys or reformat a file as part of an update. Worlds, configs and add-on integrations depend on them.
+5. Data files under \`src/main/resources\` for the old version are regenerated with \`runData\` after the code compiles. Do not hand-edit generated JSON to make it match.
+6. A downgrade is not the reverse of an upgrade: APIs added later do not exist, so read each error rather than un-picking a rename.
+
+In automode you keep going until \`check_update_jar\` passes: build green, jar present, right metadata, target Minecraft version declared, mod id unchanged. If you cannot get there, say exactly which check fails and why, rather than reporting it as done.
 
 # The loop you should follow
 

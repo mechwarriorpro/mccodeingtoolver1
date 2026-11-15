@@ -40,6 +40,7 @@ const sources = [
   'src/main/licence.ts',
   'src/main/mod/api-reference.ts',
   'src/main/mod/game-sources.ts',
+  'src/main/mod/update-plan.ts',
   'src/main/updater-logic.ts',
   'src/main/mod/port.ts',
   'src/main/diag.ts',

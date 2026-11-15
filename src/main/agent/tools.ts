@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { loadConfig, effectiveApiKey, effectiveBaseUrl } from '../config'
-import { runLocalBuild } from '../build/gradle'
+import { findBuiltJar, runLocalBuild } from '../build/gradle'
 import { readProps } from '../mod/props'
 import { resolveJava, resolveToolJava } from '../util/exec'
 import { installJar, copyExtraMods, readJarInfo } from '../mod/jar'
@@ -25,6 +25,8 @@ import { assetLayout, blockstateJson } from '../mod/assets'
 import { detectLoader, detectMcVersion } from './engine'
 import { apiConcepts, apiReference } from '../mod/api-reference'
 import { findExistingSources, locateClass, readBuildGradle, sourceTaskFor, unpackSources } from '../mod/game-sources'
+import { checkUpdatedJar, completionVerdict, loadSources, planUpdate } from '../mod/update-plan'
+import { detectProject } from '../mod/port'
 import { rendererGuidance, rendererSupport, realismVerdict } from '../mod/renderer'
 import { USE_CASES, catalogueFor, compatibilityNotes, recommend, type UseCase } from '../mod/shader-stack'
 import { PATTERNS, PALETTES, texturePathFor, texturePng } from '../mod/textures'
@@ -78,6 +80,14 @@ export interface ToolContext {
   onGameStatus?: (status: import('../../shared/types').GameStatus) => void
   /** Screenshot returned to the renderer for display. */
   onScreenshot?: (info: { path: string; width?: number; height?: number }) => void
+  /**
+   * The result of a local build, so the run loop can decide whether automode is
+   * finished. Without this the engine only knows what the *model* claims, which
+   * is the thing that says "done" while the build is red.
+   */
+  onBuildResult?: (info: { ok: boolean; jarPath?: string; errors: string[] }) => void
+  /** Breakages the update plan named, so the engine can check they were fixed. */
+  onUpdatePlan?: (info: { breakages: number }) => void
 }
 
 export function createAgentTools(ctx: ToolContext) {
@@ -177,6 +187,9 @@ export function createAgentTools(ctx: ToolContext) {
               signal: activeBuild.signal
             })
             ctx.notify('build:done', { ok: res.ok, jarPath: res.jarPath, logPath: res.logPath, source: 'local' })
+            // Tell the run loop, so automode's stopping rule is grounded in a
+            // real build rather than in the model saying it is finished.
+            ctx.onBuildResult?.({ ok: res.ok, jarPath: res.jarPath, errors: res.errors })
             return res.ok
               ? text(JSON.stringify({ ok: true, jar: res.jarPath, durationMs: res.durationMs, logPath: res.logPath }, null, 2))
               : err(
@@ -515,6 +528,100 @@ export function createAgentTools(ctx: ToolContext) {
           lines.push('Read or Grep under that folder for the exact class. State what the source says rather than recalling it.')
         }
         return text(lines.join('\n\n'))
+      }
+    ),
+
+    /**
+     * What does this update actually cost?
+     *
+     * The answer that matters is usually "less than you think". A mod that adds
+     * blocks and items and never touched item NBT does not need a single source
+     * edit to move from 1.20.1 to 1.21.1, and an agent that opens every file
+     * "just in case" is how features get quietly broken during an update.
+     */
+    tool(
+      'plan_update',
+      'Work out what moving this project to another Minecraft version or loader would actually require. Reports the boundaries crossed, the symbols in THIS code that no longer exist (with file and line), and — explicitly — what must not be touched. Call it before changing anything.',
+      {
+        mcVersion: z.string().optional().describe('Target Minecraft version; defaults to the one asked for or the current one'),
+        loader: z.enum(['neoforge', 'forge', 'fabric']).optional()
+      },
+      async ({ mcVersion, loader }) => {
+        const dir = ctx.getWorkspace()
+        if (!dir) return err('No project folder is open.')
+        const detected = detectProject(dir)
+        const props = readProps(path.join(dir, 'gradle.properties'))
+        const to = {
+          mcVersion: mcVersion ?? detectMcVersion(props),
+          loader: loader ?? detectLoader(props)
+        }
+        const files = loadSources(dir, detected.sourceRoot || 'src/main/java')
+        const plan = planUpdate({
+          from: { mcVersion: detected.mcVersion, loader: detected.loader },
+          to,
+          files
+        })
+        // The engine uses this to check the breakages were actually dealt with,
+        // rather than trusting that the model read the list.
+        ctx.onUpdatePlan?.({ breakages: plan.breaking.length })
+
+        const lines: string[] = [plan.summary, '']
+        lines.push(`**From:** ${plan.from.loader} ${plan.from.mcVersion ?? '(unknown)'}  →  **To:** ${plan.to.loader} ${plan.to.mcVersion}`)
+        if (plan.boundaries.length) {
+          lines.push('', '## Boundaries crossed — the *possible* scope')
+          for (const b of plan.boundaries) lines.push(`- **${b.label}** — ${b.change}`)
+        }
+        if (plan.breaking.length) {
+          lines.push('', '## What actually breaks, in this code')
+          for (const b of plan.breaking) {
+            lines.push(`- **${b.symbol}** (${b.count} use${b.count === 1 ? '' : 's'}) — ${b.why}`)
+            for (const f of b.files.slice(0, 6)) lines.push(`  - \`${f.rel}\` line ${f.lines.join(', ')}`)
+            if (b.files.length > 6) lines.push(`  - …and ${b.files.length - 6} more file(s)`)
+          }
+        } else {
+          lines.push('', '## What actually breaks, in this code', '', 'Nothing. No source file uses a symbol these boundaries removed, so **do not edit the mod**. Change the build file and metadata only.')
+        }
+        if (plan.filesTouched.length) {
+          lines.push('', `## Files allowed to change (${plan.filesTouched.length})`, ...plan.filesTouched.map((f) => `- \`${f}\``))
+          lines.push('', 'Every other source file must be left byte-for-byte as it is. If a build error appears in one, that is a real problem to diagnose — not permission to start rewriting.')
+        }
+        if (plan.mechanical.length) {
+          lines.push('', '## Mechanical work (safe)', ...plan.mechanical.map((m) => `- ${m}`))
+        }
+        lines.push('', '## Preserve — this is an update, not a redesign', ...plan.preserve.map((p) => `- ${p}`))
+        if (plan.downgrade) {
+          lines.push('', '**This is a downgrade.** APIs that were added later do not exist, and the boundaries above run in reverse. Re-read each error rather than reversing a rename you made earlier.')
+        }
+        return text(lines.join('\n'))
+      }
+    ),
+
+    /**
+     * The stopping condition, made checkable.
+     *
+     * "A stable jar meeting all criteria" is the user's definition of finished,
+     * so it has to be an actual check rather than the model's opinion. This
+     * reads the jar and says whether it is a real, loadable, correctly-declared
+     * build — and says what is still wrong when it is not.
+     */
+    tool(
+      'check_update_jar',
+      'Decide whether the update is actually finished. Reads build/libs and checks the jar contains classes, carries the right loader metadata, declares the target Minecraft version, keeps the mod id, and has parseable mixin configs. Use this instead of assuming a green build means a working mod.',
+      {},
+      async () => {
+        const dir = ctx.getWorkspace()
+        if (!dir) return err('No project folder is open.')
+        const props = readProps(path.join(dir, 'gradle.properties'))
+        const target = { mcVersion: detectMcVersion(props), loader: detectLoader(props) }
+        const detected = detectProject(dir)
+        const jar = findBuiltJar(dir)
+        const result = checkUpdatedJar(jar ?? null, target, { expectedModId: detected.modId })
+        const lines = [result.summary, '']
+        for (const c of result.checks) lines.push(`${c.ok ? 'PASS' : 'FAIL'}  ${c.name} — ${c.detail}`)
+        if (!result.ok) {
+          lines.push('', 'Fix the failures above and build again. Do not report the update as finished while any line says FAIL.')
+        }
+        return text(lines.join('\n'))
       }
     ),
 

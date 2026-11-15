@@ -14,6 +14,9 @@ import { log, safeJson } from '../diag'
 import { effectiveRunTarget, isSwitchWorthy, nextModel, type SwitchTarget } from './autoswitch'
 import { briefProject, learningPrompt, researchPrompt, runMode, saveResearch, loadResearch } from './modes'
 import { candidatePrompt } from '../evolve/candidate'
+import { checkUpdatedJar, completionVerdict, countRemainingBreakages } from '../mod/update-plan'
+import { findBuiltJar } from '../build/gradle'
+import { detectProject } from '../mod/port'
 
 export interface EngineEvents {
   onAssistantText: (text: string) => void
@@ -101,6 +104,12 @@ export class AgentSession {
     return this.interruption
   }
   private stopped = false
+  /** Did the last local build in this turn succeed? Null when none ran. */
+  private lastBuildOk: boolean | null = null
+  /** How many times this turn has been resumed to reach a finished jar. */
+  private updateResumes = 0
+  /** Breakages the update plan named that are still unresolved. */
+  private unresolvedBreakages = 0
   private events: EngineEvents
   private getInstanceId: () => string
   /** Reasoning accumulated since the last tool call or text block. */
@@ -143,6 +152,10 @@ export class AgentSession {
     if (this.busy) throw new Error('The agent is already running. Interrupt it first.')
     this.busy = true
     this.stopped = false
+    // Per-turn, not per-session: a new request starts with a clean scoreboard.
+    this.lastBuildOk = null
+    this.updateResumes = 0
+    this.unresolvedBreakages = 0
     this.events.onStatus('thinking')
     try {
       const content: unknown[] = []
@@ -181,6 +194,57 @@ export class AgentSession {
       this.busy = false
       if (!this.stopped) this.events.onStatus('idle')
     }
+  }
+
+  /**
+   * In automode, is the job actually finished?
+   *
+   * "Keep working until a stable jar meeting all criteria is met" is a
+   * statement about the *state of the project*, not about how long the model
+   * feels like talking. So the decision is made by reading the disk: did the
+   * last build succeed, is there a jar, and does that jar pass its checks.
+   *
+   * Deliberately returns `done` in every case where there is no evidence of
+   * unfinished work — no build ever attempted, no jar, nothing the plan flagged.
+   * A chat turn in automode must not be trapped in a loop by a gate that only
+   * knows how to say "not finished yet".
+   */
+  private automodeVerdict(cfg: ReturnType<typeof loadConfig>): { done: boolean; reason: string; resumePrompt?: string } {
+    // Only automode keeps itself honest; review and ask exist to hand control back.
+    if (this.permissionMode !== 'auto') return { done: true, reason: 'not automode' }
+
+    let buildOk: boolean | null = null
+    try {
+      buildOk = this.lastBuildOk
+    } catch {
+      buildOk = null
+    }
+    // Nothing has been built in this turn: the user asked a question or the work
+    // is not a build job, and looping would be wrong.
+    if (buildOk === null) return { done: true, reason: 'no build attempted in this turn' }
+
+    let jar = null
+    let remaining = 0
+    let target = { mcVersion: '1.21.1', loader: 'neoforge' as 'neoforge' | 'forge' | 'fabric' }
+    try {
+      const ws = cfg.workspaceDir
+      if (ws) {
+        const props = readProps(path.join(ws, 'gradle.properties'))
+        target = { mcVersion: detectMcVersion(props), loader: detectLoader(props) }
+        const detected = detectProject(ws)
+        const built = findBuiltJar(ws)
+        jar = checkUpdatedJar(built ?? null, target, { expectedModId: detected.modId })
+        // Re-scan rather than trusting the plan's snapshot: a count that is
+        // never recomputed either never reaches zero (resuming forever) or is
+        // already zero because nothing updated it (finishing too early).
+        remaining = this.unresolvedBreakages > 0 ? countRemainingBreakages(ws, detected.sourceRoot || 'src/main/java', { mcVersion: detected.mcVersion, loader: detected.loader }, target) : 0
+      }
+    } catch {
+      // A check that cannot run must not invent a reason to keep going.
+      return { done: true, reason: 'could not inspect the project' }
+    }
+
+    return completionVerdict({ buildOk, jar, remainingBreakages: remaining, resumes: this.updateResumes, maxResumes: MAX_UPDATE_RESUMES })
   }
 
   /**
@@ -256,6 +320,43 @@ export class AgentSession {
         // whole point of continuing rather than extending one run.
         attempt = 0
         continue
+      }
+
+      /**
+       * Automode does not stop just because the model went quiet.
+       *
+       * The user's definition of finished is a stable jar meeting every
+       * criterion, so that — not the model's closing sentence — decides whether
+       * the turn is over. The verdict reads the project on disk: a failing
+       * build, a jar that fails its checks, or breakages the plan named and
+       * nobody fixed. If there is no evidence either way the turn ends normally,
+       * because trapping an ordinary question in a loop would be worse.
+       */
+      if (!failure && !this.stopped) {
+        const verdict = this.automodeVerdict(cfg)
+        if (!verdict.done) {
+          if (this.updateResumes >= MAX_UPDATE_RESUMES) {
+            const notice = `Stopped after ${MAX_UPDATE_RESUMES} attempts to finish: ${verdict.reason}. Everything that was completed is saved — check the build log for the last error, or tell it what to do differently.`
+            log('agent', 'warn', 'automode gave up short of a finished jar', { reason: verdict.reason }, 1)
+            this.events.onNotice(notice)
+            this.events.onResult({ text: notice, isError: false })
+            this.events.onStatus('idle')
+            this.busy = false
+            return
+          }
+          this.updateResumes++
+          log('agent', 'info', 'automode continuing toward a finished jar', { reason: verdict.reason, resume: this.updateResumes }, 1)
+          this.events.onNotice(`Not finished yet — ${verdict.reason}. Continuing (attempt ${this.updateResumes} of ${MAX_UPDATE_RESUMES}).`)
+          this.events.onStatus('thinking')
+          this.queue.push({
+            type: 'user',
+            session_id: this.sessionId ?? '',
+            message: { role: 'user', content: [{ type: 'text', text: verdict.resumePrompt ?? 'Keep going until the build is green and the jar passes its checks.' }] },
+            parent_tool_use_id: null
+          })
+          attempt = 0
+          continue
+        }
       }
 
       if (!failure) return
@@ -344,6 +445,15 @@ export class AgentSession {
       getInstanceId: () => this.getInstanceId(),
       notify: (channel, payload) => this.events.onNotice(JSON.stringify({ channel, payload })),
       onOutput: (line, source) => this.events.onOutput(line, source),
+      // Both of these feed the automode stopping rule. They are the only way the
+      // engine learns the difference between "the model says it is done" and
+      // "the build is green and the jar passes".
+      onBuildResult: (info) => {
+        this.lastBuildOk = info.ok
+      },
+      onUpdatePlan: (info) => {
+        this.unresolvedBreakages = info.breakages
+      },
       onGameStatus: (status) => this.events.onGameStatus(status)
     })
     const agents = buildAgents({ modId: props.mod_id ?? '', workspaceDir: workspace, instancePath: instance?.path })
@@ -967,6 +1077,17 @@ export const MAX_CONTINUATIONS = 3
  * the agent giving up.
  */
 export const MAX_TURNS_PER_RUN = 400
+
+/**
+ * How many times automode may resume to reach a finished jar.
+ *
+ * Separate from `MAX_CONTINUATIONS` because it is a different promise. Those
+ * three resumes exist so a long refactor is not cut in half by a turn ceiling.
+ * These exist so "keep working until the jar is stable" cannot be satisfied by
+ * the model *saying* it is stable. When they run out the user is told what is
+ * still wrong, in the words of the failed check — not just "it stopped".
+ */
+export const MAX_UPDATE_RESUMES = 6
 
 /**
  * The synthetic turn that resumes work.

@@ -152,6 +152,16 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.5.7** makes updating an old mod change **only what has to change**. Two new tools: `plan_update`
+> reports which version boundaries the jump crosses and — separately — which symbols in *your* code those
+> boundaries actually removed, with file and line. Most of the time the answer is none, and the agent is
+> told to believe that: change `gradle.properties` and the build file, build, stop. Code that still compiles
+> is code with no reason to be touched, which is what keeps features intact. `check_update_jar` decides when
+> the job is genuinely finished — classes present, right loader metadata, target Minecraft version declared,
+> mod id unchanged, mixin configs parse — because a green build is not the same as a working jar. **In
+> automode the agent no longer stops when it runs out of things to say**: it keeps working until that check
+> passes or you stop it, with the failed check named in the notice. A chat turn is never trapped by this — the
+> gate only engages once a build has actually run.
 > **v0.5.6** teaches the agent which class is which. It now knows that `World` became `Level`, that
 > `net.minecraft.block.Block` moved to `net.minecraft.world.level.block.Block`, that `getOrCreateTag()` no
 > longer exists on 1.20.5+, that `RegistryEvent` went away in 1.19.3 — and it has three new tools so it can
@@ -445,6 +455,52 @@ jar* at CFR or another decompiler to use that instead.
 
 Decompiled code belongs to whoever wrote it — check the licence shown next to each reference before
 copying more than an API shape.
+
+### Updating an old mod without losing features
+
+An update has two opposite failure modes: doing too much (rewriting working code and quietly dropping a
+feature) and doing too little (bumping a version property and calling it ported). Both come from treating
+every crossed version boundary as if it changed everything. It does not.
+
+`plan_update` separates the two questions. **Which boundaries does this jump cross?** — that is the possible
+scope. **What in these files actually uses something those boundaries removed?** — that is the real work, and
+it is empty most of the time:
+
+```
+Moving forge 1.20.1 → neoforge 1.21.1. 1 symbols break across 1 of 2 files;
+the other 1 need no edit and should not be opened.
+
+BREAKING:
+ - ItemStack#getOrCreateTag() -> com/x/Feature.java:4
+```
+
+The boundaries it knows about are the ones that actually break compiles: the 1.13 flattening, MCP → Mojang
+names at 1.17, the 1.18 worldgen rewrite, `RegistryEvent` at 1.19.3, data components at 1.20.5, and the
+Forge/NeoForge/Fabric splits. A boundary is only reported when the jump spans it — and a symbol is only
+reported when the boundary that removed it is one of those, so `getOrCreateTag()` is left alone on 1.20.4
+and flagged on 1.20.5.
+
+What must not change is stated explicitly: every feature, the mod id, the package root, public signatures,
+config keys, and formatting outside the edited lines. A downgrade is never called "build only", because APIs
+added later do not exist coming back.
+
+### When is it finished?
+
+`check_update_jar` reads the jar rather than your confidence. Each check is something that has genuinely gone
+wrong in a port:
+
+| Check | Why it is there |
+|---|---|
+| a jar was produced | an empty `build/libs` after "BUILD SUCCESSFUL" |
+| compiled classes present | a jar of resources and nothing else |
+| metadata matches the loader | `neoforge.mods.toml` on a Forge project — installs, never loads |
+| declares the target Minecraft version | the loader rejects the jar outright |
+| mod id unchanged | a rename orphans every existing world and config |
+| mixin configs parse | a crash at load, not a build failure |
+
+In **automode**, that check is the stopping condition. The agent keeps going until the build is green and the
+jar passes — up to six resumes, then it stops and names the check that failed rather than pretending. This
+only engages once a build has actually run, so a question in automode still gets an answer.
 
 ### Base classes: the names changed, and the agent now knows it
 
