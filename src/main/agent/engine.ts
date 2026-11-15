@@ -83,6 +83,23 @@ export class AgentSession {
   private sessionId: string | undefined
   private allowAllSession = new Set<string>()
   private busy = false
+  /**
+   * Set by `handleMessage` when a result message says the turn was cut short
+   * rather than finished. `runTurn` reads it and resumes instead of ending.
+   */
+  private interruption: Interruption | null = null
+
+  /**
+   * Read the pending interruption through a method.
+   *
+   * A plain field read is narrowed by the compiler to `null` after the
+   * assignment at the top of the loop, because it cannot see that
+   * `handleMessage` writes it during iteration — the classic false narrowing on
+   * a mutable field. A getter is opaque to that analysis.
+   */
+  private takeInterruption(): Interruption | null {
+    return this.interruption
+  }
   private stopped = false
   private events: EngineEvents
   private getInstanceId: () => string
@@ -180,11 +197,18 @@ export class AgentSession {
     const cfg = loadConfig()
     const target = this.override ?? effectiveRunTarget(cfg)
     this.triedThisTurn = new Set([`${target.provider}/${target.model}`])
+    /**
+     * How many times this turn has been picked back up after being cut short.
+     * Separate from `attempt`, which counts provider retries — a run can exhaust
+     * both, and conflating them would stop resuming after one busy provider.
+     */
+    let continuations = 0
 
     for (let attempt = 1; ; attempt++) {
       const q = query({ prompt: this.queue as AsyncIterable<any>, options: this.buildOptions() })
       this.current = q
       let failure: unknown = null
+      this.interruption = null
       try {
         for await (const msg of q) this.handleMessage(msg)
       } catch (e) {
@@ -192,6 +216,48 @@ export class AgentSession {
       } finally {
         this.current = null
       }
+
+      /**
+       * Cut short, not broken: queue the work back up and run again.
+       *
+       * The user is told what happened and the resume is announced, because a
+       * silent second run looks like the agent ignored its own output. After
+       * MAX_CONTINUATIONS the turn stops and says so — an agent that keeps
+       * hitting the ceiling without converging is a real problem, not a hiccup.
+       */
+      // Read through a local: TypeScript cannot see that `handleMessage` mutates
+      // this field, so it narrows `this.interruption` to `never` after the null
+      // assignment above.
+      const pending = this.takeInterruption()
+      if (!failure && pending?.continuable) {
+        const interruption = pending
+        this.interruption = null
+        if (this.stopped) return
+        if (continuations >= MAX_CONTINUATIONS) {
+          const notice = `Stopped after ${MAX_CONTINUATIONS} continuations — the task needs more turns than a single run allows. Split it into smaller requests, or ask it to finish the current file first.`
+          log('agent', 'warn', 'continuation limit reached', { kind: interruption.kind, continuations }, 1)
+          this.events.onNotice(notice)
+          this.events.onResult({ text: notice, isError: false })
+          this.events.onStatus('idle')
+          this.busy = false
+          return
+        }
+        continuations++
+        log('agent', 'info', 'continuing after interruption', { kind: interruption.kind, continuation: continuations }, 1)
+        this.events.onNotice(interruption.notice)
+        this.events.onStatus('thinking')
+        this.queue.push({
+          type: 'user',
+          session_id: this.sessionId ?? '',
+          message: { role: 'user', content: [{ type: 'text', text: continuationPrompt(interruption, continuations) }] },
+          parent_tool_use_id: null
+        })
+        // A fresh query, so the turn ceiling and budget restart — that is the
+        // whole point of continuing rather than extending one run.
+        attempt = 0
+        continue
+      }
+
       if (!failure) return
       if (this.stopped) throw failure
 
@@ -383,7 +449,10 @@ export class AgentSession {
       ...(this.permissionMode === 'auto' ? { allowDangerouslySkipPermissions: true } : {}),
       canUseTool: this.buildCanUseTool(),
       includePartialMessages: true,
-      maxTurns: 120,
+      // A ceiling exists so a runaway loop cannot spend without limit, but it is
+      // high enough that ordinary multi-file work finishes in one run: the old
+      // 120 was hit mid-build regularly, and each hit used to end the turn.
+      maxTurns: MAX_TURNS_PER_RUN,
       maxBudgetUsd: cfg.maxBudgetUsd > 0 ? cfg.maxBudgetUsd : undefined,
       persistSession: true,
       resume: this.sessionId && !this.sessionId.startsWith('local-') ? this.sessionId : undefined,
@@ -588,6 +657,21 @@ export class AgentSession {
       }
       case 'result': {
         const ok = msg.subtype === 'success'
+        /**
+         * A turn can end without finishing and without failing.
+         *
+         * The SDK reports `error_max_turns` and `error_max_budget_usd` with
+         * `is_error: false` and no error list. Treating those as failures is
+         * what made the agent stop mid-build and say "Run failed." — nothing had
+         * failed, it had run out of turns. They are recorded here and resumed by
+         * `runTurn`; only a genuinely fatal result ends the turn.
+         */
+        const interruption = ok ? null : classifyInterruption(msg as { subtype?: string; is_error?: boolean; num_turns?: number; errors?: string[] })
+        if (interruption?.continuable) {
+          this.interruption = interruption
+          this.sessionId = msg.session_id
+          break
+        }
         this.sessionId = msg.session_id
         const durationMs = (msg as { duration_ms?: number }).duration_ms
         const turns = (msg as { num_turns?: number }).num_turns
@@ -782,4 +866,116 @@ export function detectLoader(props: Record<string, string>): 'neoforge' | 'forge
 
 export function detectMcVersion(props: Record<string, string>): string {
   return props.minecraft_version || props.mc_version || props.minecraftVersion || '1.21.1'
+}
+
+/* ------------------------------------------------------------------ continuity */
+
+/**
+ * A run that ended without finishing, but which was not the user's fault or a
+ * provider failure: the agent hit its turn ceiling, its budget, or the SDK
+ * stopped mid-execution.
+ *
+ * The distinction matters more than the error text. These are not errors to
+ * report and stop on — the work is half done and the right move is to carry on.
+ * A 401 or a bad key is the opposite: retrying cannot fix it, and hiding it
+ * behind a "continuing…" message wastes the user's time.
+ */
+export type InterruptionKind = 'max-turns' | 'budget' | 'execution' | 'fatal'
+
+export interface Interruption {
+  kind: InterruptionKind
+  /** True when resuming is worth doing without asking. */
+  continuable: boolean
+  /** What to tell the user, in a sentence they can act on. */
+  notice: string
+  /** The prompt used to pick the work back up. Never mentions failure. */
+  resumePrompt?: string
+}
+
+/**
+ * Read a `result` message and decide whether the turn was cut short.
+ *
+ * The SDK reports `error_max_turns` with `is_error: false` and an **empty**
+ * `errors` array, which is why this app used to end the turn with the words "Run
+ * failed." while the agent was in the middle of a build. Nothing had failed; it
+ * had simply reached the 120-turn ceiling.
+ */
+export function classifyInterruption(msg: {
+  subtype?: string
+  is_error?: boolean
+  num_turns?: number
+  errors?: string[]
+}): Interruption {
+  switch (msg.subtype) {
+    case 'error_max_turns':
+      return {
+        kind: 'max-turns',
+        continuable: true,
+        notice: `The agent reached its ${msg.num_turns ?? 120}-turn limit partway through. Continuing where it left off — say stop if you would rather it did not.`,
+        resumePrompt:
+          'You were cut off at the turn limit while still working. Look at what is actually on disk now and carry on from there — do not restart the task or repeat steps that already succeeded.'
+      }
+    case 'error_max_budget_usd':
+      return {
+        kind: 'budget',
+        continuable: true,
+        notice: 'The agent hit the spending cap for this run. It will carry on — raise the cap in Settings if you would rather it ran uninterrupted.',
+        resumePrompt:
+          'You were stopped by the per-run spending cap, not by a problem with the work. Continue from where you stopped; keep tool calls lean and avoid repeating reads you have already done.'
+      }
+    case 'error_during_execution':
+      // The SDK's own wrapper: it means "the loop threw", so the cause is in
+      // `errors`. If there is a cause worth retrying, the caller sees it as a
+      // normal failure instead.
+      return {
+        kind: msg.errors?.length ? 'fatal' : 'execution',
+        continuable: !msg.errors?.length,
+        notice: msg.errors?.length
+          ? (msg.errors[0] ?? 'The run failed.')
+          : 'The agent stopped mid-step without saying why. Continuing.',
+        resumePrompt: msg.errors?.length
+          ? undefined
+          : 'The previous step ended without a result. Check the state of the files and continue the task.'
+      }
+    case 'success':
+      return { kind: 'fatal', continuable: false, notice: '' }
+    default:
+      return {
+        kind: msg.is_error ? 'fatal' : 'execution',
+        continuable: false,
+        notice: (msg.errors ?? []).join('\n') || 'The run stopped.'
+      }
+  }
+}
+
+/**
+ * How many times one turn may be resumed before giving up.
+ *
+ * Three is enough to get through a long refactor split across turn ceilings, and
+ * few enough that a genuine loop — an agent that keeps hitting the ceiling
+ * without converging — is reported rather than burning the user's credit
+ * indefinitely. Each resume is announced, so it is never silent.
+ */
+export const MAX_CONTINUATIONS = 3
+
+/**
+ * Turns allowed in a single run.
+ *
+ * This is a *safety valve*, not a work limit — `runTurn` resumes when it is hit
+ * (`MAX_CONTINUATIONS` times, with the user told each time). 400 is roughly a
+ * long refactor: the old 120 was reached mid-build often enough that it read as
+ * the agent giving up.
+ */
+export const MAX_TURNS_PER_RUN = 400
+
+/**
+ * The synthetic turn that resumes work.
+ *
+ * Deliberately terse and non-alarming: the model has already seen its own tool
+ * results, and a long explanation of the interruption invites it to re-read
+ * everything it just read.
+ */
+export function continuationPrompt(interruption: Interruption, attempt: number): string {
+  const base = interruption.resumePrompt ?? 'Continue the task from where you stopped.'
+  return attempt === 1 ? base : `${base}\n\n(This is continuation ${attempt} of ${MAX_CONTINUATIONS} in this turn. Be economical: fewer, larger tool calls.)`
 }

@@ -152,6 +152,12 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.5.5** stops the agent giving up when a run ends without finishing. Reaching the turn limit used to
+> print **"Run failed."** and go idle in the middle of a build — nothing had failed, the run had simply used its
+> 120 turns. A cut-short run is now recognised for what it is and **continues where it left off**, up to three
+> times, announcing each resume so it is never silent. The per-run ceiling also moves from 120 to 400 turns, which
+> is roughly a long refactor. A real failure — a rejected key, no credit, an unreachable provider — still stops
+> immediately with the sentence that explains it, because retrying cannot fix those.
 > **v0.5.0** changes the licence and adds one reminder. The app is now **source-available under a
 > non-commercial licence**: free for solo developers and for any project that does not make money, with a
 > **commercial licence required for anything that does** — selling what you build with it, paid client work, or use
