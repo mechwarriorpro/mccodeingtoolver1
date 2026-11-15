@@ -152,6 +152,14 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.5.8** is a simulation pass: every agent tool driven through its real handler against a generated
+> NeoForge mod, with the output read the way the model reads it. It found three defects worth having.
+> `check_update_jar` could pass a jar built for the **old** version — it read the target from
+> `gradle.properties`, which is exactly the value an unfinished update has not changed yet — so the intended
+> target is now authoritative and shared with `plan_update`. `launch_game` reported *"Dev client starting"* for
+> a wrapper that had **already died**: there was no `error` listener, and it returned before a fast failure
+> could be observed. It now quotes the process's own explanation (`JAVA_HOME is not set…`) instead of a guess.
+> The same fix applies to launching a real instance. See `TOOL-SIMULATION.md`.
 > **v0.5.7** makes updating an old mod change **only what has to change**. Two new tools: `plan_update`
 > reports which version boundaries the jump crosses and — separately — which symbols in *your* code those
 > boundaries actually removed, with file and line. Most of the time the answer is none, and the agent is

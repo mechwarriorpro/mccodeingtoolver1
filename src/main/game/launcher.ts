@@ -27,6 +27,9 @@ export interface DevLaunchOptions {
 
 setStatusProvider(() => gameStatus())
 
+/** Recent stdout/stderr per child, for explaining a failed start. */
+const recentOutput = new WeakMap<ChildProcess, string[]>()
+
 let current: {
   child: ChildProcess
   logPath: string
@@ -34,6 +37,8 @@ let current: {
   instanceId: string
   exitCode: number | null
   titleScreen: boolean
+  /** Set when the OS refused to start the process at all. */
+  spawnError?: string
 } | null = null
 
 export function gameStatus(): GameStatus {
@@ -67,14 +72,44 @@ function scanLine(line: string): void {
 
 function attach(child: ChildProcess, logPath: string): void {
   let buf = ''
+  /**
+   * Recent output, kept in memory *and* on disk.
+   *
+   * The log file is written asynchronously, so reading it back the instant the
+   * process exits races the write and returns nothing — which is how a failed
+   * launch ended up reporting "it exited immediately" with no cause. The cause
+   * is nearly always in these last few lines.
+   */
+  const recent: string[] = []
+  /**
+   * `spawn` does not throw when the binary cannot be run — the failure arrives
+   * later as an `error` event. Without a listener that event is an unhandled
+   * exception, and with no listener at all the app reported "Dev client
+   * starting" for a process that never existed. A launch that failed has to
+   * look like a failed launch.
+   */
+  child.on('error', (err) => {
+    const text = `[launcher] failed to start: ${err.message}\n`
+    fs.appendFile(logPath, text, () => undefined)
+    if (current && current.child === child) {
+      current.exitCode = -1
+      current.spawnError = err.message
+      emitGameStatus(gameStatus())
+    }
+  })
   const handle = (chunk: Buffer): void => {
     const text = chunk.toString('utf8')
     fs.appendFile(logPath, text, () => undefined)
     buf += text
     const lines = buf.split(/\r?\n/)
     buf = lines.pop() ?? ''
-    for (const line of lines) scanLine(line)
+    for (const line of lines) {
+      scanLine(line)
+      if (line.trim()) recent.push(line.trim())
+      if (recent.length > 20) recent.shift()
+    }
   }
+  recentOutput.set(child, recent)
   child.stdout?.on('data', handle)
   child.stderr?.on('data', handle)
   child.on('exit', (code) => {
@@ -84,6 +119,27 @@ function attach(child: ChildProcess, logPath: string): void {
       emitGameStatus(gameStatus())
     }
   })
+}
+
+/**
+ * The last few non-empty log lines.
+ *
+ * A launch failure's cause is nearly always one line of the process's own
+ * output — "JAVA_HOME is not set", "Could not find or load main class" — and
+ * returning that is worth more than any sentence this code could invent.
+ */
+function tailLog(logPath: string, lines = 6): string {
+  try {
+    return fs
+      .readFileSync(logPath, 'utf8')
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .slice(-lines)
+      .join(' ')
+  } catch {
+    return ''
+  }
 }
 
 /** Split a command-line-ish string into args, respecting simple quotes. */
@@ -143,6 +199,43 @@ export async function launchDevClient(opts: DevLaunchOptions): Promise<{ ok: boo
     const child = spawn(cmd, args, { cwd: opts.workspaceDir, env, shell: isWin, windowsHide: false, detached: false })
     current = { child, logPath, startedAt: Date.now(), instanceId: opts.instanceId, exitCode: null, titleScreen: false }
     attach(child, logPath)
+    /**
+     * Wait for the process to actually exist before saying it started.
+     *
+     * `spawned` fires once the OS has a pid; `error` fires instead when it does
+     * not. A few milliseconds of waiting turns "Dev client starting" into a real
+     * answer, and stops the agent from going on to screenshot a game that is
+     * not running.
+     */
+    const outcome = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
+      let settled = false
+      const finish = (r: { ok: boolean; error?: string }): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(r)
+      }
+      // A wrapper that starts and dies immediately is the common failure here —
+      // no JAVA_HOME, a gradle wrapper that cannot download its distribution.
+      // Waiting only for `spawn` reports success for a process that is already
+      // dead, so a fast non-zero exit counts as a failed launch and carries the
+      // log line that explains it.
+      const timer = setTimeout(() => finish({ ok: true }), 2500)
+      child.once('spawn', () => {
+        // Do not resolve here: give the process a moment to prove it survives.
+        setTimeout(() => finish({ ok: true }), 750)
+      })
+      child.once('error', (err) => finish({ ok: false, error: err.message }))
+      child.once('exit', (code) => {
+        // A clean immediate exit is still not a running client.
+        const tail = (recentOutput.get(child) ?? []).slice(-4).join(' ')
+        finish({ ok: false, error: tail || `it exited immediately with code ${code ?? 0}` })
+      })
+    })
+    if (!outcome.ok) {
+      current = null
+      return { ok: false, error: `The dev client could not be started: ${outcome.error}` }
+    }
     emitGameStatus(gameStatus())
     return { ok: true }
   } catch (err) {

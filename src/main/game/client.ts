@@ -38,9 +38,32 @@ export interface RunningGame {
   gameDir: string
   titleScreen: boolean
   exitCode: number | null
+  /** Set when the OS refused to start the process at all. */
+  spawnError?: string
 }
 
 let running: RunningGame | null = null
+
+/**
+ * The last few non-empty log lines.
+ *
+ * A launch failure's cause is nearly always the process's own output — "Could
+ * not find or load main class", "Unrecognized VM option" — and quoting it beats
+ * any sentence invented here.
+ */
+function tailLines(logPath: string, lines = 6): string {
+  try {
+    return fs
+      .readFileSync(logPath, 'utf8')
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .slice(-lines)
+      .join(' ')
+  } catch {
+    return ''
+  }
+}
 
 export function runningGame(): RunningGame | null {
   return running
@@ -193,6 +216,9 @@ export async function launchNeoForge(spec: LaunchSpec): Promise<{ ok: boolean; e
   setStatusProvider(clientStatus)
 
   let buf = ''
+  // Kept in memory because the log file is written asynchronously: reading it
+  // back the moment the process exits races the write and yields nothing.
+  const recent: string[] = []
   const handle = (chunk: Buffer): void => {
     const text = chunk.toString('utf8')
     fs.appendFile(logPath, text, () => undefined)
@@ -200,6 +226,10 @@ export async function launchNeoForge(spec: LaunchSpec): Promise<{ ok: boolean; e
     const lines = buf.split(/\r?\n/)
     buf = lines.pop() ?? ''
     for (const line of lines) {
+      if (line.trim()) {
+        recent.push(line.trim())
+        if (recent.length > 20) recent.shift()
+      }
       emitGameLog(line)
       if (!running?.titleScreen && /(Sound engine started|Created: .*title\/minecraft\.png|Backend library: LWJGL)/i.test(line)) {
         if (running) running.titleScreen = true
@@ -213,6 +243,38 @@ export async function launchNeoForge(spec: LaunchSpec): Promise<{ ok: boolean; e
     if (running) running.exitCode = code
     emitGameStatus()
   })
+  // `spawn` reports a refusal asynchronously. With no listener that is an
+  // unhandled exception, and the caller had already been told `ok: true` — so
+  // the agent went on to screenshot a game that never started.
+  child.on('error', (err) => {
+    fs.appendFile(logPath, `[launcher] failed to start: ${err.message}\n`, () => undefined)
+    if (running) {
+      running.exitCode = -1
+      running.spawnError = err.message
+    }
+    emitGameStatus()
+  })
+  const outcome = await new Promise<{ ok: boolean; error?: string }>((resolve) => {
+    let settled = false
+    const finish = (r: { ok: boolean; error?: string }): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(r)
+    }
+    // A JVM that rejects its arguments prints the reason and exits in
+    // milliseconds. Waiting only for `spawn` reports a healthy launch for a
+    // process that is already gone, so a fast exit is a failure carrying the
+    // log line that explains it.
+    const timer = setTimeout(() => finish({ ok: true }), 2500)
+    child.once('spawn', () => setTimeout(() => finish({ ok: true }), 750))
+    child.once('error', (err) => finish({ ok: false, error: err.message }))
+    child.once('exit', (code) => finish({ ok: false, error: recent.slice(-4).join(' ') || `it exited immediately with code ${code ?? '?'}` }))
+  })
+  if (!outcome.ok) {
+    running = null
+    return { ok: false, error: `Minecraft could not be started: ${outcome.error}` }
+  }
   emitGameStatus()
   return { ok: true }
 }

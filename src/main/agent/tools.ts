@@ -86,12 +86,25 @@ export interface ToolContext {
    * is the thing that says "done" while the build is red.
    */
   onBuildResult?: (info: { ok: boolean; jarPath?: string; errors: string[] }) => void
-  /** Breakages the update plan named, so the engine can check they were fixed. */
-  onUpdatePlan?: (info: { breakages: number }) => void
+  /**
+   * Breakages the update plan named, so the engine can check they were fixed —
+   * and the target, so the automode stopping rule checks the jar against what
+   * was actually asked for rather than whatever the property happens to say.
+   */
+  onUpdatePlan?: (info: { breakages: number; mcVersion?: string; loader?: 'neoforge' | 'forge' | 'fabric' }) => void
 }
 
 export function createAgentTools(ctx: ToolContext) {
   let activeBuild: AbortController | null = null
+  /**
+   * The target from the last `plan_update`.
+   *
+   * `check_update_jar` and the automode stopping rule both need to know what
+   * "finished" means, and the project's property is a moving value: before the
+   * bump it says the old version, and a jar from before then is not the update
+   * anybody asked for. Recording the intent is what makes the check meaningful.
+   */
+  let lastPlanned: { mcVersion: string; loader: 'neoforge' | 'forge' | 'fabric' } | null = null
 
   const tools = [
     tool(
@@ -561,9 +574,10 @@ export function createAgentTools(ctx: ToolContext) {
           to,
           files
         })
+        lastPlanned = { mcVersion: to.mcVersion, loader: to.loader as 'neoforge' | 'forge' | 'fabric' }
         // The engine uses this to check the breakages were actually dealt with,
         // rather than trusting that the model read the list.
-        ctx.onUpdatePlan?.({ breakages: plan.breaking.length })
+        ctx.onUpdatePlan?.({ breakages: plan.breaking.length, mcVersion: to.mcVersion, loader: to.loader })
 
         const lines: string[] = [plan.summary, '']
         lines.push(`**From:** ${plan.from.loader} ${plan.from.mcVersion ?? '(unknown)'}  →  **To:** ${plan.to.loader} ${plan.to.mcVersion}`)
@@ -606,16 +620,35 @@ export function createAgentTools(ctx: ToolContext) {
      */
     tool(
       'check_update_jar',
-      'Decide whether the update is actually finished. Reads build/libs and checks the jar contains classes, carries the right loader metadata, declares the target Minecraft version, keeps the mod id, and has parseable mixin configs. Use this instead of assuming a green build means a working mod.',
-      {},
-      async () => {
+      'Decide whether the update is actually finished. Reads build/libs and checks the jar contains classes, carries the right loader metadata, declares the intended Minecraft version, keeps the mod id, and has parseable mixin configs. Pass the version you were asked to reach — otherwise the project\'s current property is used, and a jar left over from the old version would pass. Use this instead of assuming a green build means a working mod.',
+      {
+        mcVersion: z.string().optional().describe('The Minecraft version the jar must declare — the one you were asked to reach'),
+        loader: z.enum(['neoforge', 'forge', 'fabric']).optional()
+      },
+      async ({ mcVersion, loader }) => {
         const dir = ctx.getWorkspace()
         if (!dir) return err('No project folder is open.')
         const props = readProps(path.join(dir, 'gradle.properties'))
-        const target = { mcVersion: detectMcVersion(props), loader: detectLoader(props) }
-        const detected = detectProject(dir)
+        // The intended target wins over the current property. A jar built before
+        // the property was bumped declares the old version and is not the update
+        // that was asked for — passing it would be the tool lying on the
+        // strongest question it is asked.
+        // Explicit argument first, then the target the user last planned — which
+        // is what stops a jar left over from the previous version passing. The
+        // project's own property is the last resort, because before the bump it
+        // still says the old version.
+        const target = {
+          mcVersion: mcVersion ?? lastPlanned?.mcVersion ?? detectMcVersion(props),
+          loader: loader ?? lastPlanned?.loader ?? detectLoader(props)
+        }
+        // Reaching the planned target clears it: the update is done, and a later
+        // check of a different version must not be judged against an old intent.
         const jar = findBuiltJar(dir)
+        const detected = detectProject(dir)
         const result = checkUpdatedJar(jar ?? null, target, { expectedModId: detected.modId })
+        if (result.ok && lastPlanned && lastPlanned.mcVersion === target.mcVersion && lastPlanned.loader === target.loader) {
+          lastPlanned = null
+        }
         const lines = [result.summary, '']
         for (const c of result.checks) lines.push(`${c.ok ? 'PASS' : 'FAIL'}  ${c.name} — ${c.detail}`)
         if (!result.ok) {

@@ -110,6 +110,14 @@ export class AgentSession {
   private updateResumes = 0
   /** Breakages the update plan named that are still unresolved. */
   private unresolvedBreakages = 0
+  /**
+   * The version/loader the user asked to reach, from the last plan_update.
+   *
+   * Without this the automode stopping rule validates the jar against the
+   * project's own property, which is exactly the value an unfinished update has
+   * not changed yet — so a stale jar would be declared finished.
+   */
+  private updateTarget: { mcVersion: string; loader: 'neoforge' | 'forge' | 'fabric' } | null = null
   private events: EngineEvents
   private getInstanceId: () => string
   /** Reasoning accumulated since the last tool call or text block. */
@@ -156,6 +164,7 @@ export class AgentSession {
     this.lastBuildOk = null
     this.updateResumes = 0
     this.unresolvedBreakages = 0
+    this.updateTarget = null
     this.events.onStatus('thinking')
     try {
       const content: unknown[] = []
@@ -230,7 +239,8 @@ export class AgentSession {
       const ws = cfg.workspaceDir
       if (ws) {
         const props = readProps(path.join(ws, 'gradle.properties'))
-        target = { mcVersion: detectMcVersion(props), loader: detectLoader(props) }
+        // The version asked for outranks the one the property still says.
+        target = this.updateTarget ?? { mcVersion: detectMcVersion(props), loader: detectLoader(props) }
         const detected = detectProject(ws)
         const built = findBuiltJar(ws)
         jar = checkUpdatedJar(built ?? null, target, { expectedModId: detected.modId })
@@ -453,6 +463,7 @@ export class AgentSession {
       },
       onUpdatePlan: (info) => {
         this.unresolvedBreakages = info.breakages
+        if (info.mcVersion && info.loader) this.updateTarget = { mcVersion: info.mcVersion, loader: info.loader }
       },
       onGameStatus: (status) => this.events.onGameStatus(status)
     })
