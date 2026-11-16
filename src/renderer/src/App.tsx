@@ -202,6 +202,38 @@ export default function App(): JSX.Element {
     setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4200)
   }, [])
 
+  /**
+   * Re-read whether a turn is running, from the process that owns it.
+   *
+   * Events are not replayed: anything emitted before this renderer existed, or
+   * during a moment when it was not listening, is simply lost. Asking on mount
+   * and again whenever the window becomes visible makes that recoverable — and
+   * a turn is exactly the kind of state a user reloads the window to check on.
+   */
+  const syncTurnState = useCallback(async () => {
+    try {
+      const st = await api.chat.state()
+      setBusy(st.busy)
+      setBusySince(st.busy ? (st.startedAt ?? Date.now()) : null)
+      setStatus(st.busy ? 'thinking' : 'idle')
+    } catch {
+      /* an older main process without chat:state — the event path still works */
+    }
+  }, [])
+
+  useEffect(() => {
+    const onFocus = (): void => void syncTurnState()
+    const onVisible = (): void => {
+      if (document.visibilityState === 'visible') void syncTurnState()
+    }
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [syncTurnState])
+
   // ---------------- bootstrap ----------------
   useEffect(() => {
     void (async () => {
@@ -221,8 +253,14 @@ export default function App(): JSX.Element {
       setGame(await api.game.status())
       setShots(await api.game.screenshots())
       if (!cfg.workspaceDir || !summary.open) setShowSetup(false)
+      // A window that opened mid-turn has missed every event that would have
+      // set these, so it has to ask rather than assume. Without this the pill
+      // reads "idle" over a live build and the Stop button never appears.
+      await syncTurnState()
     })()
   }, [])
+
+
 
   const loadConversation = useCallback(async (id: string) => {
     const conv = await api.chat.load(id)
@@ -292,6 +330,18 @@ export default function App(): JSX.Element {
         if (p.status === 'idle') {
           setBusy(false)
           setBusySince(null)
+        } else {
+          /*
+           * Any other status means the turn is alive.
+           *
+           * `thinking` used to update the label and nothing else, so once
+           * `busy` had been cleared by anything the pill read "idle" while main
+           * went on working — and the Stop button was gone with it. The status
+           * channel is main's own statement about the turn; it outranks a
+           * heuristic, and it is the only thing that survives a run boundary.
+           */
+          setBusy(true)
+          setBusySince((t) => t ?? Date.now())
         }
         if (p.status !== 'waiting-permission') setPermission(null)
       }),
@@ -322,11 +372,22 @@ export default function App(): JSX.Element {
       api.events.onPermission((p) => setPermission(p)),
       api.events.onPermissionResolved(() => setPermission(null)),
       api.events.onResult((p) => {
-        // End of run: drop the live buffer and show what main persisted.
+        /*
+         * End of run — which is not the end of the turn.
+         *
+         * `runTurn` may start another run the instant this arrives: a
+         * continuation after a cut-short run, automode's next attempt at an
+         * unfinished jar, a retry after a busy provider. Clearing `busy` here
+         * dropped the pill to "idle" for the whole of that next run, because
+         * the only thing that re-set it was a tool call or a text delta — and a
+         * run that is thinking produces neither for a while. The idle status at
+         * the turn's real end does the clearing; this handler must not guess.
+         *
+         * Dropping the live buffer is still right: main has persisted every
+         * block, and the bubble is about to be replaced by that.
+         */
         setStreaming('')
         setThinking('')
-        setBusy(false)
-        setBusySince(null)
         setMessages((msgs) => {
           const copy = [...msgs]
           const lastIdx = [...copy].reverse().findIndex((m) => m.role === 'assistant')

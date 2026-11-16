@@ -152,6 +152,16 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.5.11** fixes the pill **still** saying idle while the agent works. v0.5.9 stopped main announcing
+> idle in the middle of a turn, which was real, and it was not the whole story. Three things were left:
+> the window cleared "busy" on every *run* result, and a turn can be several runs (automode resuming
+> toward a finished jar, a continuation after a cut-short run, a retry after a busy provider) — so the
+> pill read "idle" through each of those gaps and the Stop button disappeared with it. A status of
+> `thinking` from main could not put it back, only take it away. And a window reloaded mid-turn had no
+> events to replay and no way to ask, so it drew "idle" over a live build. Main now answers
+> `chat:state`, the window asks on startup and whenever it regains focus, and only the turn's own end
+> may clear the flag. Also fixed: a follow-up message typed in the instant after Stop was accepted into
+> a queue nothing would read again, and silently never ran.
 > **v0.5.10** fixes **"Technic Launcher not found"** for people who have it open. The search checked three
 > hard-coded Windows paths, and the launcher is a single exe people run from Downloads — so it was usually
 > nowhere near them. That error also said *"point Settings > Instance at the pack folder"*, which could not

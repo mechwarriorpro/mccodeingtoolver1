@@ -41,6 +41,32 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8')
 
 const engine = read('src/main/agent/engine.ts')
+
+/**
+ * The body of the `finally` block that belongs to `send()`.
+ *
+ * Matched by brace depth rather than by a character count: the original test
+ * sliced 400 characters past the block's opening, which silently stopped
+ * covering the code the moment a comment got longer. A test that passes because
+ * it is looking at the wrong bytes is worse than no test.
+ */
+function sendFinallyBlock() {
+  const sendIdx = engine.indexOf('async send(')
+  if (sendIdx < 0) throw new Error('could not find send()')
+  const open = engine.indexOf('} finally {', sendIdx)
+  if (open < 0) throw new Error('send() has no finally block')
+  let depth = 0
+  let i = engine.indexOf('{', open)
+  const start = i
+  for (; i < engine.length; i++) {
+    if (engine[i] === '{') depth++
+    else if (engine[i] === '}') {
+      depth--
+      if (depth === 0) break
+    }
+  }
+  return engine.slice(start, i + 1)
+}
 const app = read('src/renderer/src/App.tsx')
 const panel = read('src/renderer/src/components/ChatPanel.tsx')
 
@@ -67,18 +93,19 @@ check('the result handler does not announce idle', () => {
 
 check('idle is announced from the turn’s own exit path', () => {
   // send()'s finally block is the one place that knows the turn is over.
-  const sendIdx = app.length && engine.indexOf('async send(')
-  assert.ok(sendIdx > 0)
-  const finallyIdx = engine.indexOf('} finally {', sendIdx)
-  const block = engine.slice(finallyIdx, finallyIdx + 400)
+  const block = sendFinallyBlock()
   assert.match(block, /onStatus\(\s*'idle'\s*\)/, 'the turn end must still say idle, or the pill never clears')
 })
 
 check('the turn-end idle is skipped when the user stopped it', () => {
-  const sendIdx = engine.indexOf('async send(')
-  const finallyIdx = engine.indexOf('} finally {', sendIdx)
-  const block = engine.slice(finallyIdx, finallyIdx + 400)
+  const block = sendFinallyBlock()
   assert.match(block, /if \(!this\.stopped\)/, 'a stopped turn already said what happened; a second idle would be noise')
+})
+
+check('the turn-end exit clears the clock with the flag', () => {
+  const block = sendFinallyBlock()
+  assert.match(block, /this\.busy = false/, 'the turn is over, so nothing may still report it running')
+  assert.match(block, /this\.turnStartedAt = null/, 'a stale start time would make the next turn appear hours old')
 })
 
 check('resumes and retries say what they are doing, not just "working"', () => {

@@ -1129,6 +1129,8 @@ export interface McfApi {
     new: () => Promise<Conversation>
     remove: (id: string) => Promise<{ id: string; title: string; updatedAt: number }[]>
     send: (payload: { text: string; attachments?: { path: string; name: string; kind: string; mediaType?: string }[] }) => Promise<{ ok: boolean; error?: string }>
+    /** Whether a turn is running, and since when — asked, not inferred from events. */
+    state: () => Promise<{ busy: boolean; startedAt: number | null }>
     interrupt: () => Promise<{ ok: boolean }>
     permission: (payload: { id: string; allow: boolean; remember: boolean }) => Promise<{ ok: boolean }>
     autonomy: (mode: 'auto' | 'review' | 'ask') => Promise<{ ok: boolean }>

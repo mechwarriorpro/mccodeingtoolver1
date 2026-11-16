@@ -274,6 +274,7 @@ const api = {
     new: () => ipcRenderer.invoke('chat:new'),
     remove: (id: string) => ipcRenderer.invoke('chat:delete', id),
     send: (payload: unknown) => ipcRenderer.invoke('chat:send', payload),
+    state: () => ipcRenderer.invoke('chat:state'),
     interrupt: () => ipcRenderer.invoke('chat:interrupt'),
     permission: (payload: unknown) => ipcRenderer.invoke('chat:permission', payload),
     autonomy: (mode: string) => ipcRenderer.invoke('chat:autonomy', mode),

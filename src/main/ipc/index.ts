@@ -245,7 +245,16 @@ ${text}` : text
       },
       onPermissionRequest: (req: PermissionPrompt) => send('agent:permission', req),
       onPermissionResolved: (id) => send('agent:permission-resolved', { id }),
-      onStatus: (status, detail) => send('agent:status', { status, detail }),
+      onStatus: (status, detail) => {
+        send('agent:status', { status, detail })
+        // The turn is over, so a reset that was deferred to protect it can run
+        // now. Ordering matters: the engine clears `busy` before announcing
+        // idle, so the deferred reset is not mistaken for another mid-turn one.
+        if (status === 'idle' && resetWhenIdle) {
+          resetWhenIdle = false
+          session = null
+        }
+      },
       onResult: (payload) => {
         const conv = conversation()
         const last = [...conv.messages].reverse().find((m) => m.role === 'assistant')
@@ -298,8 +307,24 @@ ${text}` : text
   return session
 }
 
+/**
+ * A reset was asked for while a turn was running, so it waits.
+ *
+ * `resetSession` is called from a dozen places — switching project, changing
+ * instance, linking reference sources — and any of them can happen mid-build.
+ * Dropping the session then would answer "not busy" for a turn that is still
+ * going: the window reloaded or refocused would draw an idle pill over live
+ * work, and a second send would start a *second* engine alongside the first.
+ */
+let resetWhenIdle = false
+
 function resetSession(): void {
+  if (session?.active) {
+    resetWhenIdle = true
+    return
+  }
   session = null
+  resetWhenIdle = false
 }
 
 export function registerIpc(): void {
@@ -2768,6 +2793,15 @@ export function registerIpc(): void {
       return { ok: false, error: (err as Error).message }
     }
   })
+
+  /**
+   * Whether a turn is running right now, asked rather than inferred.
+   *
+   * The renderer kept its own `busy` flag built from events, so a window that
+   * reloaded mid-turn — or one that missed an event — showed "idle" over live
+   * work and hid the Stop button. Main owns the turn, so main answers.
+   */
+  ipcMain.handle('chat:state', () => session?.state ?? { busy: false, startedAt: null })
 
   ipcMain.handle('chat:interrupt', async () => {
     await session?.interrupt()

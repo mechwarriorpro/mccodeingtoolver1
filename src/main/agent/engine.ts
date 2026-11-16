@@ -87,6 +87,15 @@ export class AgentSession {
   private allowAllSession = new Set<string>()
   private busy = false
   /**
+   * When the current turn started, in epoch ms. Null when nothing is running.
+   *
+   * The renderer used to keep its own clock and start it on whichever event
+   * happened to arrive first, which meant a window reloaded mid-turn showed no
+   * time at all. Main is the only process that knows when the turn really
+   * began, so it keeps the number and the UI asks for it.
+   */
+  private turnStartedAt: number | null = null
+  /**
    * Set by `handleMessage` when a result message says the turn was cut short
    * rather than finished. `runTurn` reads it and resumes instead of ending.
    */
@@ -144,6 +153,18 @@ export class AgentSession {
     return this.busy
   }
 
+  /**
+   * What the UI needs to draw the pill honestly.
+   *
+   * A reloaded window has no event history, so without an explicit ask it draws
+   * "idle" over a turn that is halfway through a build — and there is no Stop
+   * button either, because that is gated on the same flag. `startedAt` is main's
+   * own clock rather than the renderer's guess at when things began.
+   */
+  get state(): { busy: boolean; startedAt: number | null } {
+    return { busy: this.busy, startedAt: this.turnStartedAt }
+  }
+
   setAutonomy(mode: AutonomyMode): void {
     this.permissionMode = mode
     this.current?.setPermissionMode(this.mapMode(mode)).catch(() => undefined)
@@ -157,8 +178,16 @@ export class AgentSession {
 
   /** Send a user turn. Resolves when the result message arrives. */
   async send(prompt: string, images: { path: string; mediaType: string }[] = []): Promise<void> {
-    if (this.busy) throw new Error('The agent is already running. Interrupt it first.')
+    /*
+     * `busy` alone is not the whole story: `interrupt()` clears it the moment
+     * the user presses Stop, while the run it interrupted is still unwinding
+     * and `current` is still set. A message accepted in that window was pushed
+     * onto a queue nobody would ever read again — the turn ended, the pill said
+     * idle, and the user's follow-up silently never ran.
+     */
+    if (this.busy || this.current) throw new Error('The agent is already running. Interrupt it first.')
     this.busy = true
+    this.turnStartedAt = Date.now()
     this.stopped = false
     // Per-turn, not per-session: a new request starts with a clean scoreboard.
     this.lastBuildOk = null
@@ -187,9 +216,6 @@ export class AgentSession {
         parent_tool_use_id: null
       })
 
-      // Already streaming: the message rides the open input queue.
-      if (this.current) return
-
       // Interrupting closes the backend session, so a new one is started for the next turn.
       await this.runTurn()
     } catch (e) {
@@ -200,7 +226,16 @@ export class AgentSession {
       this.events.onResult({ text: '', isError: true, errorText: info.message })
       throw e
     } finally {
+      /*
+       * The turn's one and only exit.
+       *
+       * `runTurn` deliberately does not announce idle — it can start another
+       * run the instant it returns — so this is the only place that knows the
+       * work is over. `turnStartedAt` is cleared with it: a stale start time
+       * would make the next turn's clock begin hours ago.
+       */
       this.busy = false
+      this.turnStartedAt = null
       if (!this.stopped) this.events.onStatus('idle')
     }
   }
@@ -314,6 +349,7 @@ export class AgentSession {
           this.events.onResult({ text: notice, isError: false })
           this.events.onStatus('idle')
           this.busy = false
+          this.turnStartedAt = null
           return
         }
         continuations++
@@ -354,6 +390,7 @@ export class AgentSession {
             this.events.onResult({ text: notice, isError: false })
             this.events.onStatus('idle')
             this.busy = false
+            this.turnStartedAt = null
             return
           }
           this.updateResumes++
@@ -434,6 +471,7 @@ export class AgentSession {
     for (const [, p] of this.pending) p.resolve(false, false)
     this.pending.clear()
     this.busy = false
+    this.turnStartedAt = null
     this.events.onStatus('idle')
   }
 
