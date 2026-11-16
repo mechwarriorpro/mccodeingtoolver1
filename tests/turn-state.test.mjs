@@ -27,7 +27,7 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 let passed = 0
 const failures = []
@@ -55,7 +55,15 @@ async function checkAsync(name, fn) {
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const read = (rel) => fs.readFileSync(path.join(root, rel), 'utf8')
 
-const { AgentSession } = await import(path.join(root, 'out-test/main/agent/engine.js'))
+/*
+ * `pathToFileURL`, not `path.join`.
+ *
+ * On Linux a bare absolute path happens to work in `import()`. On Windows it
+ * does not: `C:\...` parses as a URL with scheme "c", and Node rejects it with
+ * ERR_UNSUPPORTED_ESM_URL_SCHEME. That is exactly how this test passed locally
+ * and failed in CI, where the runner is Windows. A path is not a URL.
+ */
+const { AgentSession } = await import(pathToFileURL(path.join(root, 'out-test/main/agent/engine.js')).href)
 
 /**
  * An event sink that records what main told the UI.
