@@ -33,6 +33,8 @@ const defaultConfig: AppConfig = {
   licence: { launchCount: 0, key: '', lastNagAt: 0 },
   workspaceDir: '',
   activeDir: '',
+  knownProjects: [],
+  projectsRoot: '',
   github: { owner: '', repo: '', branch: '' },
   javaPath: '',
   decompilerJar: '',

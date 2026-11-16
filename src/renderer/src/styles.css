@@ -854,3 +854,128 @@ button.link:hover { color: var(--accent-2); }
    pane — which otherwise makes a resize feel like a glitch. */
 body.resizing { cursor: col-resize; user-select: none; }
 body.resizing * { cursor: col-resize !important; }
+
+/* ---------------------------------------------------------- project picker */
+/*
+ * A dropdown that overlaps the sidebar rather than pushing it around: the list
+ * can be long, and a sidebar that reflows every time it opens is disorienting.
+ */
+.projpick { position: relative; display: inline-block; }
+.projpick-toggle { display: inline-flex; align-items: center; gap: 6px; max-width: 190px; }
+.projpick-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.projpick-caret { color: var(--dim); font-size: 9px; }
+.projpick-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  width: 320px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.45);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.projpick-filter {
+  width: 100%;
+  padding: 6px 8px;
+  font-size: 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--text);
+}
+.projpick-list { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.projpick-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 1px 8px;
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: transparent;
+  border: 0;
+  color: var(--text);
+  cursor: pointer;
+}
+.projpick-item:hover:not(:disabled) { background: rgba(255, 255, 255, 0.05); }
+.projpick-item.on { background: rgba(110, 231, 168, 0.1); }
+.projpick-item.gone { opacity: 0.45; cursor: not-allowed; }
+.projpick-item.gone .projpick-name { text-decoration: line-through; }
+.projpick-name { font-size: 12.5px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+.projpick-meta {
+  grid-column: 1 / -1;
+  font-size: 10.5px;
+  color: var(--dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.projpick-src { font-size: 9.5px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.04em; align-self: start; }
+.projpick-tag { font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent); border: 1px solid currentColor; border-radius: 4px; padding: 0 3px; }
+.projpick-tag.bad { color: var(--red); }
+.projpick-empty { font-size: 11.5px; color: var(--dim); padding: 10px 8px; }
+.projpick-empty.bad { color: var(--red); }
+.projpick-actions { display: flex; gap: 5px; border-top: 1px solid var(--line); padding-top: 7px; }
+
+/* ---------------------------------------------------- whole-pack upgrade */
+.upgrade {
+  margin: 14px 0 18px;
+  padding: 13px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.015);
+}
+.upgrade-title { margin: 0 0 5px; font-size: 13.5px; }
+.upgrade-sub { font-size: 11.5px; color: var(--muted); line-height: 1.55; }
+.upgrade-sub code, .upgrade-hint code, .upgrade-done code { font-size: 10.5px; }
+.upgrade-current {
+  margin-top: 9px;
+  font-size: 11.5px;
+  color: var(--muted);
+  padding: 6px 9px;
+  border-left: 2px solid var(--accent);
+  background: rgba(110, 231, 168, 0.05);
+  border-radius: 0 6px 6px 0;
+}
+.upgrade-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin-top: 12px; }
+.upgrade-row label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; color: var(--muted); }
+.upgrade-row select { min-width: 130px; }
+.upgrade-error { margin-top: 10px; color: var(--red); font-size: 11.5px; }
+.upgrade-plan { margin-top: 14px; display: flex; flex-direction: column; gap: 12px; }
+.upgrade-summary { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+.upgrade-group { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.upgrade-group-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; font-size: 11.5px;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid var(--line);
+}
+.upgrade-group.warn .upgrade-group-head { background: rgba(246, 196, 106, 0.09); color: var(--amber); }
+.upgrade-group.muted { opacity: 0.75; }
+.upgrade-note { padding: 8px 10px; font-size: 11px; color: var(--muted); line-height: 1.5; }
+.upgrade-item {
+  display: flex; align-items: baseline; gap: 8px;
+  padding: 5px 10px; font-size: 11.5px; cursor: pointer;
+}
+.upgrade-item:hover { background: rgba(255, 255, 255, 0.03); }
+.upgrade-item.static { cursor: default; }
+.upgrade-name { font-weight: 600; min-width: 150px; }
+.upgrade-reason { color: var(--dim); font-size: 11px; }
+.upgrade-chips { display: flex; flex-wrap: wrap; gap: 4px; padding: 8px 10px; }
+.upgrade-chip {
+  font-size: 10.5px; color: var(--muted);
+  border: 1px solid var(--line); border-radius: 5px; padding: 1px 6px;
+}
+.upgrade-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.upgrade-hint { font-size: 10.5px; color: var(--dim); }
+.upgrade-done {
+  margin-top: 12px; padding: 10px 12px; font-size: 11.5px;
+  border: 1px solid rgba(110, 231, 168, 0.3); border-radius: 8px;
+  background: rgba(110, 231, 168, 0.06);
+}
+.upgrade-done.bad { border-color: rgba(240, 110, 110, 0.35); background: rgba(240, 110, 110, 0.06); }
+.upgrade-done ul { margin: 6px 0 0; padding-left: 18px; }

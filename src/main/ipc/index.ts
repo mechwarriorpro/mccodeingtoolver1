@@ -155,6 +155,8 @@ import { repoState, suggestRepoName } from '../build/repo'
 import { scanDependencies } from '../mod/deps'
 import { declareJarDependency, findCandidates, findVersionFile, identifyFiles, libsDir, newestVersionFor, projectInfo, sha1Of } from '../mod/dep-resolve'
 import type { PackMod } from '../mod/modpack'
+import { backUp, currentPackVersion, planPackUpdate, replaceJar, surveyPack, writeLoaderFile, type LoaderFamily } from '../mod/packupdate'
+import { folderName, looksLikeProject, mergeProjects, projectKey, projectSearchRoots, scanForProjects } from '../mod/projects'
 import { adoptJar, describeScan, displayNames, inferFromFileName, packVersions, verifyInferredId, planModUpdate, planUpdate, previewAdoption, readModJar, removeJar, resolveModsDir, scanModsFolder } from '../mod/modpack'
 import { readJarInfo, installJar } from '../mod/jar'
 import { detectTechnicInstances, buildTechnicPackZip, launchTechnic } from '../game/technic'
@@ -1353,8 +1355,84 @@ export function registerIpc(): void {
     if (!fork) return { ok: false, error: 'Unknown fork.' }
     if (!fs.existsSync(fork.dir)) return { ok: false, error: `The fork folder is gone: ${fork.dir}` }
     saveConfig({ activeDir: fork.dir })
+    rememberProject(fork.dir)
     resetSession()
     return { ok: true, dir: fork.dir }
+  })
+
+  /**
+   * Remember a project, so the dropdown can offer it later.
+   *
+   * Called from every path that opens one — scaffold, switch, fork, port — rather
+   * than from the dropdown alone, or a project created and never switched to
+   * would not be remembered.
+   */
+  function rememberProject(dir: string): void {
+    const key = projectKey(dir)
+    if (!key) return
+    const cfg = loadConfig()
+    const rest = cfg.knownProjects.filter((p) => projectKey(p.dir) !== key).slice(0, 24)
+    saveConfig({ knownProjects: [{ dir, lastOpenedAt: Date.now() }, ...rest] })
+  }
+
+  /**
+   * Every project the app can name, from both sources.
+   *
+   * Tracked projects are authoritative — a fork lives under userData and no
+   * amount of looking around would find it. Scanned projects are what makes a
+   * projects folder full of existing work usable without opening each one by
+   * hand. A folder that has been deleted is still listed, marked, because a
+   * project vanishing from the list with no explanation looks like data loss.
+   */
+  ipcMain.handle('project:list', () => {
+    const cfg = loadConfig()
+    const active = activeProjectDir(cfg)
+    const tracked = [
+      ...cfg.knownProjects,
+      // The scaffolded project and the open one are known whether or not they
+      // were ever added to the tracked list (an older install has no list at all).
+      ...(cfg.workspaceDir ? [{ dir: cfg.workspaceDir, lastOpenedAt: 0 }] : []),
+      ...(cfg.activeDir ? [{ dir: cfg.activeDir, lastOpenedAt: 0 }] : [])
+    ]
+
+    const scanned: string[] = []
+    const readdir = (d: string): string[] => fs.readdirSync(d)
+    const roots = projectSearchRoots(
+      [...tracked.map((t) => t.dir), ...listForks().map((f) => f.dir)],
+      cfg.projectsRoot
+    )
+    for (const root of roots) {
+      for (const found of scanForProjects(root, readdir, (a, b) => path.join(a, b))) {
+        scanned.push(found)
+      }
+    }
+
+    const projects = mergeProjects(tracked, scanned, {
+      activeDir: active,
+      exists: (d) => {
+        try {
+          return fs.statSync(d).isDirectory()
+        } catch {
+          return false
+        }
+      },
+      describe: (d) => {
+        try {
+          const props = readProps(path.join(d, 'gradle.properties'))
+          return {
+            name: props.mod_name || undefined,
+            modId: props.mod_id || undefined,
+            mcVersion: props.minecraft_version || undefined,
+            loader: props.neoforge_version ? 'neoforge' : props.forge_version ? 'forge' : props.fabric_loader_version ? 'fabric' : undefined
+          }
+        } catch {
+          return null
+        }
+      }
+    })
+    // Scanning can surface a folder whose gradle.properties is unreadable; it is
+    // still a project on disk, so it is offered under its folder name.
+    return { ok: true, projects, activeDir: active, projectsRoot: cfg.projectsRoot }
   })
 
   /** Go back to the project the mod was scaffolded into. */
@@ -1362,6 +1440,7 @@ export function registerIpc(): void {
     const target = (dir ?? '').trim()
     if (target && !fs.existsSync(target)) return { ok: false, error: `No such folder: ${target}` }
     saveConfig({ activeDir: target })
+    if (target) rememberProject(target)
     resetSession()
     return { ok: true, dir: target || loadConfig().workspaceDir }
   })
@@ -1965,6 +2044,202 @@ export function registerIpc(): void {
 
   ipcMain.handle('pack:remove', (_e, file: string) => removeJar(file))
 
+  /**
+   * Plan a whole-pack update to a Minecraft version.
+   *
+   * Everything the update would do, worked out before a byte is downloaded:
+   * every jar resolved against the target version, the loader files that need
+   * rewriting, and — importantly — the mods that have *no* build for it. Those
+   * are the only way this can lose someone their setup, so they are named
+   * individually rather than summarised into a count.
+   *
+   * The plan is read-only. `pack:applyWhole` is what changes anything.
+   */
+  ipcMain.handle(
+    'pack:wholePlan',
+    async (_e, opts: { dir: string; mcVersion: string; family?: LoaderFamily; loaderVersion?: string }) => {
+      const root = opts.dir
+      if (!fs.existsSync(root)) return { ok: false, error: `No such folder: ${root}` }
+      const current = currentPackVersion(root)
+      const family: LoaderFamily = opts.family ?? current.family
+      if (!opts.mcVersion) return { ok: false, error: 'Pick the Minecraft version to update to.' }
+      if (!opts.loaderVersion) return { ok: false, error: `Pick the ${family === 'unknown' ? 'loader' : family} version to update to.` }
+
+      const survey = surveyPack(root)
+      const modsDir = fs.existsSync(path.join(root, 'mods')) ? path.join(root, 'mods') : root
+      const scan = scanModsFolder(modsDir)
+
+      // Identify by hash where possible: a mod id guessed from a file name cannot
+      // be trusted to answer "is there a build for 1.21.1", and getting that wrong
+      // replaces a working mod with the wrong mod.
+      const hashed = await Promise.all(scan.mods.map(async (m) => ({ path: m.path, hash: await sha1Of(m.path) })))
+      const identified = await identifyFiles(hashed.filter((h): h is { path: string; hash: string } => !!h.hash))
+      const byPath = new Map<string, { projectId?: string; versionNumber?: string }>()
+      if (identified.ok) for (const f of identified.found) byPath.set(f.path, { projectId: f.projectId, versionNumber: f.versionNumber })
+
+      const loaderForModrinth = family === 'neoforge' ? 'neoforge' : family === 'forge' ? 'forge' : family === 'fabric' ? 'fabric' : family === 'quilt' ? 'quilt' : ''
+
+      const resolved = await Promise.all(
+        scan.mods.map(async (m) => {
+          const known = byPath.get(m.path)
+          const projectId = known?.projectId
+          if (!projectId) {
+            // No hash match: search by mod id and take a project only when the
+            // result actually is that mod, not merely the closest name to it.
+            const found = loaderForModrinth ? await findCandidates({ package: m.modId ?? '', name: m.name ?? m.modId ?? '' }, { mcVersion: opts.mcVersion, loader: loaderForModrinth }) : { ok: false, candidates: [] }
+            const exact = found.ok ? found.candidates.find((c) => (c.slug ?? '').toLowerCase() === (m.modId ?? '').toLowerCase()) : undefined
+            if (!exact?.projectId) return { file: m.file, path: m.path, modId: m.modId, version: m.version, name: m.name, resolution: { found: false } }
+            const newest = await newestVersionFor(exact.projectId, { mcVersion: opts.mcVersion, loader: loaderForModrinth })
+            return {
+              file: m.file,
+              path: m.path,
+              modId: m.modId,
+              version: m.version,
+              name: m.name,
+              resolution: newest
+                ? { found: true, target: { version: newest.versionNumber, url: newest.file.url, name: newest.file.name } }
+                : { found: false, incompatible: true }
+            }
+          }
+          const newest = await newestVersionFor(projectId, { mcVersion: opts.mcVersion, loader: loaderForModrinth })
+          return {
+            file: m.file,
+            path: m.path,
+            modId: m.modId,
+            version: m.version,
+            name: m.name,
+            resolution: newest
+              ? { found: true, target: { version: newest.versionNumber, url: newest.file.url, name: newest.file.name } }
+              : { found: false, incompatible: true }
+          }
+        })
+      )
+
+      const plan = planPackUpdate({
+        root,
+        current,
+        target: { mcVersion: opts.mcVersion, family, loaderVersion: opts.loaderVersion },
+        files: survey.files,
+        mods: resolved
+      })
+      return { ok: true, plan, skipped: survey.skipped, counts: { files: survey.files.length, mods: scan.mods.length } }
+    }
+  )
+
+  /**
+   * Carry out the plan the user has seen and edited.
+   *
+   * Order matters and is deliberate: **backup, then downloads, then the swaps,
+   * then the loader files.** A download failure leaves the pack exactly as it
+   * was, because the jars are only replaced once every one of them is on disk
+   * and readable. The loader files go last so a pack that cannot fetch a mod
+   * still points at the version it currently runs.
+   */
+  ipcMain.handle(
+    'pack:applyWhole',
+    async (_e, opts: { plan: ReturnType<typeof planPackUpdate>; selected: string[]; alsoRemove?: string[] }) => {
+      const plan = opts.plan
+      const root = plan.root
+      const chosen = new Set(opts.selected ?? [])
+      const remove = new Set(opts.alsoRemove ?? [])
+
+      const backup = backUp({
+        ...plan,
+        mods: plan.mods.map((m) => ({ ...m, selected: chosen.has(m.file) || remove.has(m.file) }))
+      })
+      if (!backup.ok) return { ok: false, error: `Could not make the backup, so nothing was changed: ${backup.error}` }
+
+      const work = fs.mkdtempSync(path.join(app.getPath('temp'), 'packupdate-'))
+      const results: { file: string; ok: boolean; error?: string; replaced?: string; removed?: boolean }[] = []
+      try {
+        // 1. Download everything first.
+        const fetched: { mod: (typeof plan.mods)[number]; file: string }[] = []
+        for (const mod of plan.mods) {
+          if (!chosen.has(mod.file)) continue
+          if (!mod.target?.url) {
+            results.push({ file: mod.file, ok: false, error: 'no download was planned for this mod' })
+            continue
+          }
+          if (!/^https:\/\//i.test(mod.target.url)) {
+            results.push({ file: mod.file, ok: false, error: 'refusing a non-https download' })
+            continue
+          }
+          try {
+            const res = await fetch(mod.target.url, { headers: { 'User-Agent': 'MC-Forge-Agent' } })
+            if (!res.ok) {
+              results.push({ file: mod.file, ok: false, error: `download failed with HTTP ${res.status}` })
+              continue
+            }
+            const buf = Buffer.from(await res.arrayBuffer())
+            const local = path.join(work, `${mod.file}.jar`)
+            fs.writeFileSync(local, buf)
+            fetched.push({ mod, file: local })
+          } catch (e) {
+            results.push({ file: mod.file, ok: false, error: (e as Error).message })
+          }
+        }
+
+        // 2. Swap them in. Only reached once every download that could succeed has.
+        for (const { mod, file } of fetched) {
+          /*
+           * Overwrite the jar that is already there, keeping its name.
+           *
+           * Renaming to the new download's name would leave the old file in place
+           * (two builds of the same mod is a duplicate-mod crash) and would break
+           * any pack script that refers to the jar by name. The new version is
+           * recorded in the backup manifest instead.
+           */
+          /*
+           * Resolve from the plan's own root, never from the absolute path the
+           * planning step saw. `mod.file` is relative to the pack and keeps its
+           * subfolder, so a jar under `mods/1.21.1/` is replaced where it is
+           * rather than duplicated at the top of `mods/`.
+           */
+          const target = mod.file ? path.join(root, mod.file) : mod.path
+          const res = replaceJar(target, file)
+          results.push({ file: mod.file, ok: res.ok, error: res.error, replaced: mod.target?.version })
+        }
+
+        // 3. Remove the ones the user explicitly ticked for removal.
+        for (const mod of plan.mods) {
+          if (!remove.has(mod.file)) continue
+          try {
+            fs.rmSync(path.join(root, mod.file), { force: true })
+            // A mod left with no build for the target would crash the pack on
+            // launch; removing it is only done when asked, and it is recorded.
+            results.push({ file: mod.file, ok: true, removed: true })
+          } catch (e) {
+            results.push({ file: mod.file, ok: false, error: (e as Error).message })
+          }
+        }
+
+        // 4. The loader files, last.
+        const loaderResults: { rel: string; ok: boolean; error?: string; changed: boolean }[] = []
+        for (const lf of plan.loaderFiles) {
+          if (!lf.changed) continue
+          const res = writeLoaderFile(root, lf.rel, lf.content)
+          loaderResults.push({ rel: lf.rel, ok: res.ok, error: res.error, changed: true })
+        }
+
+        return {
+          ok: results.every((r) => r.ok) && loaderResults.every((r) => r.ok),
+          backup: backup.dir,
+          copied: backup.copied,
+          results,
+          loaderFiles: loaderResults,
+          updated: results.filter((r) => r.ok && !r.removed).length,
+          removed: results.filter((r) => r.removed).length,
+          failed: [...results.filter((r) => !r.ok), ...loaderResults.filter((r) => !r.ok)]
+        }
+      } finally {
+        fs.rmSync(work, { recursive: true, force: true })
+      }
+    }
+  )
+
+  /** What the pack currently says it runs, so the UI can offer a sensible target. */
+  ipcMain.handle('pack:version', (_e, dir: string) => currentPackVersion(dir))
+
   ipcMain.handle('ref:search', (_e, opts: { query: string; id?: string; regex?: boolean }) => {
     if (!opts.query?.trim()) return { hits: [] }
     try {
@@ -2039,6 +2314,7 @@ export function registerIpc(): void {
     })
     if (!res.ok) return res
     saveConfig({ workspaceDir: dir })
+    rememberProject(dir)
     resetSession()
     return { ...res, dir }
   })

@@ -504,6 +504,54 @@ export interface UpdateState {
   checkedAt?: number
 }
 
+/**
+ * One entry in the project dropdown.
+ *
+ * `exists: false` is a project whose folder has gone — shown and marked rather
+ * than dropped, because a project silently disappearing reads as data loss.
+ */
+export interface KnownProject {
+  dir: string
+  name: string
+  modName?: string
+  modId?: string
+  mcVersion?: string
+  loader?: string
+  source: 'tracked' | 'scanned' | 'both'
+  exists: boolean
+  lastOpenedAt?: number
+  active?: boolean
+}
+
+/**
+ * A whole-pack update plan, as main computes it.
+ *
+ * `status` decides how it is presented and `selected` is main's default for the
+ * checkbox — the user is free to disagree with it.
+ */
+export interface PackPlanMod {
+  file: string
+  path: string
+  modId?: string
+  version?: string
+  name?: string
+  incompatible?: boolean
+  target?: { version?: string; url?: string; name: string }
+  status: 'update' | 'keep' | 'missing-build' | 'unidentified' | 'skipped'
+  reason: string
+  selected: boolean
+}
+
+export interface PackPlan {
+  root: string
+  target: { mcVersion: string; family: string; loaderVersion: string }
+  current: { mcVersion?: string; family?: string; loaderVersion?: string }
+  mods: PackPlanMod[]
+  loaderFiles: { rel: string; content: string; note: string; changed: boolean }[]
+  backup: { needed: boolean; dir: string }
+  summary: string[]
+}
+
 export interface ProjectSummary {
   open: boolean
   dir?: string
@@ -881,6 +929,8 @@ export interface McfApi {
     writeFile: (rel: string, content: string) => Promise<{ ok: boolean; error?: string }>
     /** Make a folder the active project (empty = back to the scaffolded one). */
     activate: (dir: string) => Promise<{ ok: boolean; dir?: string; error?: string }>
+    /** Every project the app can name: remembered ones plus those found nearby. */
+    list: () => Promise<{ ok: boolean; projects: KnownProject[]; activeDir?: string; projectsRoot?: string }>
   }
   shell: { openPath: (p: string) => Promise<string> }
   dialog: {
@@ -946,6 +996,32 @@ export interface McfApi {
    * network, and only a genuinely missing dependency ever reaches `download`.
    */
   pack: {
+    /** What the pack's own launcher files say it runs, for a sensible update target. */
+    version: (dir: string) => Promise<{ mcVersion?: string; family?: string; loaderVersion?: string }>
+    /**
+     * Work out a whole-pack update to a Minecraft version, without changing
+     * anything. Every jar resolved, every loader file compared, and every mod with
+     * no build for the target named individually.
+     */
+    wholePlan: (opts: { dir: string; mcVersion: string; family?: Loader; loaderVersion?: string }) => Promise<{
+      ok: boolean
+      error?: string
+      plan?: PackPlan
+      skipped?: string[]
+      counts?: { files: number; mods: number }
+    }>
+    /** Back up, download, swap, and rewrite the loader files — in that order. */
+    applyWhole: (opts: { plan: unknown; selected: string[]; alsoRemove?: string[] }) => Promise<{
+      ok: boolean
+      error?: string
+      backup?: string
+      copied?: number
+      updated?: number
+      removed?: number
+      results?: { file: string; ok: boolean; error?: string; replaced?: string; removed?: boolean }[]
+      loaderFiles?: { rel: string; ok: boolean; error?: string }[]
+      failed?: { file: string; error?: string }[]
+    }>
     scan: (dir: string) => Promise<{
       ok: boolean
       error?: string

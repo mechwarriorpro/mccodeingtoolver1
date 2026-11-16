@@ -167,7 +167,8 @@ const api = {
     readFile: (rel: string) => ipcRenderer.invoke('project:readFile', rel),
     writeFile: (rel: string, content: string) => ipcRenderer.invoke('project:writeFile', rel, content),
     /** Make a folder the active project (empty = back to the scaffolded one). */
-    activate: (dir: string) => ipcRenderer.invoke('project:activate', dir)
+    activate: (dir: string) => ipcRenderer.invoke('project:activate', dir),
+    list: () => ipcRenderer.invoke('project:list')
   },
 
   dialog: {
@@ -199,6 +200,9 @@ const api = {
 
   /** A modpack's mods folder: scan it, then update from it. */
   pack: {
+    version: (dir: string) => ipcRenderer.invoke('pack:version', dir),
+    wholePlan: (opts: unknown) => ipcRenderer.invoke('pack:wholePlan', opts),
+    applyWhole: (opts: unknown) => ipcRenderer.invoke('pack:applyWhole', opts),
     scan: (dir: string) => ipcRenderer.invoke('pack:scan', dir),
     identify: (dir: string) => ipcRenderer.invoke('pack:identify', dir),
     updates: (opts: unknown) => ipcRenderer.invoke('pack:updates', opts),

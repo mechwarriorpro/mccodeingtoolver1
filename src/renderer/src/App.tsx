@@ -18,6 +18,7 @@ import EvolvePanel from './components/EvolvePanel'
 import ModelsPanel from './components/ModelsPanel'
 import ShaderPanel from './components/ShaderPanel'
 import ClipPanel from './components/ClipPanel'
+import ProjectPicker from './components/ProjectPicker'
 import LearnPanel from './components/LearnPanel'
 
 /**
@@ -534,15 +535,12 @@ export default function App(): JSX.Element {
                 <span className="badge">{loaderBadge(project.props ?? {})}</span>
               </div>
               <div style={{ display: 'flex', gap: 6, marginTop: 9 }}>
-                <button
-                  className="small ghost"
-                  onClick={async () => {
-                    const dir = await api.dialog.pickFolder({ title: 'Open an existing mod project' })
-                    if (dir) await afterProjectChange(dir)
-                  }}
-                >
-                  Switch
-                </button>
+                <ProjectPicker
+                  activeDir={project?.dir}
+                  onOpen={(dir) => afterProjectChange(dir)}
+                  onNew={() => setShowSetup(true)}
+                  onToast={toast}
+                />
                 <button className="small ghost" onClick={() => void api.game.openFolder()}>
                   Folder
                 </button>

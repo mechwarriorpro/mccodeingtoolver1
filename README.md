@@ -152,6 +152,15 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.5.13** adds two things the modpack tools were missing. **Update the whole pack** now works on the pack
+> folder rather than just its jars: pick a Minecraft and loader version and it resolves every mod against it,
+> rewrites `bin/version` (and `runData`) so Technic actually launches the new build, and leaves `bin/`,
+> the Minecraft jar, your configs and your worlds alone. Per-mod checkboxes, and mods with no build for the
+> target are named and left on disk rather than silently dropped. A backup is written first, every download
+> happens before any jar is swapped, and an HTML error page served as a jar is refused instead of installed.
+> **Projects** is now a dropdown of everything the app knows — projects you have opened or created, plus ones
+> found beside them — with filter, "missing" markers for folders that have gone, and **+ New project** in the
+> same menu. Switching used to be a folder picker, so a fork under the app's data folder could not be found again.
 > **v0.5.12** fixes **v0.5.11 making it worse**: after a stop, the engine refused every later message with
 > "The agent is already running" — forever, and the only thing you saw was that nothing happened. That
 > guard was mine and it was wrong: it waited on the run's handle, which only clears when the run unwinds,

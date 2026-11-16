@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import PackUpgrade from './PackUpgrade'
 import { api, type PackDependencyAction, type PackScan, type PackUpdate, type UpdatePlan } from '../lib/api'
 
 interface Props {
@@ -30,6 +31,16 @@ const OUTCOME_LABEL: Record<string, string> = {
  */
 export default function PackPanel({ onToast }: Props): JSX.Element {
   const [dir, setDir] = useState('')
+  /**
+   * The pack folder — where `mods/`, `config/` and `bin/` live.
+   *
+   * Taken from the scan rather than guessed from what the user clicked: they may
+   * have picked either the pack root or its `mods` folder, and the whole-pack
+   * update needs the root because the loader's own files sit beside `mods/`, not
+   * inside it. `dir` stays whatever they chose, because every other call in this
+   * panel accepts either.
+   */
+  const [packRoot, setPackRoot] = useState('')
   const [scan, setScan] = useState<PackScan | null>(null)
   const [verdict, setVerdict] = useState<{ headline: string; detail: string; healthy: boolean } | null>(null)
   const [versions, setVersions] = useState<{ mcVersion?: string; loader?: string }>({})
@@ -77,6 +88,9 @@ export default function PackPanel({ onToast }: Props): JSX.Element {
         return
       }
       setDir(chosen)
+      // `res.scan.dir` is the resolved mods folder; its parent is the pack root.
+      const resolved = res.scan.dir ?? ''
+      setPackRoot(resolved.replace(/[\\/]mods$/i, ''))
       setScan(res.scan)
       setVerdict(res.verdict ?? null)
       setVersions(res.versions ?? {})
@@ -295,6 +309,14 @@ export default function PackPanel({ onToast }: Props): JSX.Element {
         updating to: its dependencies are looked for <b>in this folder first</b>, and the ones already here come along
         with it — decompiled, so the code can be read — without being downloaded again.
       </p>
+
+      {/*
+        * The whole-pack flow sits above the single-mod ones because it is the
+        * answer to "update my pack", which is what most people mean. It works on
+        * the pack folder, not the mods folder, because the loader's own files are
+        * part of what has to change.
+        */}
+      <PackUpgrade dir={packRoot} onToast={onToast} />
 
       <div className="row wrap">
         <button className="small primary" disabled={busy} onClick={() => void pick()}>

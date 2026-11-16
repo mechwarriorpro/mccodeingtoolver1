@@ -82,6 +82,18 @@ export interface AppConfig {
    * Empty means "same as workspaceDir".
    */
   activeDir: string
+  /**
+   * Projects this app has opened or created, most recent first.
+   *
+   * The dropdown can also find projects by looking around, but only this list
+   * knows about forks (which live under userData) and about projects outside the
+   * folder the others are in. `dir` plus `lastOpenedAt` is all that is kept — the
+   * mod's own metadata is re-read from the project, so a renamed or moved project
+   * reports what it currently is rather than what it was when it was added.
+   */
+  knownProjects: { dir: string; lastOpenedAt: number }[]
+  /** Where new projects are created by default; also where the dropdown looks. */
+  projectsRoot: string
 
   github: {
     owner: string
