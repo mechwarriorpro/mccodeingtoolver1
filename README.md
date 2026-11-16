@@ -152,6 +152,16 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.5.14** fixes a mistake in v0.5.13 and adds the feature it was blocking. **`bin/modpack.jar` is the
+> loader** — in every Technic pack it is the NeoForge installer — and v0.5.13 protected all of `bin/`, so a pack
+> could have every mod on 1.21.1 and still launch 1.20.1. The whole-pack update now fetches and verifies the
+> installer for the target build and replaces `modpack.jar` with it; the Minecraft jar, `version.json` and the
+> launcher's other files are still never touched. The installer is fetched and checked **before** anything else
+> is written, so a failed download aborts with the pack untouched rather than leaving new mods with an old loader.
+> **Bring mods across from another pack** compares two packs — reading each one's own `modpack.jar`, so it can
+> say 1.20.1/NeoForge 20.4.1 vs 1.21.1/NeoForge 21.1.80 — and works out every mod as new, replacing an older
+> copy, already there at the same or a newer version, or unable to run on the target. It resolves against the
+> **target's** version, never the source's, and only the target is written to.
 > **v0.5.13** adds two things the modpack tools were missing. **Update the whole pack** now works on the pack
 > folder rather than just its jars: pick a Minecraft and loader version and it resolves every mod against it,
 > rewrites `bin/version` (and `runData`) so Technic actually launches the new build, and leaves `bin/`,

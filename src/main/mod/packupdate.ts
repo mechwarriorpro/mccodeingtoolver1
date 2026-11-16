@@ -20,8 +20,10 @@
  *      target version, which are the only part that can lose someone their setup.
  */
 
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import AdmZip from 'adm-zip'
 
 /** Minecraft versions this loader family can target, newest first, at plan time. */
 export type LoaderFamily = 'neoforge' | 'forge' | 'fabric' | 'quilt' | 'unknown'
@@ -29,7 +31,7 @@ export type LoaderFamily = 'neoforge' | 'forge' | 'fabric' | 'quilt' | 'unknown'
 export interface PackFileRole {
   /** Path relative to the pack root, with forward slashes. */
   rel: string
-  role: 'mod' | 'coremod' | 'config' | 'loader' | 'game-jar' | 'launcher' | 'resourcepack' | 'shaderpack' | 'script' | 'other'
+  role: 'mod' | 'coremod' | 'loader-installer' | 'config' | 'loader' | 'game-jar' | 'launcher' | 'resourcepack' | 'shaderpack' | 'script' | 'other'
   /** Why it is in that role — shown to the user, so the classification is never a mystery. */
   why: string
   bytes: number
@@ -37,9 +39,31 @@ export interface PackFileRole {
   protected: boolean
 }
 
-/** The Minecraft jar and the launcher's own files. Never written, never moved. */
-const PROTECTED_DIRS = ['bin', 'jre', 'runtime']
-const PROTECTED_FILES = [/^bin\//i, /(^|\/)client\.jar$/i, /(^|\/)server\.jar$/i, /(^|\/)minecraft.*\.jar$/i, /(^|\/)forge-.*\.jar$/i, /(^|\/)\.technic$/i, /(^|\/)\.fml$/i]
+/**
+ * `bin/modpack.jar` is the loader, and in a Technic pack it is the NeoForge
+ * *installer* jar.
+ *
+ * This used to be a blanket "everything under bin/ is untouchable", which was
+ * wrong in the way that matters: the loader is exactly the thing a version
+ * change has to replace, and leaving it alone means a pack whose mods are all
+ * 1.21.1 still boots 1.20.1. What is genuinely untouchable in bin/ is the
+ * launcher's own metadata and the game itself — those are named individually
+ * below rather than by folder.
+ */
+const PROTECTED_FILES = [
+  /(^|\/)client\.jar$/i,
+  /(^|\/)server\.jar$/i,
+  /(^|\/)minecraft.*\.jar$/i,
+  /(^|\/)version\.json$/i,
+  /(^|\/)\.technic$/i,
+  /(^|\/)\.fml$/i,
+  /(^|\/)jre\//i,
+  /(^|\/)runtime\//i,
+  /(^|\/)natives\//i
+]
+
+/** The loader jar Technic launches from — `bin/modpack.jar` and its spellings. */
+const LOADER_JAR = /^bin\/(modpack|forge|neoforge|fabric)([^/]*)\.jar$/i
 
 /**
  * Which role a file plays in the pack.
@@ -49,13 +73,23 @@ const PROTECTED_FILES = [/^bin\//i, /(^|\/)client\.jar$/i, /(^|\/)server\.jar$/i
  */
 export function classify(rel: string): { role: PackFileRole['role']; why: string; protected: boolean } {
   const p = rel.replace(/\\/g, '/').toLowerCase()
+  // The loader jar is checked before the protected list: it lives in bin/, and
+  // bin/ is otherwise protected, but this one file is the whole point of a
+  // version change.
+  if (LOADER_JAR.test(p)) {
+    return {
+      role: 'loader-installer',
+      why: 'the loader jar Technic launches from — this is what gets replaced when the target version changes',
+      protected: false
+    }
+  }
   if (PROTECTED_FILES.some((re) => re.test(p))) {
-    return { role: 'game-jar', why: 'the launcher runs this — replacing it stops the pack starting', protected: true }
+    return { role: 'game-jar', why: 'the game itself, or the launcher metadata — replacing it stops the pack starting', protected: true }
+  }
+  if (p.startsWith('bin/')) {
+    return { role: 'launcher', why: 'a launcher file, not the loader — left alone', protected: true }
   }
   const top = p.split('/')[0]
-  if (PROTECTED_DIRS.includes(top)) {
-    return { role: 'launcher', why: 'launcher/loader runtime files, owned by Technic', protected: true }
-  }
   if (top === 'mods') return { role: 'mod', why: 'a mod jar', protected: false }
   if (top === 'coremods') return { role: 'coremod', why: 'a coremod jar', protected: false }
   if (top === 'config' || top === 'defaultconfigs') return { role: 'config', why: 'mod configuration', protected: false }
@@ -102,6 +136,132 @@ export function surveyPack(root: string): { files: PackFileRole[]; skipped: stri
   }
   walk(root, '', 0)
   return { files, skipped }
+}
+
+/**
+ * What a `bin/modpack.jar` actually is.
+ *
+ * In a Technic pack this is normally the loader *installer* jar — a NeoForge or
+ * Forge installer renamed to `modpack.jar` — and Technic runs it to obtain the
+ * loader. That means the file has to be replaced on a version change, and it has
+ * to be replaced with a real installer for the target build, not with the newest
+ * *mod* that happened to match by name.
+ */
+export interface LoaderJarInfo {
+  rel: string
+  kind: 'neoforge-installer' | 'forge-installer' | 'unknown-jar' | 'not-a-jar'
+  /** Whatever version string the jar states about itself. */
+  version?: string
+  /** A mod jar that ended up in bin/ — a mistake, reported rather than "fixed". */
+  looksLikeMod?: boolean
+  note: string
+}
+
+export function inspectLoaderJar(fullPath: string): LoaderJarInfo {
+  const rel = path.basename(fullPath)
+  let zip: AdmZip
+  try {
+    zip = new AdmZip(fullPath)
+  } catch {
+    return { rel, kind: 'not-a-jar', note: 'not a readable zip — the launcher would fail on this too' }
+  }
+  const names = zip.getEntries().map((e) => e.entryName.replace(/\\/g, '/'))
+  const has = (n: string): boolean => names.includes(n)
+  /** First readable text of any candidate entry. */
+  const text = (candidates: string[]): string => {
+    for (const c of candidates) {
+      try {
+        const entry = zip.getEntry(c)
+        if (entry) return zip.readAsText(entry).slice(0, 4000)
+      } catch {
+        /* try the next */
+      }
+    }
+    return ''
+  }
+  const manifest = text(['META-INF/MANIFEST.MF'])
+  const versionFrom = (haystack: string): string | undefined =>
+    /(?:^|[\s:"=])(\d+\.\d+\.\d+(?:-beta)?)(?=[\s"\r\n]|$)/.exec(haystack)?.[1]
+
+  // NeoForge's installer carries net/neoforged/... and an install_profile.json.
+  const neoInstaller = names.some((n) => n.startsWith('net/neoforged/')) && (has('install_profile.json') || has('META-INF/versions.list'))
+  if (neoInstaller) {
+    const versionsList = text(['META-INF/versions.list'])
+    const profile = text(['install_profile.json'])
+    const version = versionFrom(versionsList) ?? versionFrom(profile) ?? versionFrom(manifest)
+    return {
+      rel,
+      kind: 'neoforge-installer',
+      version,
+      note: version ? `a NeoForge installer for ${version}` : 'a NeoForge installer (it does not state its version in a form we can read)'
+    }
+  }
+  // Forge's installer has install_profile.json plus net/minecraftforge/.
+  if (names.some((n) => n.startsWith('net/minecraftforge/')) || (has('install_profile.json') && names.some((n) => n.startsWith('net/')))) {
+    const profile = text(['install_profile.json'])
+    return { rel, kind: 'forge-installer', version: versionFrom(profile) ?? versionFrom(manifest), note: 'a Forge installer' }
+  }
+  // A mod that was dropped in bin/ by mistake: worth saying so, not worth "fixing".
+  const modToml = names.some((n) => n === 'META-INF/neoforge.mods.toml' || n === 'META-INF/mods.toml')
+  return {
+    rel,
+    kind: 'unknown-jar',
+    looksLikeMod: modToml,
+    note: modToml ? 'this is a mod jar, not a loader installer — Technic cannot launch from it' : 'not a recognised loader installer'
+  }
+}
+
+/** The Modrinth-style jar name for a NeoForge installer, for the plan to show. */
+export function neoForgeInstallerName(loaderVersion: string): string {
+  return `neoforge-${loaderVersion}-installer.jar`
+}
+
+export function neoForgeInstallerUrl(loaderVersion: string): string {
+  return `https://maven.neoforged.net/releases/net/neoforged/neoforge/${loaderVersion}/${neoForgeInstallerName(loaderVersion)}`
+}
+
+/**
+ * Is this downloaded file really the loader installer for the version asked for?
+ *
+ * A 200 response is not proof. Maven can serve an error page, a proxy can serve a
+ * stale file, and the failure mode — a `modpack.jar` that is not an installer —
+ * is a pack that will not start. So the jar is opened and checked for the
+ * NeoForge payload and, when it states a version, for the one requested.
+ */
+export function verifyLoaderInstaller(bytes: Buffer, opts: { family: LoaderFamily; loaderVersion: string }): { ok: boolean; error?: string; version?: string } {
+  if (bytes.length < 4 || !(bytes[0] === 0x50 && bytes[1] === 0x4b)) {
+    return { ok: false, error: 'the download is not a jar (no zip header) — the server returned an error page' }
+  }
+  let zip: AdmZip
+  try {
+    zip = new AdmZip(bytes)
+  } catch {
+    return { ok: false, error: 'the download is a zip but cannot be opened as one' }
+  }
+  const names = zip.getEntries().map((e) => e.entryName.replace(/\\/g, '/'))
+  if (opts.family === 'neoforge') {
+    const isNeo = names.some((n) => n.startsWith('net/neoforged/')) && (names.includes('install_profile.json') || names.includes('META-INF/versions.list'))
+    if (!isNeo) return { ok: false, error: 'the download is not a NeoForge installer' }
+    // Version confirmation where the jar states one.
+    for (const candidate of ['META-INF/versions.list', 'install_profile.json']) {
+      try {
+        const entry = zip.getEntry(candidate)
+        if (!entry) continue
+        const body = zip.readAsText(entry)
+        if (body.includes(opts.loaderVersion)) return { ok: true, version: opts.loaderVersion }
+      } catch {
+        /* unreadable entry: the payload check above already passed */
+      }
+    }
+    // Payload is right but the version is not stated in a readable way. Accept,
+    // and say so, rather than refuse a file that is almost certainly correct.
+    return { ok: true, error: `could not confirm the installer's version from the jar itself` }
+  }
+  if (opts.family === 'forge') {
+    const isForge = names.some((n) => n.startsWith('net/minecraftforge/')) || names.includes('install_profile.json')
+    return isForge ? { ok: true } : { ok: false, error: 'the download is not a Forge installer' }
+  }
+  return { ok: true }
 }
 
 /**
@@ -164,6 +324,22 @@ export interface PackUpdatePlan {
   mods: ModEntry[]
   /** Contents for the loader's own files, with the reason each changes. */
   loaderFiles: { rel: string; content: string; note: string; changed: boolean }[]
+  /**
+   * The loader jar itself (`bin/modpack.jar`), when the pack has one.
+   *
+   * This is the file Technic actually launches, and in a NeoForge pack it is the
+   * NeoForge installer. A version change that leaves it alone changes nothing
+   * that matters, so it is part of the plan rather than protected with the rest
+   * of `bin/`.
+   */
+  loaderJar?: {
+    rel: string
+    /** What is there now. */
+    present: LoaderJarInfo
+    /** Where the installer for the target comes from. */
+    download: { url: string; name: string; version: string } | null
+    why: string
+  }
   /** Folders that will be copied before anything is written. */
   backup: { needed: boolean; dir: string }
   /** Human sentences, in the order the user needs them. */
@@ -244,6 +420,51 @@ export function planPackUpdate(args: {
     return { ...lf, changed }
   })
 
+  /*
+   * The loader jar. In a Technic pack this is `bin/modpack.jar` and it is the
+   * NeoForge installer, so a version change has to replace it — this is the file
+   * that decides which loader actually starts, and the one thing the previous
+   * "never touch bin/" rule got wrong.
+   */
+  const loaderJar: PackUpdatePlan['loaderJar'] = (() => {
+    const found = args.files.find((f) => classify(f.rel).role === 'loader-installer')
+    if (!found) return undefined
+    const full = path.join(root, found.rel)
+    const present = inspectLoaderJar(full)
+    const sameVersion = !!present.version && present.version === target.loaderVersion
+    const installerFamily = target.family === 'neoforge' || target.family === 'forge'
+    const download = installerFamily
+      ? target.family === 'neoforge'
+        ? { url: neoForgeInstallerUrl(target.loaderVersion), name: neoForgeInstallerName(target.loaderVersion), version: target.loaderVersion }
+        : null
+      : null
+    if (sameVersion) {
+      // No download: replacing a correct installer with a byte-identical one is
+      // a pointless write, and if the fetch failed it would fail an update that
+      // had nothing wrong with it.
+      return { rel: found.rel, present, download: null, why: `already the ${target.family} ${target.loaderVersion} installer` }
+    }
+    if (!installerFamily) {
+      return {
+        rel: found.rel,
+        present,
+        download,
+        why: `this pack launches from ${found.rel} and it is a ${target.family} pack — the loader jar cannot be fetched automatically, so check it by hand`
+      }
+    }
+    if (target.family === 'neoforge') {
+      return {
+        rel: found.rel,
+        present,
+        download,
+        why: present.kind === 'neoforge-installer'
+          ? `replaces the ${present.version ?? 'existing'} NeoForge installer with ${target.loaderVersion}`
+          : `replaces it with the NeoForge ${target.loaderVersion} installer (it is currently ${present.note})`
+      }
+    }
+    return { rel: found.rel, present, download, why: 'Forge installers are not fetched automatically; replace this by hand' }
+  })()
+
   const summary: string[] = []
   const updatable = mods.filter((m) => m.status === 'update')
   const missing = mods.filter((m) => m.status === 'missing-build')
@@ -267,7 +488,12 @@ export function planPackUpdate(args: {
   if (unidentified.length) summary.push(`${unidentified.length} jar${unidentified.length === 1 ? '' : 's'} could not be identified and will be left alone.`)
   const changing = loaderFiles.filter((l) => l.changed)
   summary.push(changing.length ? `${changing.length} loader file${changing.length === 1 ? '' : 's'} will be rewritten: ${changing.map((l) => l.rel).join(', ')}.` : 'The loader files already match the target.')
-  summary.push('`bin/` and the Minecraft jar are never modified: those are what the launcher runs.')
+  if (loaderJar) {
+    summary.push(`The loader jar \`${loaderJar.rel}\` will be replaced: ${loaderJar.why}.`)
+  }
+  summary.push(
+    'The Minecraft jar, `bin/version.json` and every other launcher file are left exactly as they are — only the loader jar and its version files change.'
+  )
 
   return {
     root,
@@ -275,6 +501,7 @@ export function planPackUpdate(args: {
     current,
     mods,
     loaderFiles,
+    loaderJar,
     backup: { needed: true, dir: path.join(root, `.backup-${new Date().toISOString().replace(/[:.]/g, '-')}`) },
     summary
   }
@@ -309,6 +536,10 @@ export function backUp(plan: PackUpdatePlan): { ok: boolean; dir?: string; copie
     for (const l of plan.loaderFiles) {
       if (l.changed) copy(l.rel)
     }
+    // The loader jar is replaced on every version change, so the old one has to
+    // be recoverable — a pack that will not start because the installer is wrong
+    // is exactly what this backup exists for.
+    if (plan.loaderJar) copy(plan.loaderJar.rel)
     // The manifest is what makes the backup explain itself a month later.
     fs.writeFileSync(
       path.join(plan.backup.dir, 'BACKUP.json'),
@@ -320,6 +551,7 @@ export function backUp(plan: PackUpdatePlan): { ok: boolean; dir?: string; copie
           to: plan.target,
           files: plan.mods.filter((m) => m.selected).map((m) => ({ file: m.file, from: m.version, to: m.target?.version })),
           loaderFiles: plan.loaderFiles.filter((l) => l.changed).map((l) => l.rel),
+          loaderJar: plan.loaderJar ? { rel: plan.loaderJar.rel, was: plan.loaderJar.present.kind, becomes: plan.loaderJar.download?.name ?? 'unchanged' } : undefined,
           restore: 'Copy the contents of this folder back over the pack folder to undo the update.'
         },
         null,

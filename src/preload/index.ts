@@ -203,6 +203,10 @@ const api = {
     version: (dir: string) => ipcRenderer.invoke('pack:version', dir),
     wholePlan: (opts: unknown) => ipcRenderer.invoke('pack:wholePlan', opts),
     applyWhole: (opts: unknown) => ipcRenderer.invoke('pack:applyWhole', opts),
+    /** Compare two packs and plan bringing the source's mods into the target. */
+    compare: (opts: { from: string; to: string }) => ipcRenderer.invoke('pack:compare', opts),
+    /** Copy the chosen jars from the source pack into the target. */
+    transfer: (opts: { plan: unknown; selected: string[] }) => ipcRenderer.invoke('pack:transfer', opts),
     scan: (dir: string) => ipcRenderer.invoke('pack:scan', dir),
     identify: (dir: string) => ipcRenderer.invoke('pack:identify', dir),
     updates: (opts: unknown) => ipcRenderer.invoke('pack:updates', opts),

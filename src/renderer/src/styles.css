@@ -979,3 +979,17 @@ body.resizing * { cursor: col-resize !important; }
 }
 .upgrade-done.bad { border-color: rgba(240, 110, 110, 0.35); background: rgba(240, 110, 110, 0.06); }
 .upgrade-done ul { margin: 6px 0 0; padding-left: 18px; }
+
+/* ------------------------------------------- two-pack transfer */
+.upgrade-dir { display: flex; align-items: center; gap: 6px; margin-top: 2px; }
+.upgrade-dir code {
+  font-size: 10.5px;
+  color: var(--muted);
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.upgrade-dir button { padding: 2px 8px; font-size: 10.5px; }

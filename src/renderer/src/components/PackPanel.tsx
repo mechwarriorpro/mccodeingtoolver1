@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import PackTransfer from './PackTransfer'
 import PackUpgrade from './PackUpgrade'
 import { api, type PackDependencyAction, type PackScan, type PackUpdate, type UpdatePlan } from '../lib/api'
 
@@ -316,6 +317,7 @@ export default function PackPanel({ onToast }: Props): JSX.Element {
         * the pack folder, not the mods folder, because the loader's own files are
         * part of what has to change.
         */}
+      <PackTransfer dir={packRoot} onToast={onToast} />
       <PackUpgrade dir={packRoot} onToast={onToast} />
 
       <div className="row wrap">

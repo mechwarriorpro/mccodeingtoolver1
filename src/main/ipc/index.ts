@@ -155,7 +155,18 @@ import { repoState, suggestRepoName } from '../build/repo'
 import { scanDependencies } from '../mod/deps'
 import { declareJarDependency, findCandidates, findVersionFile, identifyFiles, libsDir, newestVersionFor, projectInfo, sha1Of } from '../mod/dep-resolve'
 import type { PackMod } from '../mod/modpack'
-import { backUp, currentPackVersion, planPackUpdate, replaceJar, surveyPack, writeLoaderFile, type LoaderFamily } from '../mod/packupdate'
+import {
+  backUp,
+  currentPackVersion,
+  inspectLoaderJar,
+  planPackUpdate,
+  replaceJar,
+  surveyPack,
+  verifyLoaderInstaller,
+  writeLoaderFile,
+  type LoaderFamily
+} from '../mod/packupdate'
+import { planPackTransfer, versionFromInstallerName } from '../mod/transfer'
 import { folderName, looksLikeProject, mergeProjects, projectKey, projectSearchRoots, scanForProjects } from '../mod/projects'
 import { adoptJar, describeScan, displayNames, inferFromFileName, packVersions, verifyInferredId, planModUpdate, planUpdate, previewAdoption, readModJar, removeJar, resolveModsDir, scanModsFolder } from '../mod/modpack'
 import { readJarInfo, installJar } from '../mod/jar'
@@ -2143,12 +2154,13 @@ export function registerIpc(): void {
       const chosen = new Set(opts.selected ?? [])
       const remove = new Set(opts.alsoRemove ?? [])
 
-      const backup = backUp({
-        ...plan,
-        mods: plan.mods.map((m) => ({ ...m, selected: chosen.has(m.file) || remove.has(m.file) }))
-      })
-      if (!backup.ok) return { ok: false, error: `Could not make the backup, so nothing was changed: ${backup.error}` }
-
+      /*
+       * Nothing is written to the pack until every download is on disk and every
+       * one that can be checked has been. Staging happens in a temp folder, so a
+       * failed fetch leaves no backup folder, no half-swapped jars, and no need
+       * for the user to work out what state their pack is in: it is the state it
+       * was in.
+       */
       const work = fs.mkdtempSync(path.join(app.getPath('temp'), 'packupdate-'))
       const results: { file: string; ok: boolean; error?: string; replaced?: string; removed?: boolean }[] = []
       try {
@@ -2179,7 +2191,64 @@ export function registerIpc(): void {
           }
         }
 
-        // 2. Swap them in. Only reached once every download that could succeed has.
+        /*
+         * The loader jar, staged here rather than after the mods were swapped.
+         *
+         * It is fetched and verified before anything in the pack is touched,
+         * because it is the file that decides which loader actually starts: mods
+         * moved to 1.21.1 with a 1.20.1 `modpack.jar` left behind is a pack that
+         * does not launch, and discovering that after the mods were replaced is
+         * how a "successful" update destroys an evening.
+         */
+        let stagedLoader: { rel: string; file: string; version?: string } | null = null
+        let loaderError: string | undefined
+        if (plan.loaderJar?.download) {
+          const lj = plan.loaderJar
+          try {
+            const res = await fetch(lj.download!.url, { headers: { 'User-Agent': 'MC-Forge-Agent' } })
+            if (!res.ok) {
+              loaderError = `HTTP ${res.status} from ${lj.download!.url}`
+            } else {
+              const bytes = Buffer.from(await res.arrayBuffer())
+              const verdict = verifyLoaderInstaller(bytes, { family: plan.target.family as LoaderFamily, loaderVersion: lj.download!.version })
+              if (!verdict.ok) {
+                loaderError = verdict.error
+              } else {
+                const staged = path.join(work, lj.download!.name)
+                fs.writeFileSync(staged, bytes)
+                stagedLoader = { rel: lj.rel, file: staged, version: verdict.version }
+              }
+            }
+          } catch (e) {
+            loaderError = (e as Error).message
+          }
+        }
+
+        /*
+         * A loader that was planned but could not be obtained stops the update
+         * here, with the pack untouched. Updating the mods and leaving the loader
+         * behind would be worse than doing nothing.
+         */
+        if (plan.loaderJar?.download && !stagedLoader) {
+          return {
+            ok: false,
+            aborted: true,
+            error: `The ${plan.target.family} ${plan.target.loaderVersion} loader could not be downloaded${loaderError ? ` (${loaderError})` : ''}, so nothing was changed. The pack is exactly as it was.`,
+            failed: [{ file: plan.loaderJar.rel, error: loaderError ?? 'loader download failed' }]
+          }
+        }
+
+        // 2. Now that every download that can succeed has, back up what is about
+        //    to change. Nothing before this point has written to the pack.
+        const backup = backUp({
+          ...plan,
+          mods: plan.mods.map((m) => ({ ...m, selected: chosen.has(m.file) || remove.has(m.file) }))
+        })
+        if (!backup.ok) {
+          return { ok: false, aborted: true, error: `Could not make the backup, so nothing was changed: ${backup.error}` }
+        }
+
+        // 3. Swap the mods in.
         for (const { mod, file } of fetched) {
           /*
            * Overwrite the jar that is already there, keeping its name.
@@ -2200,7 +2269,7 @@ export function registerIpc(): void {
           results.push({ file: mod.file, ok: res.ok, error: res.error, replaced: mod.target?.version })
         }
 
-        // 3. Remove the ones the user explicitly ticked for removal.
+        // 4. Remove the ones the user explicitly ticked for removal.
         for (const mod of plan.mods) {
           if (!remove.has(mod.file)) continue
           try {
@@ -2213,7 +2282,18 @@ export function registerIpc(): void {
           }
         }
 
-        // 4. The loader files, last.
+        // 5. The loader jar, from the staged and verified download.
+        let loaderJar: { rel: string; ok: boolean; error?: string; version?: string } | null = null
+        if (plan.loaderJar) {
+          if (stagedLoader) {
+            const swap = replaceJar(path.join(root, stagedLoader.rel), stagedLoader.file)
+            loaderJar = { rel: stagedLoader.rel, ok: swap.ok, error: swap.error, version: stagedLoader.version }
+          } else {
+            loaderJar = { rel: plan.loaderJar.rel, ok: true, version: plan.loaderJar.present.version }
+          }
+        }
+
+        // 6. The loader files, last.
         const loaderResults: { rel: string; ok: boolean; error?: string; changed: boolean }[] = []
         for (const lf of plan.loaderFiles) {
           if (!lf.changed) continue
@@ -2221,15 +2301,21 @@ export function registerIpc(): void {
           loaderResults.push({ rel: lf.rel, ok: res.ok, error: res.error, changed: true })
         }
 
+        const failed = [
+          ...results.filter((r) => !r.ok),
+          ...loaderResults.filter((r) => !r.ok),
+          ...(loaderJar && !loaderJar.ok ? [{ file: loaderJar.rel, error: loaderJar.error }] : [])
+        ]
         return {
-          ok: results.every((r) => r.ok) && loaderResults.every((r) => r.ok),
+          ok: failed.length === 0,
           backup: backup.dir,
           copied: backup.copied,
           results,
           loaderFiles: loaderResults,
+          loaderJar,
           updated: results.filter((r) => r.ok && !r.removed).length,
           removed: results.filter((r) => r.removed).length,
-          failed: [...results.filter((r) => !r.ok), ...loaderResults.filter((r) => !r.ok)]
+          failed
         }
       } finally {
         fs.rmSync(work, { recursive: true, force: true })
@@ -2239,6 +2325,163 @@ export function registerIpc(): void {
 
   /** What the pack currently says it runs, so the UI can offer a sensible target. */
   ipcMain.handle('pack:version', (_e, dir: string) => currentPackVersion(dir))
+
+  /**
+   * Read a pack's own loader jar — `bin/modpack.jar`, the file Technic launches.
+   *
+   * The version is taken from the jar's own contents first, then from its file
+   * name, so a pack whose installer has been renamed still reports a version. An
+   * unreadable answer is `unknown`, never a guess.
+   */
+  function describeLoaderJar(packDir: string): { rel: string; present: string; version?: string } {
+    const rel = ['bin/modpack.jar', 'bin/forge.jar', 'bin/neoforge.jar', 'bin/fabric.jar'].find((r) => fs.existsSync(path.join(packDir, r)))
+    if (!rel) return { rel: '', present: 'no loader jar', version: undefined }
+    const info = inspectLoaderJar(path.join(packDir, rel))
+    const version = info.version ?? versionFromInstallerName(path.basename(rel))
+    return { rel, present: info.note, version }
+  }
+
+  /**
+   * Compare two packs and plan moving the source's mods into the target.
+   *
+   * Read-only: nothing is written here. The source pack's mods are resolved
+   * against the **target's** Minecraft and loader version, because the target is
+   * where they will have to run — a jar that is correct for the source and wrong
+   * for the target is exactly the mistake this is meant to prevent.
+   */
+  ipcMain.handle(
+    'pack:compare',
+    async (_e, opts: { from: string; to: string }) => {
+      try {
+        const fromDir = resolveModsDir(opts.from).dir.replace(/[\\/]mods$/i, '')
+        const toDir = resolveModsDir(opts.to).dir.replace(/[\\/]mods$/i, '')
+        if (!fs.existsSync(fromDir)) return { ok: false, error: `The source pack folder is not there: ${fromDir}` }
+        if (!fs.existsSync(toDir)) return { ok: false, error: `The target pack folder is not there: ${toDir}` }
+        if (path.resolve(fromDir) === path.resolve(toDir)) {
+          return { ok: false, error: 'Those are the same folder — pick two different packs.' }
+        }
+
+        const sourceScan = scanModsFolder(fromDir)
+        const targetScan = scanModsFolder(toDir)
+
+        // The target's version is the one that matters for every decision.
+        const toVersion = currentPackVersion(toDir)
+        const family: LoaderFamily = toVersion.family === 'unknown' ? 'neoforge' : toVersion.family
+        const loaderForModrinth = family === 'neoforge' ? 'neoforge' : family === 'forge' ? 'forge' : family === 'fabric' ? 'fabric' : family === 'quilt' ? 'quilt' : ''
+
+        // Identify the source mods by hash before trusting anything read from a
+        // file name: "is there a build for 1.21.1" answered for the wrong mod
+        // replaces a working jar with an unrelated one.
+        const hashed = await Promise.all(sourceScan.mods.map(async (m) => ({ path: m.path, hash: await sha1Of(m.path) })))
+        const identified = await identifyFiles(hashed.filter((h): h is { path: string; hash: string } => !!h.hash))
+        const byPath = new Map<string, { projectId?: string; versionNumber?: string }>()
+        if (identified.ok) for (const f of identified.found) byPath.set(f.path, { projectId: f.projectId, versionNumber: f.versionNumber })
+
+        const resolveOne = async (m: (typeof sourceScan.mods)[number]) => {
+          const known = byPath.get(m.path)
+          let projectId = known?.projectId
+          if (!projectId) {
+            const found = loaderForModrinth
+              ? await findCandidates({ package: m.modId ?? '', name: m.name ?? m.modId ?? '' }, { mcVersion: toVersion.mcVersion ?? '', loader: loaderForModrinth })
+              : { ok: false as const, candidates: [] }
+            const exact = found.ok ? found.candidates.find((c) => (c.slug ?? '').toLowerCase() === (m.modId ?? '').toLowerCase()) : undefined
+            projectId = exact?.projectId
+            if (!projectId) return { file: m.file, path: m.path, modId: m.modId, version: m.version, name: m.name, resolution: { found: false } }
+          }
+          if (!toVersion.mcVersion) {
+            return { file: m.file, path: m.path, modId: m.modId, version: m.version, name: m.name, resolution: { found: false } }
+          }
+          const newest = await newestVersionFor(projectId, { mcVersion: toVersion.mcVersion, loader: loaderForModrinth })
+          return {
+            file: m.file,
+            path: m.path,
+            modId: m.modId,
+            version: m.version,
+            name: m.name,
+            resolution: newest
+              ? { found: true, target: { version: newest.versionNumber, url: newest.file.url, name: newest.file.name } }
+              : { found: false, incompatible: true }
+          }
+        }
+
+        /*
+         * Hash-identify in batches: a pack of 200 mods fired at once gets rate
+         * limited, and every 429 becomes a mod wrongly reported as having no
+         * build. Ten at a time keeps the report truthful.
+         */
+        const sourceMods: Awaited<ReturnType<typeof resolveOne>>[] = []
+        for (let i = 0; i < sourceScan.mods.length; i += 10) {
+          sourceMods.push(...(await Promise.all(sourceScan.mods.slice(i, i + 10).map(resolveOne))))
+        }
+
+        const plan = planPackTransfer({
+          from: { dir: fromDir, label: path.basename(fromDir), mcVersion: currentPackVersion(fromDir).mcVersion, family: currentPackVersion(fromDir).family, loaderVersion: currentPackVersion(fromDir).loaderVersion },
+          to: { dir: toDir, label: path.basename(toDir), mcVersion: toVersion.mcVersion, family: toVersion.family, loaderVersion: toVersion.loaderVersion },
+          sourceMods,
+          targetMods: targetScan.mods.map((m) => ({ file: m.file, path: m.path, modId: m.modId, name: m.name, version: m.version })),
+          loader: { from: describeLoaderJar(fromDir), to: describeLoaderJar(toDir) }
+        })
+        return { ok: true, plan }
+      } catch (e) {
+        return { ok: false, error: (e as Error).message }
+      }
+    }
+  )
+
+  /**
+   * Carry out a transfer: copy the chosen jars from the source pack into the
+   * target.
+   *
+   * Only the target is written to. Every jar is copied to a staging file beside
+   * its destination and renamed into place, so an interrupted copy cannot leave a
+   * half-written mod. A jar that cannot be read as a zip is refused, because an
+   * HTML error page dropped into `mods/` is a crash at launch with no useful
+   * message.
+   */
+  ipcMain.handle(
+    'pack:transfer',
+    async (_e, opts: { plan: ReturnType<typeof planPackTransfer>; selected: string[] }) => {
+      const plan = opts.plan
+      const chosen = new Set(opts.selected ?? [])
+      const toDir = plan.to.dir
+      const work = fs.mkdtempSync(path.join(app.getPath('temp'), 'packtransfer-'))
+      const results: { file: string; ok: boolean; error?: string; to?: string; replaced?: string }[] = []
+      try {
+        for (const entry of plan.entries) {
+          if (!chosen.has(entry.file)) continue
+          const dest = path.join(toDir, 'mods', path.basename(entry.replaces ?? entry.file))
+          const staged = path.join(work, path.basename(dest))
+          try {
+            fs.copyFileSync(entry.path, staged)
+            // Same check the downloader makes: a jar is a zip. A truncated copy
+            // from a failing disk looks identical to a bad download from here.
+            const head = Buffer.alloc(2)
+            const fd = fs.openSync(staged, 'r')
+            fs.readSync(fd, head, 0, 2, 0)
+            fs.closeSync(fd)
+            if (!(head[0] === 0x50 && head[1] === 0x4b)) {
+              results.push({ file: entry.file, ok: false, error: 'the source file is not a jar (no zip header) — it was not copied' })
+              continue
+            }
+            fs.mkdirSync(path.dirname(dest), { recursive: true })
+            fs.copyFileSync(staged, `${dest}.incoming`)
+            fs.renameSync(`${dest}.incoming`, dest)
+            results.push({ file: entry.file, ok: true, to: path.relative(toDir, dest), replaced: entry.replaces })
+          } catch (e) {
+            results.push({ file: entry.file, ok: false, error: (e as Error).message })
+          }
+        }
+        return {
+          ok: results.every((r) => r.ok),
+          results,
+          copied: results.filter((r) => r.ok).length,
+          failed: results.filter((r) => !r.ok)
+        }
+      } finally {
+        fs.rmSync(work, { recursive: true, force: true })
+      }
+    }
+  )
 
   ipcMain.handle('ref:search', (_e, opts: { query: string; id?: string; regex?: boolean }) => {
     if (!opts.query?.trim()) return { hits: [] }

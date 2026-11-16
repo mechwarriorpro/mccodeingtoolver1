@@ -42,6 +42,32 @@ const url = (rel) => pathToFileURL(path.join(root, 'out-test/main', rel)).href
 
 const pack = await import(url('mod/packupdate.js'))
 const projects = await import(url('mod/projects.js'))
+const transfer = await import(url('mod/transfer.js'))
+const AdmZip = (await import('adm-zip')).default
+
+/**
+ * A real NeoForge installer, shaped like the one on the maven.
+ *
+ * Written as an actual zip rather than a placeholder because the code opens it:
+ * `inspectLoaderJar` decides what `bin/modpack.jar` is by looking inside, and a
+ * fake file would test the fake instead of the decision.
+ */
+function neoforgeInstaller(version) {
+  const zip = new AdmZip()
+  zip.addFile('META-INF/MANIFEST.MF', Buffer.from('Manifest-Version: 1.0\r\nMain-Class: cpw.mods.bootstraplauncher.BootstrapLauncher\r\n'))
+  zip.addFile('install_profile.json', Buffer.from(JSON.stringify({ spec: 1, version: `${version}`, minecraft: '1.21.1' })))
+  zip.addFile('META-INF/versions.list', Buffer.from(`installer\t${version}\tnet/neoforged/installer/${version}/installer-${version}.jar\n`))
+  zip.addFile(`net/neoforged/installer/${version}/installer-${version}.jar`, Buffer.from('payload'))
+  return zip.toBuffer()
+}
+
+/** A mod jar, for the cases where a mod has ended up in bin/. */
+function modJar(id, version) {
+  const zip = new AdmZip()
+  zip.addFile('META-INF/neoforge.mods.toml', Buffer.from(`modLoader="javafml"\n[[mods]]\nmodId="${id}"\nversion="${version}"\n`))
+  zip.addFile('com/example/Example.class', Buffer.from('x'))
+  return zip.toBuffer()
+}
 
 /* ------------------------------------------------------- temp pack fixture */
 
@@ -59,24 +85,42 @@ function makePack(files) {
 
 await check('the Minecraft jar is never classified as something to replace', () => {
   /*
-   * The single most important rule in the whole feature. `bin/` is the launcher's
-   * runtime — `client.jar`, `modpack.jar`, `version.json`, `runData` — and
-   * replacing any of it stops the pack starting. Every one of them must be
-   * protected, including the ones whose names look like mods.
+   * The single most important rule in the whole feature: the game itself must
+   * never be written. Every spelling of it, wherever someone has put it.
    */
   for (const rel of [
-    'bin/modpack.jar',
     'bin/client.jar',
-    'bin/version',
-    'bin/runData',
+    'bin/server.jar',
+    'bin/minecraft-1.21.1.jar',
     'bin/version.json',
-    'bin/forge-1.21.1-52.0.1.jar',
+    'bin/runData',
     'mods/client.jar',
     'mods/minecraft-1.21.1.jar',
-    'jre/bin/java.exe'
+    'jre/bin/java.exe',
+    'runtime/lib/x.dll'
   ]) {
     const c = pack.classify(rel)
     assert.equal(c.protected, true, `${rel} must be protected`)
+  }
+})
+
+await check('modpack.jar is the loader and MUST be replaceable', () => {
+  /*
+   * This was wrong in v0.5.13 and the user caught it: in every Technic pack
+   * `bin/modpack.jar` is the NeoForge installer, and it is the file Technic
+   * actually launches. Protecting all of `bin/` meant a pack could have every mod
+   * on 1.21.1 and still start 1.20.1 — the update changed nothing that mattered.
+   */
+  for (const rel of ['bin/modpack.jar', 'bin/neoforge.jar', 'bin/forge.jar', 'bin/fabric.jar', 'bin/MODPACK.JAR']) {
+    const c = pack.classify(rel)
+    assert.equal(c.protected, false, `${rel} is the loader and must be updatable`)
+    assert.equal(c.role, 'loader-installer', `${rel} must be recognised as the loader`)
+  }
+})
+
+await check('other files in bin/ are still left alone', () => {
+  for (const rel of ['bin/something.class', 'bin/whatever.bin']) {
+    assert.equal(pack.classify(rel).protected, true, `${rel} is not the loader`)
   }
 })
 
@@ -207,9 +251,62 @@ await check('an unidentifiable jar is left alone rather than guessed at', () => 
 await check('the plan says the Minecraft jar is not touched', () => {
   const plan = planFor([])
   assert.ok(
-    plan.summary.some((l) => /bin\/|Minecraft jar/.test(l) && /never|not/.test(l)),
+    plan.summary.some((l) => /Minecraft jar/.test(l) && /left|never|not/i.test(l)),
     'the user asked for the jar to be left alone; the plan must say that it is'
   )
+})
+
+await check('a pack whose loader jar must change says so, and plans the installer', () => {
+  /*
+   * The whole point. `bin/modpack.jar` holds an old NeoForge installer; the plan
+   * has to propose replacing it with the target build, from the NeoForge maven,
+   * and say why.
+   */
+  const dir = makePack({ 'mods/a.jar': 'PK', 'bin/version': '1.20.1-neoforge-20.4.1\n' })
+  fs.writeFileSync(path.join(dir, 'bin/modpack.jar'), neoforgeInstaller('20.4.1'))
+  const plan = planFor([], {
+    dir,
+    current: { mcVersion: '1.20.1', family: 'neoforge', loaderVersion: '20.4.1' },
+    target: { mcVersion: '1.21.1', family: 'neoforge', loaderVersion: '21.1.80' }
+  })
+  assert.ok(plan.loaderJar, 'the loader jar is part of the plan')
+  assert.equal(plan.loaderJar.rel, 'bin/modpack.jar')
+  assert.equal(plan.loaderJar.download?.version, '21.1.80')
+  assert.match(plan.loaderJar.download.url, /maven\.neoforged\.net.*21\.1\.80.*installer\.jar$/)
+  assert.match(plan.loaderJar.why, /21\.1\.80/)
+  assert.ok(plan.summary.some((l) => /bin\/modpack\.jar/.test(l) && /replaced/.test(l)))
+})
+
+await check('an installer already at the target version is not re-downloaded', () => {
+  const dir = makePack({ 'mods/a.jar': 'PK', 'bin/version': '1.21.1-neoforge-21.1.80\n' })
+  fs.writeFileSync(path.join(dir, 'bin/modpack.jar'), neoforgeInstaller('21.1.80'))
+  const plan = planFor([], {
+    dir,
+    current: { mcVersion: '1.21.1', family: 'neoforge', loaderVersion: '21.1.80' },
+    target: { mcVersion: '1.21.1', family: 'neoforge', loaderVersion: '21.1.80' }
+  })
+  assert.ok(!plan.loaderJar?.download, 'nothing to fetch when it is already right')
+  assert.match(plan.loaderJar.why, /already/)
+})
+
+await check('a mod jar sitting in bin/ is described as what it is', () => {
+  /*
+   * Someone drops a mod into `bin/modpack.jar`, or a pack is assembled wrongly.
+   * Technic cannot launch from a mod, and the message has to say so plainly
+   * rather than calling it "not a recognised loader installer".
+   */
+  const dir = makePack({ 'bin/modpack.jar': modJar('create', '1.0.0') })
+  const info = pack.inspectLoaderJar(path.join(dir, 'bin/modpack.jar'))
+  assert.equal(info.kind, 'unknown-jar')
+  assert.equal(info.looksLikeMod, true)
+  assert.match(info.note, /mod jar, not a loader installer/)
+})
+
+await check('a NeoForge installer states its own version', () => {
+  const dir = makePack({ 'bin/modpack.jar': neoforgeInstaller('21.1.80') })
+  const info = pack.inspectLoaderJar(path.join(dir, 'bin/modpack.jar'))
+  assert.equal(info.kind, 'neoforge-installer')
+  assert.equal(info.version, '21.1.80')
 })
 
 await check('loader files already at the target are not marked for rewriting', () => {
@@ -429,6 +526,267 @@ await check('a project can be created from the picker itself', () => {
 })
 
 /* ================================= the two panels agree on the plan shape */
+
+/* ============================================ part 3: moving between packs */
+
+const twoPacks = (opts = {}) => ({
+  from: { dir: '/p/Source', label: 'Source', mcVersion: '1.20.1', family: 'neoforge', loaderVersion: '20.4.1' },
+  to: { dir: '/p/Target', label: 'Target', mcVersion: '1.21.1', family: 'neoforge', loaderVersion: '21.1.80' },
+  sourceMods: opts.sourceMods ?? [],
+  targetMods: opts.targetMods ?? [],
+  loader: opts.loader ?? {
+    from: { rel: 'bin/modpack.jar', present: 'a NeoForge installer for 20.4.1', version: '20.4.1' },
+    to: { rel: 'bin/modpack.jar', present: 'a NeoForge installer for 21.1.80', version: '21.1.80' }
+  }
+})
+
+await check('a mod the target does not have is copied, and is selected', () => {
+  const plan = transfer.planPackTransfer(twoPacks({
+    sourceMods: [{ file: 'create-0.5.jar', path: '/p/Source/mods/create-0.5.jar', modId: 'create', name: 'Create', version: '0.5' }]
+  }))
+  const e = plan.entries[0]
+  assert.equal(e.status, 'copy')
+  assert.equal(e.selected, true)
+  assert.equal(plan.counts.copy, 1)
+})
+
+await check('the same mod at the same version is not copied again', () => {
+  /*
+   * The failure this prevents: dragging a jar into a pack that already has it,
+   * ending up with two copies, and the launcher refusing to start with a
+   * duplicate-mod error that names neither file.
+   */
+  const plan = transfer.planPackTransfer(twoPacks({
+    sourceMods: [{ file: 'create-0.5.jar', path: '/p/Source/mods/create-0.5.jar', modId: 'create', version: '0.5' }],
+    targetMods: [{ file: 'create-0.5.jar', path: '/p/Target/mods/create-0.5.jar', modId: 'create', version: '0.5' }]
+  }))
+  const e = plan.entries[0]
+  assert.equal(e.status, 'same')
+  assert.equal(e.selected, false, 'there is nothing to gain from copying it')
+})
+
+await check('an older copy in the target is replaced, not duplicated', () => {
+  const plan = transfer.planPackTransfer(twoPacks({
+    sourceMods: [{ file: 'create-0.6.jar', path: '/p/Source/mods/create-0.6.jar', modId: 'create', version: '0.6' }],
+    targetMods: [{ file: 'create-0.5.jar', path: '/p/Target/mods/create-0.5.jar', modId: 'create', version: '0.5' }]
+  }))
+  const e = plan.entries[0]
+  assert.equal(e.status, 'upgrade')
+  assert.equal(e.replaces, 'create-0.5.jar', 'the copy it displaces is named, so it can be removed, not left alongside')
+  assert.equal(e.selected, true)
+})
+
+await check('a newer copy already in the target is kept', () => {
+  /*
+   * Carrying an old pack forward must not downgrade what is already there. This
+   * is the mistake that makes "bring my mods across" quietly undo a previous
+   * update.
+   */
+  const plan = transfer.planPackTransfer(twoPacks({
+    sourceMods: [{ file: 'create-0.5.jar', path: '/p/Source/mods/create-0.5.jar', modId: 'create', version: '0.5' }],
+    targetMods: [{ file: 'create-0.9.jar', path: '/p/Target/mods/create-0.9.jar', modId: 'create', version: '0.9' }]
+  }))
+  const e = plan.entries[0]
+  assert.equal(e.status, 'newer-there')
+  assert.equal(e.selected, false)
+  assert.match(e.reason, /keeps the newer one/)
+})
+
+await check('version comparison is numeric, so 1.9 does not beat 1.10', () => {
+  // A string compare would call 1.9 newer than 1.10 and skip a real upgrade.
+  const plan = transfer.planPackTransfer(twoPacks({
+    sourceMods: [{ file: 'm-1.10.jar', path: '/p/Source/mods/m-1.10.jar', modId: 'm', version: '1.10' }],
+    targetMods: [{ file: 'm-1.9.jar', path: '/p/Target/mods/m-1.9.jar', modId: 'm', version: '1.9' }]
+  }))
+  assert.equal(plan.entries[0].status, 'upgrade')
+})
+
+await check('a mod with no build for the TARGET version is not moved', () => {
+  /*
+   * The check has to be against the target's Minecraft and loader version, not
+   * the source's — the mod is going to run in the target. Using the source's
+   * version would call everything fine and the target would not launch.
+   */
+  const plan = transfer.planPackTransfer(twoPacks({
+    sourceMods: [{
+      file: 'old-1.0.jar',
+      path: '/p/Source/mods/old-1.0.jar',
+      modId: 'oldmod',
+      version: '1.0',
+      resolution: { found: false, incompatible: true }
+    }]
+  }))
+  const e = plan.entries[0]
+  assert.equal(e.status, 'incompatible')
+  assert.equal(e.selected, false, 'moving it would break the target pack')
+  assert.match(e.reason, /1\.21\.1/, 'the reason names the version it cannot run on')
+  assert.equal(plan.counts.incompatible, 1)
+})
+
+await check('an unidentifiable jar is listed but never moved', () => {
+  const plan = transfer.planPackTransfer(twoPacks({
+    sourceMods: [{ file: 'mystery.jar', path: '/p/Source/mods/mystery.jar' }]
+  }))
+  assert.equal(plan.entries[0].status, 'unidentified')
+  assert.equal(plan.entries[0].selected, false)
+})
+
+await check('the two packs loader versions are compared, not just both shown', () => {
+  /*
+   * Both packs launch from bin/modpack.jar — normally a NeoForge installer — and
+   * nothing in Windows tells you one is 20.4.1 and the other 21.1.80 until the
+   * game starts. That comparison is the reason to look at two packs together.
+   */
+  const plan = transfer.planPackTransfer(twoPacks())
+  assert.equal(plan.loader.differs, true)
+  assert.match(plan.loader.note, /20\.4\.1/)
+  assert.match(plan.loader.note, /21\.1\.80/)
+  assert.match(plan.loader.note, /keeps its own loader/, 'the target is not silently moved to the source loader')
+})
+
+await check('two packs on the same loader say so rather than claiming a difference', () => {
+  const plan = transfer.planPackTransfer(twoPacks({
+    loader: {
+      from: { rel: 'bin/modpack.jar', present: 'a NeoForge installer for 21.1.80', version: '21.1.80' },
+      to: { rel: 'bin/modpack.jar', present: 'a NeoForge installer for 21.1.80', version: '21.1.80' }
+    }
+  }))
+  assert.equal(plan.loader.differs, false)
+  assert.match(plan.loader.note, /nothing has to change/)
+})
+
+await check('a loader version that cannot be read is not invented', () => {
+  const plan = transfer.planPackTransfer(twoPacks({
+    loader: {
+      from: { rel: 'bin/modpack.jar', present: 'not a recognised loader installer', version: undefined },
+      to: { rel: 'bin/modpack.jar', present: 'a NeoForge installer for 21.1.80', version: '21.1.80' }
+    }
+  }))
+  assert.equal(plan.loader.differs, false, 'an unknown version must not be reported as a difference')
+  assert.match(plan.loader.note, /cannot be compared/)
+})
+
+await check('every decision is made against the target version, not the source', () => {
+  /*
+   * This is the mistake the whole feature exists to prevent, so it is checked in
+   * the source and not only in the pure function: resolving against the source's
+   * version would approve every jar and then fail on launch in the target.
+   */
+  const main = read('src/main/ipc/index.ts')
+  const block = main.slice(main.indexOf("'pack:compare'"), main.indexOf("'pack:transfer'"))
+  assert.match(block, /const toVersion = currentPackVersion\(toDir\)/, 'the target is what mods are resolved against')
+  assert.doesNotMatch(block, /const toVersion = currentPackVersion\(fromDir\)/, 'the source version would approve jars the target cannot run')
+  assert.match(block, /newestVersionFor\(projectId, \{ mcVersion: toVersion\.mcVersion/, 'and the network lookup uses it too')
+})
+
+await check('the plan says the source pack is only read', () => {
+  const plan = transfer.planPackTransfer(twoPacks())
+  assert.ok(
+    plan.summary.some((l) => /source pack is read/i.test(l)),
+    'a feature that writes into one pack and reads another has to be explicit about which is which'
+  )
+})
+
+await check('an installer version can be read from its file name when the jar cannot', () => {
+  /*
+   * Forge names two versions in one file name and the loader is the *second* —
+   * reporting 1.20.1 as the loader build would call a pack up to date when it is
+   * two loader generations behind.
+   */
+  assert.equal(transfer.versionFromInstallerName('neoforge-21.1.80-installer.jar'), '21.1.80')
+  assert.equal(transfer.versionFromInstallerName('forge-1.20.1-47.2.0-installer.jar'), '47.2.0')
+  assert.equal(transfer.versionFromInstallerName('neoforge-21.1.80-beta-installer.jar'), '21.1.80-beta')
+  assert.equal(transfer.versionFromInstallerName('modpack.jar'), undefined)
+  assert.equal(transfer.versionFromInstallerName('mystery.jar'), undefined)
+})
+
+await check('a download is not accepted as an installer unless it really is one', () => {
+  /*
+   * The maven returns an HTML page with a 200 often enough to matter. Putting that
+   * into bin/modpack.jar is a pack that will not start, and the launcher's error
+   * says nothing about why.
+   */
+  const html = Buffer.from('<!DOCTYPE html><html><body>404</body></html>')
+  assert.equal(pack.verifyLoaderInstaller(html, { family: 'neoforge', loaderVersion: '21.1.80' }).ok, false)
+
+  // A valid zip that is not a NeoForge installer — e.g. a mod — is refused too.
+  const wrong = (() => {
+    const zip = new AdmZip()
+    zip.addFile('mods.toml', Buffer.from('x'))
+    return zip.toBuffer()
+  })()
+  const res = pack.verifyLoaderInstaller(wrong, { family: 'neoforge', loaderVersion: '21.1.80' })
+  assert.equal(res.ok, false)
+  assert.match(res.error, /not a NeoForge installer/)
+
+  // The real thing passes, and its version is confirmed.
+  const good = pack.verifyLoaderInstaller(neoforgeInstaller('21.1.80'), { family: 'neoforge', loaderVersion: '21.1.80' })
+  assert.equal(good.ok, true)
+  assert.equal(good.version, '21.1.80')
+})
+
+await check('an installer for the wrong version is not silently accepted', () => {
+  // Right shape, wrong build: it would start a different loader than the plan says.
+  const res = pack.verifyLoaderInstaller(neoforgeInstaller('20.4.1'), { family: 'neoforge', loaderVersion: '21.1.80' })
+  assert.equal(res.ok, true, 'the payload is a real installer')
+  assert.notEqual(res.version, '21.1.80', 'and it must not claim to be the version asked for')
+})
+
+await check('the whole-pack update stages and verifies the loader before touching the pack', () => {
+  /*
+   * Order is the safety property: if the loader cannot be obtained, the mods must
+   * not have been swapped yet. Mods on 1.21.1 with a 1.20.1 modpack.jar left in
+   * bin/ is a pack that does not launch.
+   */
+  const main = read('src/main/ipc/index.ts')
+  const block = main.slice(main.indexOf("'pack:applyWhole'"))
+  const stage = block.indexOf('stagedLoader')
+  const backup = block.indexOf('const backup = backUp(')
+  const swap = block.indexOf('// 3. Swap the mods in.')
+  assert.ok(stage > 0 && backup > 0 && swap > 0)
+  assert.ok(stage < backup, 'the loader is fetched and verified before the backup is even made')
+  assert.ok(backup < swap, 'and the backup is made before any jar is replaced')
+  assert.match(block, /aborted: true/, 'a failed loader download must abort with the pack untouched')
+})
+
+await check('the transfer only ever writes into the target pack', () => {
+  const main = read('src/main/ipc/index.ts')
+  const block = main.slice(main.indexOf("'pack:transfer'"))
+  const body = block.slice(0, block.indexOf("'pack:',") > 0 ? block.indexOf("'pack:',") : block.length)
+  assert.ok(!/fs\.(writeFileSync|renameSync|copyFileSync)\([^)]*\bplan\.from\.dir/.test(body), 'the source must never be written to')
+  assert.match(body, /const dest = path\.join\(toDir, 'mods'/, 'every write is rooted in the target')
+})
+
+await check('the transfer refuses a source file that is not a jar', () => {
+  const main = read('src/main/ipc/index.ts')
+  assert.match(main, /the source file is not a jar/, 'a truncated or HTML file must not be copied into mods/')
+})
+
+await check('both comparison and transfer are wired through preload and the api', () => {
+  const preload = read('src/preload/index.ts')
+  const api = read('src/renderer/src/lib/api.ts')
+  const panel = read('src/renderer/src/components/PackPanel.tsx')
+  assert.match(preload, /compare: \(opts: \{ from: string; to: string \}\) => ipcRenderer\.invoke\('pack:compare'/)
+  assert.match(preload, /transfer: \(opts: \{ plan: unknown; selected: string\[\] \}\) => ipcRenderer\.invoke\('pack:transfer'/)
+  assert.match(api, /compare: \(opts: \{ from: string; to: string \}\)/)
+  assert.match(api, /export interface PackTransferPlan/)
+  assert.match(panel, /<PackTransfer/, 'and the panel has to show it')
+})
+
+await check('the transfer panel states which pack is written to', () => {
+  const comp = read('src/renderer/src/components/PackTransfer.tsx')
+  assert.match(comp, /Only the target pack is written to/)
+  assert.match(comp, /source pack is only read/i)
+})
+
+await check('the renderer and main agree on the transfer statuses', () => {
+  const api = read('src/renderer/src/lib/api.ts')
+  const mod = read('src/main/mod/transfer.ts')
+  for (const status of ['copy', 'upgrade', 'same', 'newer-there', 'incompatible', 'unidentified']) {
+    assert.ok(api.includes(`'${status}'`), `api.ts must know ${status}`)
+    assert.ok(mod.includes(`'${status}'`), `transfer.ts must produce ${status}`)
+  }
+})
 
 await check('the renderer and main agree on what a plan entry looks like', () => {
   const api = read('src/renderer/src/lib/api.ts')

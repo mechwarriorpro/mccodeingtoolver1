@@ -38,6 +38,7 @@ const sources = [
   'src/main/mod/dep-resolve.ts',
   'src/main/mod/modpack.ts',
   'src/main/mod/packupdate.ts',
+  'src/main/mod/transfer.ts',
   'src/main/mod/projects.ts',
   'src/main/licence.ts',
   'src/main/mod/api-reference.ts',

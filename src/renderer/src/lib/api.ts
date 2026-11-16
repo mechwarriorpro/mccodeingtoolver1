@@ -542,6 +542,38 @@ export interface PackPlanMod {
   selected: boolean
 }
 
+export type PackTransferStatus = 'copy' | 'upgrade' | 'same' | 'newer-there' | 'incompatible' | 'unidentified'
+
+/** One mod, and what a transfer between two packs would do with it. */
+export interface PackTransferEntry {
+  file: string
+  path: string
+  modId?: string
+  name?: string
+  version?: string
+  targetVersion?: string
+  replaces?: string
+  status: PackTransferStatus
+  reason: string
+  selected: boolean
+  target?: { version?: string; url?: string; name: string }
+}
+
+export interface PackTransferPlan {
+  from: { dir: string; label: string; mcVersion?: string; family?: string; loaderVersion?: string }
+  to: { dir: string; label: string; mcVersion?: string; family?: string; loaderVersion?: string }
+  entries: PackTransferEntry[]
+  loader: {
+    from: { rel: string; present: string; version?: string }
+    to: { rel: string; present: string; version?: string }
+    differs: boolean
+    note: string
+    targetVersion?: string
+  }
+  summary: string[]
+  counts: Record<PackTransferStatus, number>
+}
+
 export interface PackPlan {
   root: string
   target: { mcVersion: string; family: string; loaderVersion: string }
@@ -997,6 +1029,24 @@ export interface McfApi {
    */
   pack: {
     /** What the pack's own launcher files say it runs, for a sensible update target. */
+    /**
+     * Compare two packs and work out what moving the source's mods into the
+     * target would actually do. Reads both packs' own loader jars, so the report
+     * can say which loader version each one starts.
+     */
+    compare: (opts: { from: string; to: string }) => Promise<{
+      ok: boolean
+      error?: string
+      plan?: PackTransferPlan
+    }>
+    /** Copy the chosen jars across. Only the target pack is written to. */
+    transfer: (opts: { plan: PackTransferPlan; selected: string[] }) => Promise<{
+      ok: boolean
+      error?: string
+      copied?: number
+      results?: { file: string; ok: boolean; error?: string; to?: string; replaced?: string }[]
+      failed?: { file: string; error?: string }[]
+    }>
     version: (dir: string) => Promise<{ mcVersion?: string; family?: string; loaderVersion?: string }>
     /**
      * Work out a whole-pack update to a Minecraft version, without changing
