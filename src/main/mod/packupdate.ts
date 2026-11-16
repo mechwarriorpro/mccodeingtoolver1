@@ -24,6 +24,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import AdmZip from 'adm-zip'
+import { compareVersions } from './update-plan'
 
 /** Minecraft versions this loader family can target, newest first, at plan time. */
 export type LoaderFamily = 'neoforge' | 'forge' | 'fabric' | 'quilt' | 'unknown'
@@ -149,7 +150,7 @@ export function surveyPack(root: string): { files: PackFileRole[]; skipped: stri
  */
 export interface LoaderJarInfo {
   rel: string
-  kind: 'neoforge-installer' | 'forge-installer' | 'unknown-jar' | 'not-a-jar'
+  kind: 'neoforge-installer' | 'forge-installer' | 'forge-legacy' | 'unknown-jar' | 'not-a-jar'
   /** Whatever version string the jar states about itself. */
   version?: string
   /** A mod jar that ended up in bin/ — a mistake, reported rather than "fixed". */
@@ -200,6 +201,26 @@ export function inspectLoaderJar(fullPath: string): LoaderJarInfo {
   if (names.some((n) => n.startsWith('net/minecraftforge/')) || (has('install_profile.json') && names.some((n) => n.startsWith('net/')))) {
     const profile = text(['install_profile.json'])
     return { rel, kind: 'forge-installer', version: versionFrom(profile) ?? versionFrom(manifest), note: 'a Forge installer' }
+  }
+  /*
+   * Legacy Forge — 1.6.4 and 1.7.10 packs — ships the **universal** jar renamed to
+   * `modpack.jar`, not an installer. It has no `install_profile.json` and no
+   * `net/minecraftforge/`; what it has is `cpw/mods/fml/` and an `FMLCorePlugin`
+   * in its manifest. Without this, every pre-1.8 pack's loader read as "not a
+   * recognised loader installer" with no version, which is the file that tells
+   * Technic what to launch.
+   */
+  const legacyFml = names.some((n) => n.startsWith('cpw/mods/fml/')) || /FMLCorePlugin\s*:/i.test(manifest)
+  if (legacyFml) {
+    // `Implementation-Version: 10.13.2.1230` is the cleanest statement of it.
+    const impl = /Implementation-Version\s*:\s*([^\r\n]+)/i.exec(manifest)?.[1]?.trim()
+    const legacyVersion = impl && /\d/.test(impl) ? impl : versionFrom(manifest)
+    return {
+      rel,
+      kind: 'forge-legacy',
+      version: legacyVersion,
+      note: legacyVersion ? `a Forge ${legacyVersion} (1.6/1.7-era) universal jar` : 'a legacy Forge universal jar'
+    }
   }
   // A mod that was dropped in bin/ by mistake: worth saying so, not worth "fixing".
   const modToml = names.some((n) => n === 'META-INF/neoforge.mods.toml' || n === 'META-INF/mods.toml')
@@ -258,7 +279,10 @@ export function verifyLoaderInstaller(bytes: Buffer, opts: { family: LoaderFamil
     return { ok: true, error: `could not confirm the installer's version from the jar itself` }
   }
   if (opts.family === 'forge') {
-    const isForge = names.some((n) => n.startsWith('net/minecraftforge/')) || names.includes('install_profile.json')
+    const isForge =
+      names.some((n) => n.startsWith('net/minecraftforge/')) ||
+      names.includes('install_profile.json') ||
+      names.some((n) => n.startsWith('cpw/mods/fml/'))
     return isForge ? { ok: true } : { ok: false, error: 'the download is not a Forge installer' }
   }
   return { ok: true }
@@ -340,6 +364,18 @@ export interface PackUpdatePlan {
     download: { url: string; name: string; version: string } | null
     why: string
   }
+  /**
+   * Files left from the pack's old version that the target does not use.
+   *
+   * Legacy packs — 1.6.4, 1.7.10 — ship the game itself in `bin/`: `libraries/`
+   * with LWJGL 2 and the old Forge libs, `assets/` (a 1.7.10 asset index), and
+   * `natives/`. A modern launch downloads its own, and the old ones are at best
+   * dead weight and at worst a conflicting classpath. They are **reported, never
+   * removed**: which of them is load-bearing differs between launchers, and
+   * deleting a folder from someone's working pack on a guess is not a trade this
+   * tool gets to make.
+   */
+  legacyLeftovers: { rel: string; note: string; bytes: number }[]
   /** Folders that will be copied before anything is written. */
   backup: { needed: boolean; dir: string }
   /** Human sentences, in the order the user needs them. */
@@ -465,21 +501,103 @@ export function planPackUpdate(args: {
     return { rel: found.rel, present, download, why: 'Forge installers are not fetched automatically; replace this by hand' }
   })()
 
+  /*
+   * How far apart the two versions are, in loader generations.
+   *
+   * 1.6/1.7 = 0, 1.8–1.12 = 1, 1.13–1.16 = 2, 1.17–1.20 = 3, 1.21+ = 4. The gap
+   * decides what the user should expect: one generation is an update, three is a
+   * rewrite.
+   */
+  const fromVer = current.mcVersion
+  const jumpEra = (v: string | undefined): number | undefined => {
+    if (!v) return undefined
+    const minor = parseInt(v.split('.')[1] ?? '', 10)
+    if (!Number.isFinite(minor)) return undefined
+    if (minor <= 7) return 0
+    if (minor <= 12) return 1
+    if (minor <= 16) return 2
+    if (minor <= 20) return 3
+    return 4
+  }
+  const eraFrom = jumpEra(fromVer)
+  const eraTo = jumpEra(target.mcVersion)
+  const eras = eraFrom !== undefined && eraTo !== undefined ? eraTo - eraFrom : 0
+
+  /*
+   * What the old version left in `bin/` that the new one does not use. Only worth
+   * saying for an in-place game files bundle, so it is limited to the folders a
+   * legacy pack actually ships the game in.
+   */
+  const legacyLeftovers: { rel: string; note: string; bytes: number }[] = []
+  if (eras >= 1) {
+    const notes: Record<string, string> = {
+      'bin/libraries': `${current.mcVersion ?? 'The old version'}'s library folder — a ${target.mcVersion} launch uses its own; this one is dead weight`,
+      'bin/assets': `${current.mcVersion ?? 'The old version'}'s assets — the launcher fetches the ${target.mcVersion} index itself`,
+      'bin/natives': 'LWJGL 2 natives from the old version — the modern loader does not use them',
+      'bin/natives-64': 'LWJGL 2 natives from the old version — the modern loader does not use them'
+    }
+    for (const [rel, note] of Object.entries(notes)) {
+      const f = args.files.find((x) => x.rel.toLowerCase() === rel || x.rel.toLowerCase().startsWith(`${rel}/`))
+      if (!f) continue
+      const bytes = args.files.filter((x) => x.rel.toLowerCase() === rel || x.rel.toLowerCase().startsWith(`${rel}/`)).reduce((n, x) => n + x.bytes, 0)
+      legacyLeftovers.push({ rel, note, bytes })
+    }
+  }
+
   const summary: string[] = []
   const updatable = mods.filter((m) => m.status === 'update')
   const missing = mods.filter((m) => m.status === 'missing-build')
   const unidentified = mods.filter((m) => m.status === 'unidentified')
 
+  /*
+   * How far the jump is decides what the user should expect.
+   *
+   * Moving 1.20.1 → 1.21.1 is an update: most mods have a build for both, configs
+   * mostly still apply, and the work is choosing versions. Moving 1.7.10 → 1.21.1
+   * is a port: the mods are different mods by now, configs are not compatible,
+   * world saves will not load, and scripts are in a language the loader no longer
+   * speaks. Reporting both the same way would let someone start the second
+   * thinking it is the first.
+   */
   if (current.mcVersion && current.mcVersion !== target.mcVersion) {
     summary.push(`This pack is on ${current.mcVersion}${current.family && current.family !== 'unknown' ? ` with ${current.family}` : ''}; the update targets ${target.mcVersion} with ${target.family}.`)
+
+    if (eras >= 3) {
+      /*
+       * A cross-era jump is a rewrite, not a version bump. Say it before any of
+       * the mod list, because the mod list is the least of it.
+       */
+      summary.push(
+        `**This is a port, not an update.** ${current.mcVersion} and ${target.mcVersion} are ${eras} loader generations apart: ` +
+          'the mods are largely different projects by now, their configs do not carry over, and a 1.7.10 world will not open in 1.21.1. ' +
+          'Nothing here converts a world or a config — this replaces the mod jars and the loader so the target version starts.'
+      )
+    } else if (eras === 2) {
+      summary.push(
+        `This crosses ${eras} loader generations (${current.mcVersion} → ${target.mcVersion}). Expect several mods to have no build and configs to need redoing; the list below is what can be carried across.`
+      )
+    } else if (fromVer && target.mcVersion && compareVersions(fromVer, target.mcVersion) > 0) {
+      summary.push(`**This is a downgrade** (${current.mcVersion} → ${target.mcVersion}). Mod builds for older versions exist, but anything already configured for the newer one may not load.`)
+    }
   } else {
     summary.push(`This pack is already on ${target.mcVersion}; the update brings its mods and loader files to the ${target.family} build you chose.`)
   }
-  summary.push(
-    updatable.length
-      ? `${updatable.length} mod${updatable.length === 1 ? '' : 's'} can be replaced with a ${target.mcVersion} build.`
-      : `Every mod that could be matched already has a ${target.mcVersion} build, or none could be matched.`
-  )
+  /*
+   * The "nothing to do" sentence had two meanings flattened into one, and on a
+   * 1.7.10 pack the wrong one was shown: "every mod already has a 1.21.1 build"
+   * when in fact no mod could be matched at all. They are opposite situations and
+   * a user reading the first would close the window thinking the pack was done.
+   */
+  const matched = mods.filter((m) => m.status === 'update' || m.status === 'keep')
+  if (updatable.length) {
+    summary.push(`${updatable.length} mod${updatable.length === 1 ? '' : 's'} can be replaced with a ${target.mcVersion} build.`)
+  } else if (matched.length) {
+    summary.push(`Every mod that could be matched already has a ${target.mcVersion} build, so only the loader changes.`)
+  } else if (mods.length) {
+    summary.push(`**No mod could be matched to a ${target.mcVersion} build.** None of the mods in this pack are recognised for the target version, so they are all listed below rather than replaced.`)
+  } else {
+    summary.push(`This pack has no mod jars to resolve, so only the loader changes.`)
+  }
   if (missing.length) {
     summary.push(
       `${missing.length} mod${missing.length === 1 ? '' : 's'} ha${missing.length === 1 ? 's' : 've'} no ${target.mcVersion} build. They are listed and left on your disk unless you tick them for removal — a pack update that silently deletes a mod is not an update.`
@@ -490,6 +608,13 @@ export function planPackUpdate(args: {
   summary.push(changing.length ? `${changing.length} loader file${changing.length === 1 ? '' : 's'} will be rewritten: ${changing.map((l) => l.rel).join(', ')}.` : 'The loader files already match the target.')
   if (loaderJar) {
     summary.push(`The loader jar \`${loaderJar.rel}\` will be replaced: ${loaderJar.why}.`)
+  }
+  if (legacyLeftovers.length) {
+    const total = legacyLeftovers.reduce((n, l) => n + l.bytes, 0)
+    summary.push(
+      `This pack also carries ${legacyLeftovers.length} folder${legacyLeftovers.length === 1 ? '' : 's'} of ${current.mcVersion ?? 'old'} game files under \`bin/\` (${humanBytes(total)}): ${legacyLeftovers.map((l) => `\`${l.rel}\``).join(', ')}. ` +
+        `A ${target.mcVersion} launch uses its own, so they are listed for you to remove — this tool does not delete them.`
+    )
   }
   summary.push(
     'The Minecraft jar, `bin/version.json` and every other launcher file are left exactly as they are — only the loader jar and its version files change.'
@@ -502,6 +627,7 @@ export function planPackUpdate(args: {
     mods,
     loaderFiles,
     loaderJar,
+    legacyLeftovers,
     backup: { needed: true, dir: path.join(root, `.backup-${new Date().toISOString().replace(/[:.]/g, '-')}`) },
     summary
   }
@@ -617,6 +743,50 @@ export function writeLoaderFile(root: string, rel: string, content: string): { o
 }
 
 /** The pack's own version, read from the files the launcher uses. */
+/** `1536000` → `1.5 MB`; a size that rounds to zero is worse than no size at all. */
+export function humanBytes(n: number): string {
+  if (n < 1000) return `${n} B`
+  if (n < 1_000_000) return `${Math.round(n / 1000)} kB`
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)} MB`
+  return `${(n / 1_000_000_000).toFixed(1)} GB`
+}
+
+/**
+ * The Minecraft version a legacy pack's assets belong to.
+ *
+ * Old packs ship the game's libraries and assets themselves (`bin/libraries`,
+ * `bin/assets/<index>`) instead of pointing at a launcher's copy, and the asset
+ * index name is the game version. It is the last resort, but it is a real answer
+ * where `bin/version` is missing.
+ */
+function minecraftVersionFromAssets(root: string): string | undefined {
+  const readDir = (rel: string): string[] => {
+    try {
+      return fs.readdirSync(path.join(root, rel))
+    } catch {
+      return []
+    }
+  }
+  // `bin/assets/1.7.10/` — the index folder is named for the version.
+  for (const name of readDir('bin/assets')) {
+    if (/^\d+\.\d+(\.\d+)?$/.test(name)) return name
+  }
+  // `bin/assets/indexes/1.7.10.json`
+  for (const name of readDir('bin/assets/indexes')) {
+    const m = /^(\d+\.\d+(?:\.\d+)?)\.json$/.exec(name)
+    if (m) return m[1]
+  }
+  // `bin/version.json` — vanilla's own manifest.
+  try {
+    const v = JSON.parse(fs.readFileSync(path.join(root, 'bin/version.json'), 'utf8')) as { id?: string; inheritsFrom?: string }
+    const candidate = v.inheritsFrom ?? v.id
+    if (candidate && /^\d+\.\d+(\.\d+)?$/.test(candidate)) return candidate
+  } catch {
+    /* no usable version.json */
+  }
+  return undefined
+}
+
 export function currentPackVersion(root: string): { mcVersion?: string; family: LoaderFamily; loaderVersion?: string } {
   const read = (rel: string): string => {
     try {
@@ -625,11 +795,51 @@ export function currentPackVersion(root: string): { mcVersion?: string; family: 
       return ''
     }
   }
-  // `bin/version` is authoritative for what Technic launches.
-  const versionLine = read('bin/version').split(/\r?\n/)[0] ?? ''
-  const m = /^(\d+\.\d+(?:\.\d+)?)-(neoforge|forge|fabric|quilt)-(.+)$/i.exec(versionLine)
-  if (m) {
-    return { mcVersion: m[1], family: m[2].toLowerCase() as LoaderFamily, loaderVersion: m[3] }
+  /*
+   * `bin/version` is authoritative for what Technic launches, and every era
+   * spells it differently:
+   *
+   *   1.21.1-neoforge-21.1.80        modern, hyphen-separated
+   *   1.12.2-forge-14.23.5.2860      modern Forge
+   *   1.7.10-Forge10.13.2.1230       legacy: capital F, **no separator**
+   *   1.6.4-Forge9.11.1.965          legacy
+   *   1.7.10-Forge10.13.4.1566-1.7.10  legacy with the game version appended
+   *
+   * The legacy form was being missed entirely, which made every pre-1.8 pack
+   * report `unknown` — no version, no loader, nothing to compare against and
+   * nothing to update from. A 1.7.10 pack is exactly what this feature is for.
+   */
+  const versionLine = (read('bin/version').split(/\r?\n/)[0] ?? '').trim()
+  const modern = /^(\d+\.\d+(?:\.\d+)?)-(neoforge|forge|fabric|quilt)[-_](.+)$/i.exec(versionLine)
+  if (modern) {
+    return {
+      mcVersion: modern[1],
+      family: modern[2].toLowerCase() as LoaderFamily,
+      loaderVersion: modern[3].trim()
+    }
   }
-  return { family: 'unknown' }
+  // Legacy: `1.7.10-Forge10.13.2.1230`, sometimes with the game version appended.
+  const legacy = /^(\d+\.\d+(?:\.\d+)?)[-_]forge(\d+(?:\.\d+)+)(?:-\d+\.\d+(?:\.\d+)?)?$/i.exec(versionLine)
+  if (legacy) {
+    return { mcVersion: legacy[1], family: 'forge', loaderVersion: legacy[2] }
+  }
+
+  /*
+   * No readable `bin/version`. Legacy packs do not always have one, so fall back
+   * to the loader jar itself — its manifest carries `Implementation-Version` and
+   * `FMLCorePlugin` — and then to the game assets it shipped with.
+   */
+  const jar = ['bin/modpack.jar', 'bin/forge.jar'].map((r) => path.join(root, r)).find((f) => fs.existsSync(f))
+  if (jar) {
+    const info = inspectLoaderJar(jar)
+    if (info.version) {
+      return {
+        mcVersion: minecraftVersionFromAssets(root),
+        family: info.kind === 'neoforge-installer' ? 'neoforge' : 'forge',
+        loaderVersion: info.version
+      }
+    }
+  }
+  const mc = minecraftVersionFromAssets(root)
+  return mc ? { mcVersion: mc, family: 'unknown' } : { family: 'unknown' }
 }

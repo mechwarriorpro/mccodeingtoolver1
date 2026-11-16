@@ -152,6 +152,15 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.5.15** makes the whole-pack update work on packs from before 1.8 — a 1.7.10 or 1.6.4 pack can be brought
+> to 1.21.1. Those packs spell everything differently and every one of them was invisible: `bin/version` reads
+> `1.7.10-Forge10.13.2.1230` (capital F, no separator, sometimes the game version appended) and the old parser
+> reported **unknown** for all of them; `bin/modpack.jar` is the Forge **universal** jar, not an installer, so it
+> read as "not a recognised loader installer" with no version. Both now parse, with the version falling back to
+> the pack's own `bin/assets` index or `bin/version.json` when there is no `bin/version` at all. A jump of three
+> or more loader generations is reported as a **port, not an update** — different mods, incompatible configs, and
+> a 1.7.10 world that will not open — rather than as a routine version bump. Old packs also carry the game itself
+> in `bin/libraries`, `bin/assets` and `bin/natives`; those are listed with their size and left alone.
 > **v0.5.14** fixes a mistake in v0.5.13 and adds the feature it was blocking. **`bin/modpack.jar` is the
 > loader** — in every Technic pack it is the NeoForge installer — and v0.5.13 protected all of `bin/`, so a pack
 > could have every mod on 1.21.1 and still launch 1.20.1. The whole-pack update now fetches and verifies the

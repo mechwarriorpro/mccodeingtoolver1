@@ -580,6 +580,15 @@ export interface PackPlan {
   current: { mcVersion?: string; family?: string; loaderVersion?: string }
   mods: PackPlanMod[]
   loaderFiles: { rel: string; content: string; note: string; changed: boolean }[]
+  /** The loader jar (`bin/modpack.jar`) — the file Technic actually launches. */
+  loaderJar?: {
+    rel: string
+    present: { rel: string; kind: string; version?: string; looksLikeMod?: boolean; note: string }
+    download: { url: string; name: string; version: string } | null
+    why: string
+  }
+  /** Old-version game files under bin/ that the target does not use. Reported, never removed. */
+  legacyLeftovers?: { rel: string; note: string; bytes: number }[]
   backup: { needed: boolean; dir: string }
   summary: string[]
 }

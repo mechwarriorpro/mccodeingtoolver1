@@ -61,6 +61,21 @@ function neoforgeInstaller(version) {
   return zip.toBuffer()
 }
 
+/**
+ * A 1.6/1.7-era Forge *universal* jar, which is what a legacy pack's
+ * `bin/modpack.jar` really is: no install_profile.json, no net/minecraftforge/,
+ * but cpw/mods/fml and an FMLCorePlugin in the manifest.
+ */
+function legacyForgeJar(version) {
+  const zip = new AdmZip()
+  zip.addFile(
+    'META-INF/MANIFEST.MF',
+    Buffer.from(`Manifest-Version: 1.0\r\nImplementation-Version: ${version}\r\nFMLCorePlugin: cpw.mods.fml.relauncher.FMLCorePlugin\r\n`)
+  )
+  zip.addFile('cpw/mods/fml/relauncher/FMLCorePlugin.class', Buffer.from('x'))
+  return zip.toBuffer()
+}
+
 /** A mod jar, for the cases where a mod has ended up in bin/. */
 function modJar(id, version) {
   const zip = new AdmZip()
@@ -526,6 +541,217 @@ await check('a project can be created from the picker itself', () => {
 })
 
 /* ================================= the two panels agree on the plan shape */
+
+/* ================================= part 2b: packs older than 1.8 */
+
+await check('a 1.7.10 pack version is read, not reported as unknown', () => {
+  /*
+   * The legacy spelling is `1.7.10-Forge10.13.2.1230`: capital F and no separator.
+   * The modern parser required a hyphen, so every pre-1.8 pack reported
+   * `unknown` — which meant no version to compare, no loader to report, and an
+   * update with nothing to work from. 1.7.10 packs are exactly the case this
+   * feature exists for.
+   */
+  const cases = [
+    ['1.7.10-Forge10.13.2.1230', '1.7.10', '10.13.2.1230'],
+    ['1.7.10-Forge10.13.4.1566-1.7.10', '1.7.10', '10.13.4.1566'],
+    ['1.6.4-Forge9.11.1.965', '1.6.4', '9.11.1.965'],
+    ['1.6.4-forge9.11.1.964', '1.6.4', '9.11.1.964']
+  ]
+  for (const [line, mc, loader] of cases) {
+    const dir = makePack({ 'bin/version': `${line}\n` })
+    const v = pack.currentPackVersion(dir)
+    assert.equal(v.mcVersion, mc, `${line} must report ${mc}`)
+    assert.equal(v.family, 'forge', `${line} is Forge`)
+    assert.equal(v.loaderVersion, loader, `${line} loader build`)
+  }
+})
+
+await check('the modern spelling still parses, unchanged', () => {
+  const modern = pack.currentPackVersion(makePack({ 'bin/version': '1.21.1-neoforge-21.1.80\n' }))
+  assert.deepEqual(modern, { mcVersion: '1.21.1', family: 'neoforge', loaderVersion: '21.1.80' })
+})
+
+await check('a legacy pack with no bin/version still gives up its version', () => {
+  /*
+   * Old packs do not always have `bin/version`. They do ship the game's assets,
+   * and the asset index is named for the version — a real answer where the file
+   * is missing.
+   */
+  const fromAssets = makePack({ 'bin/assets/1.7.10/sounds.json': '{}', 'mods/a.jar': 'PK' })
+  assert.equal(pack.currentPackVersion(fromAssets).mcVersion, '1.7.10')
+
+  const fromVersionJson = makePack({ 'bin/version.json': JSON.stringify({ inheritsFrom: '1.6.4' }) })
+  assert.equal(pack.currentPackVersion(fromVersionJson).mcVersion, '1.6.4')
+})
+
+await check('an unreadable legacy jar is reported as unknown, never guessed', () => {
+  const dir = makePack({ 'mods/a.jar': 'PK' })
+  const v = pack.currentPackVersion(dir)
+  assert.equal(v.family, 'unknown')
+  assert.equal(v.mcVersion, undefined)
+})
+
+await check('a 1.7.10 modpack.jar is recognised as the Forge loader it is', () => {
+  /*
+   * A legacy pack's modpack.jar is the Forge *universal* jar, not an installer.
+   * It has no install_profile.json and no net/minecraftforge/; the markers are
+   * cpw/mods/fml and an FMLCorePlugin in the manifest. Without recognising it,
+   * the loader read as "not a recognised loader installer" with no version — and
+   * it is the file Technic launches.
+   */
+  const dir = makePack({ 'bin/modpack.jar': legacyForgeJar('10.13.2.1230') })
+  const info = pack.inspectLoaderJar(path.join(dir, 'bin/modpack.jar'))
+  assert.equal(info.kind, 'forge-legacy')
+  assert.equal(info.version, '10.13.2.1230', 'the manifest states it in Implementation-Version')
+  assert.match(info.note, /universal jar/)
+})
+
+await check('a 1.7.10 pack copy knows its Minecraft version and loader together', () => {
+  const dir = makePack({ 'bin/version': '1.7.10-Forge10.13.2.1230\n', 'mods/a.jar': 'PK' })
+  const v = pack.currentPackVersion(dir)
+  assert.deepEqual([v.mcVersion, v.family, v.loaderVersion], ['1.7.10', 'forge', '10.13.2.1230'])
+})
+
+await check('a 1.7.10 → 1.21.1 update is called a port, not an update', () => {
+  /*
+   * The jump is four loader generations. Calling it an "update" alongside the
+   * plan would let someone start it expecting their world and configs to
+   * survive, and they will not: the mods are different projects, the configs are
+   * not compatible, and a 1.7.10 save will not load in 1.21.1.
+   */
+  const dir = makePack({ 'bin/version': '1.7.10-Forge10.13.2.1230\n', 'mods/a.jar': 'PK' })
+  const plan = planFor([], {
+    dir,
+    current: { mcVersion: '1.7.10', family: 'forge', loaderVersion: '10.13.2.1230' },
+    target: { mcVersion: '1.21.1', family: 'neoforge', loaderVersion: '21.1.80' }
+  })
+  const port = plan.summary.find((l) => /port, not an update/.test(l))
+  assert.ok(port, 'the plan has to say what this really is')
+  assert.match(port, /world will not open|configs do not carry over/i)
+})
+
+await check('a 1.20.1 → 1.21.1 update is NOT called a port', () => {
+  // The opposite failure: crying "port" on an ordinary one-version update makes
+  // the warning worthless.
+  const plan = planFor([], {
+    dir: makePack({ 'bin/version': '1.20.1-neoforge-20.4.1\n' }),
+    current: { mcVersion: '1.20.1', family: 'neoforge', loaderVersion: '20.4.1' },
+    target: { mcVersion: '1.21.1', family: 'neoforge', loaderVersion: '21.1.80' }
+  })
+  assert.ok(!plan.summary.some((l) => /port, not an update/.test(l)))
+})
+
+await check('a downgrade is named as one', () => {
+  const plan = planFor([], {
+    dir: makePack({ 'bin/version': '1.21.1-neoforge-21.1.80\n' }),
+    current: { mcVersion: '1.21.1', family: 'neoforge', loaderVersion: '21.1.80' },
+    target: { mcVersion: '1.20.1', family: 'neoforge', loaderVersion: '20.4.1' }
+  })
+  assert.ok(plan.summary.some((l) => /downgrade/i.test(l)))
+})
+
+await check('a legacy pack reports the old game files it carries, and does not delete them', () => {
+  /*
+   * A 1.7.10 pack ships the game itself: bin/libraries (LWJGL 2 and the old
+   * Forge libs), bin/assets with a 1.7.10 index, bin/natives. A 1.21.1 launch
+   * brings its own. They are dead weight at best and a conflicting classpath at
+   * worst — but which of them a given launcher still needs differs, so they are
+   * reported and left alone.
+   */
+  const dir = makePack({
+    'bin/version': '1.7.10-Forge10.13.2.1230\n',
+    'bin/libraries/org/lwjgl/lwjgl/lwjgl.jar': 'x'.repeat(1000),
+    'bin/assets/1.7.10/sounds.json': '{}',
+    'bin/natives/lwjgl.dll': 'x',
+    'mods/a.jar': 'PK'
+  })
+  const plan = planFor([], {
+    dir,
+    current: { mcVersion: '1.7.10', family: 'forge', loaderVersion: '10.13.2.1230' }
+  })
+  const rels = plan.legacyLeftovers.map((l) => l.rel)
+  assert.deepEqual(rels.sort(), ['bin/assets', 'bin/libraries', 'bin/natives'])
+  assert.ok(plan.legacyLeftovers.every((l) => l.bytes > 0 || l.rel === 'bin/natives'))
+  assert.ok(plan.summary.some((l) => /does not delete them/.test(l)), 'it must say they are not deleted')
+})
+
+await check('a modern pack has no leftovers to report', () => {
+  // 1.20.1+ packs do not bundle the game; inventing leftovers would be noise.
+  const plan = planFor([], {
+    dir: makePack({ 'bin/version': '1.20.1-neoforge-20.4.1\n', 'mods/a.jar': 'PK' }),
+    current: { mcVersion: '1.20.1', family: 'neoforge', loaderVersion: '20.4.1' }
+  })
+  assert.deepEqual(plan.legacyLeftovers, [])
+})
+
+await check('"nothing to do" and "nothing could be matched" are different sentences', () => {
+  /*
+   * Both used to render "Every mod ... already has a 1.21.1 build, or none could
+   * be matched" — one sentence covering opposite situations. On a 1.7.10 pack the
+   * user got the first reading, which says the pack is done, when in fact not one
+   * mod was recognised. That is the difference between closing the window and
+   * carrying on.
+   */
+  const allMissing = planFor(
+    [
+      { file: 'mods/bc.jar', path: '/p/mods/bc.jar', modId: 'buildcraft', version: '4.2.2', resolution: { found: false, incompatible: true } },
+      { file: 'mods/ic2.jar', path: '/p/mods/ic2.jar', modId: 'ic2', version: '2.2.8', resolution: { found: false, incompatible: true } }
+    ],
+    { dir: makePack({ 'bin/version': '1.7.10-Forge10.13.2.1230\n' }) }
+  )
+  assert.ok(
+    allMissing.summary.some((l) => /No mod could be matched/.test(l)),
+    'a pack where nothing matched must say so plainly'
+  )
+  assert.ok(
+    !allMissing.summary.some((l) => /Every mod that could be matched already has/.test(l)),
+    'and must not claim they are already correct'
+  )
+})
+
+await check('sizes are readable — a 200 kB folder is not "0 MB"', () => {
+  assert.equal(pack.humanBytes(200000), '200 kB')
+  assert.equal(pack.humanBytes(1536000), '1.5 MB')
+  assert.equal(pack.humanBytes(999), '999 B')
+  assert.equal(pack.humanBytes(2_400_000_000), '2.4 GB')
+})
+
+await check('a legacy pack is never given a NeoForge installer for a 1.7.10 target', () => {
+  /*
+   * There is no NeoForge for 1.7.10, and a Forge 1.7.10 universal jar is not
+   * fetchable from the NeoForge maven. The plan must not invent a download — it
+   * says the loader cannot be fetched automatically and lets the user handle it.
+   */
+  const dir = makePack({ 'bin/version': '1.7.10-Forge10.13.2.1230\n', 'bin/modpack.jar': legacyForgeJar('10.13.2.1230') })
+  const plan = planFor([], {
+    dir,
+    current: { mcVersion: '1.20.1', family: 'forge', loaderVersion: '20.4.1' },
+    target: { mcVersion: '1.7.10', family: 'forge', loaderVersion: '10.13.2.1230' }
+  })
+  assert.ok(plan.loaderJar, 'the jar is still part of the plan')
+  assert.equal(plan.loaderJar.download, null, 'no automatic download for a legacy target')
+})
+
+await check('a legacy transfer compares the old loader to the new one', () => {
+  // What the two-pack feature is for: a 1.7.10 Forge pack and a 1.21.1 NeoForge
+  // pack differ in the loader jar, and that has to be stated rather than assumed.
+  const plan = transfer.planPackTransfer({
+    from: { dir: '/p/Old', label: 'Old', mcVersion: '1.7.10', family: 'forge', loaderVersion: '10.13.2.1230' },
+    to: { dir: '/p/New', label: 'New', mcVersion: '1.21.1', family: 'neoforge', loaderVersion: '21.1.80' },
+    sourceMods: [{ file: 'buildcraft.jar', path: '/p/Old/mods/buildcraft.jar', modId: 'buildcraft', version: '4.2.2', resolution: { found: false, incompatible: true } }],
+    targetMods: [],
+    loader: {
+      from: { rel: 'bin/modpack.jar', present: 'a Forge 10.13.2.1230 (1.6/1.7-era) universal jar', version: '10.13.2.1230' },
+      to: { rel: 'bin/modpack.jar', present: 'a NeoForge installer for 21.1.80', version: '21.1.80' }
+    }
+  })
+  assert.equal(plan.loader.differs, true)
+  assert.match(plan.loader.note, /10\.13\.2\.1230/)
+  assert.match(plan.loader.note, /21\.1\.80/)
+  assert.equal(plan.entries[0].status, 'incompatible', 'BuildCraft 1.7.10 cannot run on 1.21.1')
+  assert.equal(plan.entries[0].selected, false)
+})
 
 /* ============================================ part 3: moving between packs */
 

@@ -37,6 +37,14 @@ const LOADERS: { id: Loader; label: string }[] = [
  * Per-mod checkboxes, because "update every needed file" and "change a mod I care
  * about" are not the same decision and the user should not have to accept both.
  */
+/** `1536000` → `1.5 MB`. A size that rounds to zero is worse than no size. */
+function humanBytes(n: number): string {
+  if (n < 1000) return `${n} B`
+  if (n < 1_000_000) return `${Math.round(n / 1000)} kB`
+  if (n < 1_000_000_000) return `${(n / 1_000_000).toFixed(1)} MB`
+  return `${(n / 1_000_000_000).toFixed(1)} GB`
+}
+
 export default function PackUpgrade({ dir, onToast }: Props): JSX.Element {
   const [versions, setVersions] = useState<VersionChoice[]>([])
   const [mc, setMc] = useState('')
@@ -256,6 +264,68 @@ export default function PackUpgrade({ dir, onToast }: Props): JSX.Element {
                   <span className="upgrade-reason">{removing.has(m.file) ? 'will be removed' : `keep on disk (no build for ${plan.target.mcVersion})`}</span>
                 </label>
               ))}
+            </div>
+          )}
+
+          {/*
+            The loader jar, first among the loader files — it is the one that
+            decides which loader actually starts, and on an old pack it is the
+            difference between 1.7.10 and 1.21.1 booting.
+          */}
+          {plan.loaderJar && (
+            <div className={`upgrade-group${plan.loaderJar.download ? ' warn' : ''}`}>
+              <div className="upgrade-group-head">
+                <strong>Loader jar</strong>
+                <span className="upgrade-reason">
+                  {plan.loaderJar.present.kind === 'not-a-jar'
+                    ? 'unreadable'
+                    : plan.loaderJar.present.version
+                      ? `currently ${plan.loaderJar.present.version}`
+                      : 'version unknown'}
+                </span>
+              </div>
+              <div className="upgrade-item static">
+                <code>{plan.loaderJar.rel}</code>
+                <span className="upgrade-reason">{plan.loaderJar.present.note}</span>
+              </div>
+              <div className="upgrade-note">
+                {plan.loaderJar.download ? (
+                  <>
+                    Will be replaced with <code>{plan.loaderJar.download.name}</code> — {plan.loaderJar.why}. The
+                    download is verified as a real installer before it goes near <code>bin/</code>, and if it cannot
+                    be fetched the whole update stops with the pack untouched.
+                  </>
+                ) : (
+                  plan.loaderJar.why
+                )}
+              </div>
+            </div>
+          )}
+
+          {/*
+            Old-version game files. Reported and left alone: a 1.7.10 pack keeps
+            LWJGL 2 and its own asset index under bin/, which a 1.21.1 launch does
+            not use — but deleting folders from a working pack on a guess is not
+            this tool's call.
+          */}
+          {plan.legacyLeftovers && plan.legacyLeftovers.length > 0 && (
+            <div className="upgrade-group muted">
+              <div className="upgrade-group-head">
+                <strong>Left over from {plan.current.mcVersion ?? 'the old version'}</strong>
+                <span className="upgrade-reason">
+                  {humanBytes(plan.legacyLeftovers.reduce((n, l) => n + l.bytes, 0))}, not used by{' '}
+                  {plan.target.mcVersion}
+                </span>
+              </div>
+              {plan.legacyLeftovers.map((l) => (
+                <div key={l.rel} className="upgrade-item static">
+                  <code>{l.rel}</code>
+                  <span className="upgrade-reason">{l.note}</span>
+                </div>
+              ))}
+              <div className="upgrade-note">
+                These are not deleted — they are listed so you can remove them yourself once the new version runs.
+              </div>
             </div>
           )}
 
