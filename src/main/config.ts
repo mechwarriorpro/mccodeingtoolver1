@@ -57,6 +57,7 @@ const defaultConfig: AppConfig = {
     windowHeight: 720,
     launchTimeoutSec: 180,
     autoScreenshot: true,
+    technicLauncherPath: '',
     extraMods: []
   }
 }

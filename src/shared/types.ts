@@ -132,6 +132,17 @@ export interface AppConfig {
     launchTimeoutSec: number
     /** Capture a screenshot automatically once the title screen is detected. */
     autoScreenshot: boolean
+    /**
+     * Where the Technic Launcher itself lives, when it is not in one of the
+     * usual places.
+     *
+     * The installer has no fixed location — it can sit in `%LOCALAPPDATA%`, in
+     * `Program Files`, on another drive, or wherever it was downloaded to and
+     * double-clicked. Guessing is what produced "Technic Launcher not found" for
+     * people who had it open. This is the escape hatch, and the error message
+     * points at it.
+     */
+    technicLauncherPath: string
     /** Extra mods (absolute jar paths) copied into the instance mods folder for tests. */
     extraMods: string[]
   }

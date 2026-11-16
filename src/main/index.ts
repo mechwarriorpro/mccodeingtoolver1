@@ -29,7 +29,7 @@ if (!app.requestSingleInstanceLock()) {
     // First run: try to find a Technic pack so Settings has something to click.
     const cfg = loadConfig()
     if (!cfg.game.instances.length) {
-      const detected = detectTechnicInstances()
+      const detected = detectTechnicInstances(cfg.game.technicLauncherPath)
       if (detected.length) {
         saveConfig({ game: { ...cfg.game, instances: detected, activeInstanceId: detected[0].id } })
       }

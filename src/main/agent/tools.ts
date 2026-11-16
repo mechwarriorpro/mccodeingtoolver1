@@ -8,7 +8,7 @@ import { findBuiltJar, runLocalBuild } from '../build/gradle'
 import { readProps } from '../mod/props'
 import { resolveJava, resolveToolJava } from '../util/exec'
 import { installJar, copyExtraMods, readJarInfo } from '../mod/jar'
-import { buildTechnicPackZip, detectTechnicInstances, launchTechnic } from '../game/technic'
+import { buildTechnicPackZip, detectTechnicInstances, launchTechnic, technicExe } from '../game/technic'
 import { captureGameWindow, listScreenshots } from '../game/capture'
 import { analyseClip, attachAnalysis, clipDigest, getClip, listClips, startClip, stopClip } from '../game/clip'
 import { resolveVisionModel } from '../game/vision'
@@ -162,7 +162,8 @@ export function createAgentTools(ctx: ToolContext) {
               apiKeyPresent: !!effectiveApiKey(),
               instance: instance ? { name: instance.name, kind: instance.kind, path: instance.path, exists: fs.existsSync(instance.path) } : null,
               isGradleProject: fs.existsSync(path.join(cfg.workspaceDir, 'build.gradle')),
-              detectedTechnic: detectTechnicInstances().map((i) => i.path)
+              detectedTechnic: detectTechnicInstances(cfg.game.technicLauncherPath).map((i) => i.path),
+              technicLauncher: { configured: cfg.game.technicLauncherPath || null, found: technicExe(cfg.game.technicLauncherPath) ?? null }
             },
             null,
             2
@@ -321,7 +322,7 @@ export function createAgentTools(ctx: ToolContext) {
 
         if (mode === 'launcher') {
           if (!instance) return err('No instance configured.')
-          const res = await launchTechnic()
+          const res = await launchTechnic(cfg.game.technicLauncherPath)
           ctx.notify('game:status', gameStatus())
           ctx.onGameStatus?.(gameStatus())
           return res.ok ? text('Technic Launcher started. The user must press Play on the pack.') : err(res.error ?? 'Could not start launcher')

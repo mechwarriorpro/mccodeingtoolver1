@@ -2539,7 +2539,7 @@ export function registerIpc(): void {
   })
 
   // ---------------- instances / game ----------------
-  ipcMain.handle('instance:detect', () => detectTechnicInstances())
+  ipcMain.handle('instance:detect', () => detectTechnicInstances(loadConfig().game.technicLauncherPath))
 
   ipcMain.handle('instance:list', () => {
     const cfg = loadConfig()
@@ -2585,7 +2585,7 @@ export function registerIpc(): void {
     const cfg = loadConfig()
     const instance = cfg.game.instances.find((i) => i.id === cfg.game.activeInstanceId)
     if (instance?.kind === 'technic') {
-      const res = await launchTechnic()
+      const res = await launchTechnic(cfg.game.technicLauncherPath)
       return res
     }
     return launchDevClient({

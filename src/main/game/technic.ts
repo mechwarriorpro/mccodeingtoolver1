@@ -35,7 +35,7 @@ export interface DetectedInstance extends GameInstance {
   launcherType: 'technic'
 }
 
-export function detectTechnicInstances(): DetectedInstance[] {
+export function detectTechnicInstances(configuredPath?: string): DetectedInstance[] {
   const out: DetectedInstance[] = []
   for (const root of technicRoots()) {
     const modpacks = path.join(root, 'modpacks')
@@ -60,7 +60,7 @@ export function detectTechnicInstances(): DetectedInstance[] {
         kind: 'technic',
         path: packDir,
         minecraftDir: path.join(packDir, '.minecraft'),
-        technicExe: technicExe(),
+        technicExe: technicExe(configuredPath),
         notes: version ? `Technic build ${version.version}` : undefined,
         launcherType: 'technic'
       })
@@ -78,19 +78,125 @@ function readVersion(packDir: string): { version: string; installed: boolean } |
   }
 }
 
-export function technicExe(): string | undefined {
+/**
+ * Where the Technic Launcher actually is.
+ *
+ * The old version checked three hard-coded paths under `%LOCALAPPDATA%`,
+ * `%APPDATA%` and `Program Files`. The launcher has no fixed install location —
+ * the download is a single exe people run from wherever it landed — so that
+ * found nothing for most real installs and reported "not found" to someone
+ * looking at the launcher window.
+ *
+ * Order matters: an explicit setting wins, then the usual install roots, then
+ * `%APPDATA%\.technic` (where the launcher keeps everything else and sometimes
+ * itself), then a bounded search of the places a hand-downloaded exe ends up.
+ * Every step is cheap and none of it touches the network.
+ */
+export function technicExe(configured?: string): string | undefined {
   if (!isWin) return undefined
-  const candidates = [
-    path.join(process.env.LOCALAPPDATA ?? '', 'TechnicLauncher', 'TechnicLauncher.exe'),
-    path.join(process.env.APPDATA ?? '', 'TechnicLauncher', 'TechnicLauncher.exe'),
-    path.join(process.env.ProgramFiles ?? 'C:\\Program Files', 'TechnicLauncher', 'TechnicLauncher.exe')
-  ]
-  return candidates.find((p) => p && fs.existsSync(p))
+
+  // 1. What the user pointed at. This is the answer that is never a guess.
+  if (configured?.trim()) {
+    const hit = resolveLauncherCandidate(configured.trim())
+    if (hit) return hit
+  }
+
+  // 2. The install roots, including 32-bit Program Files and per-user Programs.
+  const roots = [
+    process.env.LOCALAPPDATA,
+    process.env.APPDATA,
+    process.env.ProgramFiles,
+    process.env['ProgramFiles(x86)'],
+    process.env.ProgramW6432
+  ].filter((r): r is string => !!r)
+  const names = ['TechnicLauncher.exe', 'techniclauncher.exe', 'Technic Launcher.exe']
+  const dirs = ['TechnicLauncher', 'Technic Launcher', 'techniclauncher', path.join('Programs', 'TechnicLauncher')]
+  for (const root of roots) {
+    for (const dir of dirs) {
+      for (const name of names) {
+        const p = path.join(root, dir, name)
+        try {
+          if (fs.existsSync(p)) return p
+        } catch {
+          /* an unreadable candidate is not a reason to stop looking */
+        }
+      }
+    }
+  }
+
+  // 3. Inside the data folder — some installs put the exe beside .technic.
+  for (const root of technicRoots()) {
+    for (const name of [...names, 'TechnicLauncher.jar']) {
+      const p = path.join(root, name)
+      try {
+        if (fs.existsSync(p)) return p
+      } catch {
+        /* same */
+      }
+    }
+  }
+
+  // 4. A shallow scan of the obvious places a downloaded exe is left.
+  const home = os.homedir()
+  for (const dir of [path.join(home, 'Downloads'), path.join(home, 'Desktop'), home, 'C:\\Technic', 'C:\\Games\\Technic']) {
+    for (const name of names) {
+      try {
+        const p = path.join(dir, name)
+        if (fs.existsSync(p)) return p
+      } catch {
+        /* same */
+      }
+    }
+  }
+  return undefined
 }
 
-export async function launchTechnic(): Promise<{ ok: boolean; error?: string }> {
-  const exe = technicExe()
-  if (!exe) return { ok: false, error: 'Technic Launcher not found. Install it, or point Settings > Instance at the pack folder.' }
+/**
+ * Turn whatever the user typed into an exe path, if it is one.
+ *
+ * They may paste the exe, paste the folder it sits in, or hint at the jar. All
+ * three are reasonable things to do with a "where is the launcher" setting, and
+ * refusing two of them would be an own goal.
+ */
+export function resolveLauncherCandidate(input: string): string | undefined {
+  const candidates = [input, path.join(input, 'TechnicLauncher.exe'), path.join(input, 'techniclauncher.exe')]
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c) && fs.statSync(c).isFile() && /\.(exe|jar|bat|cmd)$/i.test(c)) return c
+    } catch {
+      /* try the next */
+    }
+  }
+  return undefined
+}
+
+/**
+ * What to tell someone when the launcher cannot be found.
+ *
+ * The old sentence said "point Settings > Instance at the pack folder", which was
+ * doubly wrong: that control adds a *pack*, not a launcher, and no setting
+ * existed for the launcher at all. An error that names a fix which cannot work
+ * costs more than a vague one, because it sends the user somewhere they will
+ * conclude they did it wrong.
+ */
+export function launcherNotFoundHelp(configured?: string): string {
+  const where = configured?.trim()
+    ? `The path in Settings → Game is \`${configured.trim()}\`, and no launcher executable is there.`
+    : 'The usual places were checked: %LOCALAPPDATA%, %APPDATA%, Program Files, %APPDATA%\\.technic, and your Downloads, Desktop and home folders.'
+  return (
+    `Technic Launcher not found, so it could not be started. ${where}\n\n` +
+    'Either:\n' +
+    '  • Set Settings → Game → **Technic Launcher** to the `TechnicLauncher.exe` file (or the folder containing it). ' +
+    'Right-click the launcher shortcut → Open file location if you are not sure where it is.\n' +
+    '  • Or skip the launcher entirely: add the pack folder as a **custom** instance (Settings → Game → Add folder) ' +
+    'and the app will launch Minecraft directly, if NeoForge is installed in that pack.\n\n' +
+    'Installing Technic is not required for either of these to work.'
+  )
+}
+
+export async function launchTechnic(configuredPath?: string): Promise<{ ok: boolean; error?: string }> {
+  const exe = technicExe(configuredPath)
+  if (!exe) return { ok: false, error: launcherNotFoundHelp(configuredPath) }
   try {
     const child = (await import('node:child_process')).spawn(exe, [], { detached: true, stdio: 'ignore', windowsHide: false })
     child.unref()

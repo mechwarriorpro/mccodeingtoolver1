@@ -640,7 +640,14 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
                     const ids = new Set(draft.game.instances.map((i) => i.id))
                     const merged = [...draft.game.instances, ...found.filter((f) => !ids.has(f.id))]
                     set('game', { ...draft.game, instances: merged, activeInstanceId: draft.game.activeInstanceId || merged[0]?.id || '' })
-                    onToast(`Found ${found.length} Technic pack(s)`)
+                    // "Found 0 Technic pack(s)" is true and tells nobody
+                    // anything. Say where the scan looked, so the next step is
+                    // obvious rather than mysterious.
+                    if (found.length === 0) {
+                      onToast('No Technic packs found in %APPDATA%\\.technic\\modpacks. Use Add folder to point at a pack directly.')
+                    } else {
+                      onToast(`Found ${found.length} Technic pack(s)`)
+                    }
                   })
                 }
               >
@@ -665,8 +672,37 @@ export default function SettingsModal({ config, onClose, onSaved, onToast, onOpe
                 Add folder
               </button>
             </div>
+            <div className="field">
+              <label>Technic Launcher</label>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input
+                  value={draft.game.technicLauncherPath}
+                  placeholder="auto-detected — set this only if it was not found"
+                  onChange={(e) => set('game', { ...draft.game, technicLauncherPath: e.target.value })}
+                />
+                <button
+                  className="small"
+                  onClick={async () => {
+                    const picked = await api.dialog.pickFiles({
+                      title: 'Select TechnicLauncher.exe',
+                      filters: [{ name: 'Executable', extensions: ['exe'] }]
+                    })
+                    const first = Array.isArray(picked) ? picked[0] : picked
+                    if (first) set('game', { ...draft.game, technicLauncherPath: first })
+                  }}
+                >
+                  Browse…
+                </button>
+              </div>
+              <div style={{ fontSize: 11.5, color: 'var(--dim)', marginTop: 4 }}>
+                The launcher can live anywhere — Downloads, another drive, anywhere you ran the download from.
+                Leave this empty to use auto-detection. Right-click the launcher shortcut → <em>Open file location</em> to find it.
+              </div>
+            </div>
+
             <div style={{ fontSize: 11.5, color: 'var(--dim)', marginBottom: 14 }}>
               Technic packs live in %APPDATA%\.technic\modpacks\&lt;pack&gt;. A custom folder must contain a mods folder; using your NeoForge launcher instance works too.
+              {' '}A <strong>custom</strong> instance does not need the launcher at all — the app starts Minecraft directly.
             </div>
 
             <div className="two-col">

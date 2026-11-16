@@ -529,7 +529,16 @@ export default function App(): JSX.Element {
               <div style={{ fontSize: 11, color: 'var(--dim)', wordBreak: 'break-all' }}>{instance.path}</div>
               <div style={{ display: 'flex', gap: 5, marginTop: 6 }}>
                 <span className="badge">{instance.kind}</span>
-                {instance.technicExe ? <span className="badge green">Technic found</span> : null}
+                {instance.kind === 'technic' &&
+                  (instance.technicExe ? (
+                    <span className="badge green" title={instance.technicExe}>
+                      Launcher found
+                    </span>
+                  ) : (
+                    <span className="badge" style={{ color: 'var(--amber)' }} title="Set its location in Settings → Game → Technic Launcher">
+                      Launcher not found
+                    </span>
+                  ))}
               </div>
             </>
           ) : (

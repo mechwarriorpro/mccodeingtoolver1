@@ -152,6 +152,13 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.5.10** fixes **"Technic Launcher not found"** for people who have it open. The search checked three
+> hard-coded Windows paths, and the launcher is a single exe people run from Downloads — so it was usually
+> nowhere near them. That error also said *"point Settings > Instance at the pack folder"*, which could not
+> work: that control adds a pack, and no launcher-path setting existed at all. There is one now
+> (Settings → Game → **Technic Launcher**, with Browse), the search covers both Program Files, `%APPDATA%\.technic`,
+> Downloads, Desktop and the home folder, and the message quotes the path it tried and offers the option that
+> needs no launcher: add the pack as a **custom** instance and Minecraft starts directly.
 > **v0.5.9** fixes the status pill saying **idle while the agent was still working**. Two causes: the
 > result handler announced idle at the end of every *run*, and a turn is made of several — a continuation, an
 > automode retry, a provider retry — so the pill read "idle" between two halves of the same job; and the
