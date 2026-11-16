@@ -262,7 +262,7 @@ export default function PackUpgrade({ dir, onToast }: Props): JSX.Element {
                     setPorting(true)
                     try {
                       const targetLoader = plan.target.family === 'fabric' ? 'fabric' : plan.target.family === 'forge' ? 'forge' : 'neoforge'
-                      const res = await window.api.pack.portMissing({
+                      const res = await api.pack.portMissing({
                         dir,
                         jarPaths: missing.map((m) => m.file),
                         targetMc: plan.target.mcVersion,

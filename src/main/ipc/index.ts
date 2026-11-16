@@ -2159,7 +2159,8 @@ export function registerIpc(): void {
         includeDependencies?: boolean
       }
     ) => {
-      const modsDir = resolveModsDir(opts.dir) ?? path.join(opts.dir, 'mods')
+      const resolvedMods = resolveModsDir(opts.dir)
+      const modsDir = resolvedMods?.dir ?? path.join(opts.dir, 'mods')
       const targets = planPackPortTargets({
         modsDir,
         selectedJarPaths: opts.jarPaths,
@@ -2194,7 +2195,7 @@ export function registerIpc(): void {
         try {
           const refRes = await addFromFile({
             jarPath: target.jarPath,
-            decompilerJar: cfg.decompilerJar || undefined
+            customJar: cfg.decompilerJar || undefined
           })
           if (!refRes.ok || !refRes.mod?.decompiled) {
             failed.push({ jarPath: target.jarPath, error: refRes.error ?? refRes.mod?.error ?? 'decompile failed' })

@@ -1,4 +1,4 @@
-import { resolveEra, javaForVersion, resolveLoaderVersion } from '../versions/eras'
+import { resolveEra } from '../versions/eras'
 import type { Loader } from '../versions/catalog'
 
 export interface PromptGeneratorInput {
@@ -46,13 +46,13 @@ export function generateCustomPrompt(input: PromptGeneratorInput): GeneratedProm
   const parsed = processUserInput(input.userInput)
   const mcVersion = input.mcVersion ?? parsed.mcVersion ?? '1.21.1'
   const loader: Loader = input.loader ?? parsed.loader ?? 'neoforge'
-  const era = resolveEra(mcVersion)
-  const javaVersion = javaForVersion(mcVersion)
-  const loaderVersion = resolveLoaderVersion(loader, mcVersion)
+  const era = resolveEra(loader, mcVersion)
+  const eraLabel = era?.label ?? mcVersion
+  const javaVersion = era?.java ?? 21
 
   const lines: string[] = [
-    `Target: Minecraft ${mcVersion} on ${loader}${loaderVersion ? ` (${loaderVersion})` : ''} · Java ${javaVersion}`,
-    `Era: ${era.label}`
+    `Target: Minecraft ${mcVersion} on ${loader} · Java ${javaVersion}`,
+    `Era: ${eraLabel}`
   ]
 
   if (input.sourceMcVersion) {
@@ -72,9 +72,8 @@ export function generateCustomPrompt(input: PromptGeneratorInput): GeneratedProm
     detected: {
       mcVersion,
       loader,
-      loaderVersion,
       javaVersion,
-      eraSummary: era.label
+      eraSummary: eraLabel
     }
   }
 }
