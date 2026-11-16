@@ -1,0 +1,67 @@
+appId: com.shadowclan.mcfrogeagent
+productName: MC Forge Agent
+copyright: Copyright © 2026 ShadowClanGaming
+directories:
+  output: release
+  buildResources: resources
+files:
+  # Keep the default node_modules handling (production deps are collected automatically),
+  # and only strip things that must not ship.
+  - '!**/*.map'
+  - '!src/**'
+  - '!tests/**'
+  - '!scripts/**'
+  - '!template/**'
+  - '!release/**'
+  - '!out-test/**'
+  - '!**/{CHANGELOG.md,README.md,readme.md,LICENSE.md}'
+  - '!**/node_modules/**/{test,tests,__tests__,example,examples,docs}/**'
+  - '!**/*.{ts,tsbuildinfo}'
+  - '!tsconfig*.json'
+  - '!electron.vite.config.ts'
+asarUnpack:
+  # Claude Code's CLI is spawned as a child process, so the whole SDK package must be
+  # a real directory on disk (a single-entry list only matches direct children).
+  - node_modules/@anthropic-ai/claude-agent-sdk/**/*
+extraResources:
+  # Vendored official NeoForge 1.21.1 MDK used by "New mod".
+  - from: template
+    to: template
+    filter: ['**/*']
+  # The app's own sources, so the evolving agent has something to fork. `src` is
+  # excluded from the asar above, so without this the Evolve tab would find
+  # nothing to mutate in a packaged build. Only the three genome files and their
+  # neighbours are read; shipping the tree keeps a generation self-contained.
+  - from: src
+    to: app-src/src
+    filter: ['main/agent/**/*.ts']
+  # Optional bundled Ollama installer, so "install local models" works with no
+  # download at all. Put OllamaSetup.exe in `vendor/` before packaging; when it is
+  # absent this entry is skipped and the app downloads the installer instead.
+  # The 1 GB installer is deliberately NOT committed -- see vendor/README.md.
+  - from: vendor
+    to: vendor
+    filter: ['OllamaSetup.exe']
+npmRebuild: false
+# Self-update feed. The packaged app checks this repo's releases at startup and
+# downloads a new installer in the background; `latest.yml` (published by the
+# release workflow) tells it what the newest version is. Nothing is uploaded from
+# CI by electron-builder itself -- the workflow attaches the files.
+publish:
+  provider: github
+  owner: mechwarriorpro
+  repo: mccodeingtoolver1
+generateUpdatesFilesForAllChannels: false
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  artifactName: ${productName}-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: MC Forge Agent
+  deleteAppDataOnUninstall: false

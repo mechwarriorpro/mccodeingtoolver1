@@ -1,0 +1,28 @@
+# dependencies
+node_modules/
+
+# build output
+/out/
+/out-test/
+/release/
+/dist/
+/build/
+*.tsbuildinfo
+
+# local runtime
+.test-tmp/
+*.log
+.DS_Store
+Thumbs.db
+
+# the optional bundled Ollama installer (~1 GB) -- see vendor/README.md
+/vendor/*.exe
+
+# secrets
+.env
+.env.*
+
+# the vendored mod template has its own rules
+!template/**/.gitignore
+test-failures.json
+test-failures.txt

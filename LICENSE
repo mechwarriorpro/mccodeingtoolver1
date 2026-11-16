@@ -1,0 +1,186 @@
+MC Forge Agent — Source-Available Licence
+==========================================
+
+Copyright (c) 2026 ShadowClanGaming. All rights reserved.
+
+This is not an open-source licence. It is a source-available licence: the source is
+public so you can read it, learn from it and change it for your own use, but the
+right to use it commercially is reserved.
+
+You may read, study and modify this software. You may use and redistribute it free
+of charge under the conditions below.
+
+1. GRANT FOR NON-COMMERCIAL USE
+
+   You may use, copy, modify, merge, publish, distribute and sublicense this
+   software free of charge, provided the use is Non-Commercial as defined in
+   section 2 and the copyright notice above is kept in all copies.
+
+   Non-Commercial use includes, without limitation:
+
+     a) personal use by an individual, regardless of skill, hours worked or
+        whether the resulting mod is published;
+     b) use on mods, modpacks, resource packs, servers or other projects that
+        generate no revenue of any kind, including donations that are not a fee
+        for the output;
+     c) use by a non-profit, a school or a charity, where the work is not sold.
+
+2. COMMERCIAL USE REQUIRES A LICENCE
+
+   Commercial Use means any use from which money is earned, directly or
+   indirectly. It includes, without limitation:
+
+     a) selling, or bundling for sale, a mod, modpack, texture pack, server,
+        service or other product produced with this software;
+     b) performing paid work for a client using this software, including
+        freelance and contract work;
+     c) use by or for an incorporated entity, studio, publisher, or any team
+        acting in the course of a business, whether or not the output is sold;
+     d) use where the software is a material part of a paid offering, including
+        hosting, support or as part of a subscription.
+
+   You may not engage in Commercial Use without a valid commercial licence
+   granted in writing by the copyright holder.
+
+3. COMMERCIAL LICENCE AND PRICE
+
+   A commercial licence is available for a base fee of AUD $50 (fifty Australian
+   dollars), payable once, per licensee, for a term under section 3.1.
+
+   ONE LICENCE COVERS EITHER:
+
+     (a) ONE SOLO DEVELOPER — a single individual doing paid work, on any number
+         of projects, with no revenue share owed on those projects; or
+
+     (b) ONE SERVER — a single Minecraft server, network or hosting operation,
+         however many people work on it internally, provided the software is not
+         resold or sublicensed to third parties.
+
+   A business with two or more paid developers, or someone operating two or more
+   servers, needs one licence per person or per server respectively.
+
+   Obtain one by opening an issue at
+   https://github.com/mechwarriorpro/mccodeingtoolver1/issues
+   or contacting ShadowClanGaming through GitHub.
+
+   3.1  PERIOD. The base fee covers a term of TWELVE MONTHS from the date the
+        licence is issued. Continued Commercial Use after the term expires needs a
+        renewal at the then-current rate.
+
+   3.2  WHAT THE BASE FEE COVERS. Use by one licensee, on any number of machines,
+        for any number of projects, with any revenue level. There is no revenue
+        share, no per-seat charge and no royalty on projects covered by a valid
+        licence.
+
+   3.3  COMBINATIONS AND VOLUME PRICING. Licences bought together are priced as
+        follows, applied to the total number of licences in the purchase:
+
+          | Licences | Discount | Price per licence |
+          |----------|----------|-------------------|
+          | 1–24     | none     | AUD $50.00        |
+          | 25–49    | 5%       | AUD $47.50        |
+          | 50–74    | 10%      | AUD $45.00        |
+          | 75–99    | 25%      | AUD $37.50        |
+          | 100+     | 34%      | AUD $33.00        |
+
+        The price is per licence. The maximum discount is 50%, which no
+        combination rate may exceed.
+
+        The maximum discount is 50%. The price never falls below AUD $25 per
+        licence, whatever quantity is bought.
+
+   3.4  RESALE. A licensee may not resell, sublicense or redistribute this software
+        to third parties as a commercial offering of their own; that needs a
+        separate written agreement.
+
+   3.5  GST. The price is in Australian dollars. If GST applies to the licensee, it
+        is charged in addition.
+
+   3.6  PRICE CHANGES. The published rate applies to licences issued after a change
+        is announced. A licence already issued runs to the end of its term at the
+        rate that was paid.
+
+4. NO RE-LICENSING
+
+   You may not sublicense this software under different terms, and you may not
+   remove or alter this notice in a way that hides the restriction in section 2.
+   Distributing a modified copy is permitted only under this same licence.
+
+5. UNLICENSED COMMERCIAL USE — RETROACTIVE FEE
+
+   Commercial Use without a valid commercial licence (section 2) is not
+   permitted, and this section sets the fee payable for it. It does not grant
+   permission: the use is a breach of this licence while it continues, and
+   paying the fee does not make past use lawful except as stated here.
+
+   5.1  RETROACTIVE LICENCE FEE. For any period of Commercial Use without a
+        licence, the user is liable for a retroactive licence fee payable to the
+        copyright holder, calculated as the greater of:
+
+          (a) FIFTEEN PER CENT (15%) of all revenue earned from the project or
+              activity during that period, as a royalty; or
+
+          (b) the base commercial fee under section 3 (AUD $50 per licence, at the
+              single-licence rate and NOT the discounted combination rate),
+              pro-rated for the period of unlicensed use and charged at DOUBLE that
+              rate, with a minimum of ONE base fee. Where the unlicensed use covers
+              several developers or servers, one licence per person or server is
+              counted.
+
+        The greater of the two applies, so the 15% royalty is never the only
+        figure: a project with undisclosed or uncertain revenue is still liable
+        for a sum that can be calculated from the price list. Worked at the base
+        rate, a year of unlicensed use by one developer or server is AUD $100
+        (double the annual fee); a quarter is a quarter of that, with the minimum
+        applying. Unlicensed use is charged at the single-licence rate, so the
+        combination discount can never be used to make a breach cheaper.
+
+   5.2  WHAT COUNTS AS REVENUE. Revenue includes sales, subscriptions, service
+        fees, server income, donations received as a fee for the output, and
+        advertising or sponsorship income, in each case for the project or
+        activity for which this software was used, before platform and payment
+        processing fees.
+
+   5.3  PAYMENT. The fee is payable within 30 days of written demand by the
+        copyright holder. The copyright holder may also recover reasonable costs
+        of recovery, including legal costs.
+
+   5.4  RECORDS. A user liable under this section must, on written demand,
+        provide a written statement of the revenue on which the fee is
+        calculated, within 30 days. Failing to provide it does not stop the
+        liability; where revenue cannot be established, limb (b) of section 5.1
+        applies.
+
+   5.5  THIS IS NOT A LICENCE. Nothing in this section permits continued
+        Commercial Use. A user who wishes to continue must obtain a commercial
+        licence under section 3. Section 5.1 charges for the period already used.
+
+6. TERMINATION
+
+   Any use in breach of this licence terminates your rights under it
+   automatically. On termination you must stop using and distributing the
+   software. The copyright holder may pursue any remedy available for use without
+   a licence, including for the period before the breach was discovered. Payment
+   of a fee under section 5 does not by itself restore the right to use the
+   software.
+
+7. CONTRIBUTIONS
+
+   By submitting a contribution you grant the copyright holder a perpetual,
+   irrevocable, worldwide, royalty-free right to use, relicense and distribute it.
+   This keeps the project able to offer commercial licences.
+
+8. NO WARRANTY
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+   AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+   ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+   WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+9. PRIOR VERSIONS
+
+   Releases published before this licence took effect were published under the
+   MIT Licence and remain available under those terms. Those grants cannot be
+   withdrawn, and this licence does not apply to them.
