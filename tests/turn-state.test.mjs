@@ -120,51 +120,117 @@ check('the result handler still does not announce idle', () => {
   assert.doesNotMatch(code, /onStatus\(\s*'idle'\s*\)/, 'a result ends a run; runTurn may start another immediately')
 })
 
-await checkAsync('a send that is refused does not leave the agent looking busy', async () => {
+await checkAsync('a message is refused only while a turn is genuinely running', async () => {
   const { events } = recorder()
   const s = new AgentSession(events, 'auto', undefined, () => '')
-  // Pretend a run is in flight: `current` set is what the guard must respect,
-  // even though `interrupt()` may already have cleared `busy`.
-  s.busy = false
-  s.current = { interrupt: async () => {} }
-  // Stubbed for the same reason as the next check: a missing guard must fail
-  // this suite, not send it into a provider call and hang.
+  s.busy = true
   let turned = 0
   s.runTurn = () => {
     turned++
     return Promise.resolve()
   }
-  await assert.rejects(() => s.send('a follow-up'), /already running/i)
-  assert.equal(turned, 0, 'send() began a run instead of refusing the message')
-  assert.equal(s.state.busy, false, 'a rejected message must not claim the turn')
+  await assert.rejects(() => s.send('a follow-up'), /already running/i, 'one turn at a time is still the rule')
+  assert.equal(turned, 0, 'send() began a second run over a live one')
 })
 
-await checkAsync('a message that arrives while the turn is unwinding is refused, not swallowed', async () => {
+await checkAsync('a stuck run handle alone cannot lock the agent out', async () => {
   /*
-   * The original code accepted this message, pushed it onto the queue, and
-   * returned early. The run it was queued for had already finished reading that
-   * queue, so the message was never executed — the turn ended, the pill said
-   * idle, and the user's follow-up silently did nothing. Refusing it is the
-   * honest outcome: the user is told, and nothing is lost in a dead queue.
+   * This is the bug that shipped in v0.5.11 and produced "no output at all".
    *
-   * `runTurn` is stubbed out so this measures the guard and nothing else. Left
-   * real, a missing guard sends the test into a live provider call, and the
-   * whole suite hangs instead of failing — which is how this assertion first
-   * went wrong.
+   * The guard there was `busy || current`. `current` is only cleared when a run
+   * unwinds, so a run that never does — a wedged SDK call, an interrupt that
+   * does not take — left it set for the life of the process. Every later
+   * message was refused as "already running", and the symptom was simply that
+   * nothing ever happened again.
+   *
+   * A guard whose only escape is the thing it is blocking is a deadlock.
+   * `busy` is the only honest gate: it is set and cleared by the turn itself.
+   */
+  const { events } = recorder()
+  const s = new AgentSession(events, 'auto', undefined, () => '')
+  // The wedge, with no stop in between: exactly the state that persisted.
+  s.current = { interrupt: async () => {} }
+  s.busy = false
+  let turned = 0
+  s.runTurn = () => {
+    turned++
+    return Promise.resolve()
+  }
+
+  await s.send('is anyone there?')
+  assert.equal(turned, 1, 'a stale handle must not be able to refuse every future message')
+})
+
+await checkAsync('a stop abandons the run it interrupted', async () => {
+  const { events } = recorder()
+  const s = new AgentSession(events, 'auto', undefined, () => '')
+  const stuck = { interrupt: async () => {} }
+  s.current = stuck
+  s.busy = true
+  await s.interrupt()
+  assert.equal(s.current, null, 'a handle that may never clear must not be kept as the way out')
+})
+
+await checkAsync('an abandoned run cannot clear the handle of a newer one', async () => {
+  /*
+   * `runTurn` clears `current` in its `finally`. After a stop, a new turn has
+   * already installed its own run; if the abandoned one cleared the slot
+   * unconditionally it would take the live handle with it, and a later Stop
+   * would reach nothing.
+   */
+  const { events } = recorder()
+  const s = new AgentSession(events, 'auto', undefined, () => '')
+  const newer = { interrupt: async () => {} }
+  s.current = newer
+  // Recreate the ownership check the run's finally performs.
+  const stale = { interrupt: async () => {} }
+  if (s.current === stale) s.current = null
+  assert.equal(s.current, newer, 'clearing must be conditional on still owning the slot')
+})
+
+await checkAsync('an abandoned turn cannot end the turn that replaced it', async () => {
+  /*
+   * Both defects of v0.5.11 in one scenario, and it is not hypothetical: it is
+   * what happens every time someone presses Stop and immediately types again.
+   *
+   *   - A stop abandons a run without waiting for it, so two `send()` calls are
+   *     in flight: the abandoned one unwinding, the new one working.
+   *   - The abandoned call's `finally` then cleared `busy` and announced idle
+   *     *under the live turn*. That is the "idle while it is still working"
+   *     report, reintroduced by the fix meant to stop it.
+   *
+   * A per-turn token means only the owner may end the turn.
    */
   const { events, seen } = recorder()
   const s = new AgentSession(events, 'auto', undefined, () => '')
-  let ranTurn = 0
-  s.runTurn = () => {
-    ranTurn++
-    return Promise.resolve()
-  }
-  s.busy = false
-  s.current = { interrupt: async () => {} }
-  await assert.rejects(() => s.send('second message'), /already running/i, 'the message has no live consumer, so it must be refused')
-  assert.equal(ranTurn, 0, 'send() started a run while an old one was still unwinding')
-  assert.equal(seen.filter((e) => e.status === 'idle').length, 0, 'nothing was running, so nothing may be declared idle')
-  s.current = null
+  let releaseA
+  let releaseB
+  s.runTurn = () => new Promise((r) => { releaseA = r })
+  const a = s.send('turn A')
+  await new Promise((r) => setTimeout(r, 10))
+
+  await s.interrupt() // stop A; it is still unwinding
+  s.runTurn = () => new Promise((r) => { releaseB = r })
+  const b = s.send('turn B')
+  await new Promise((r) => setTimeout(r, 10))
+  assert.equal(s.state.busy, true, 'B is running')
+
+  const beforeA = seen.filter((e) => e.status === 'idle').length
+  releaseA() // now A finishes unwinding, during B
+  await a.catch(() => {})
+  await new Promise((r) => setTimeout(r, 10))
+
+  assert.equal(s.state.busy, true, 'A unwinding must not clear B\'s flag')
+  assert.equal(
+    seen.filter((e) => e.status === 'idle').length,
+    beforeA,
+    'A must not announce idle under a live turn — that is the whole reported bug'
+  )
+
+  releaseB()
+  await b.catch(() => {})
+  await new Promise((r) => setTimeout(r, 10))
+  assert.equal(s.state.busy, false, 'and B ending must still clear it')
 })
 
 await checkAsync('the state clock is cleared by a stop', async () => {

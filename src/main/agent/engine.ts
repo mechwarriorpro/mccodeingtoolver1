@@ -79,6 +79,7 @@ const SAFE_SHELL = [
 ]
 
 export class AgentSession {
+  /** Replaced at the start of every turn, so an abandoned run cannot starve it. */
   private queue = new AsyncQueue<unknown>()
   private current: Query | null = null
   private pending = new Map<string, PendingPermission>()
@@ -95,6 +96,16 @@ export class AgentSession {
    * began, so it keeps the number and the UI asks for it.
    */
   private turnStartedAt: number | null = null
+  /**
+   * Identifies the turn that currently owns the flag.
+   *
+   * A stop abandons a run without waiting for it, so two `send()` calls can be
+   * in flight at once: the abandoned one unwinding, and the new one working.
+   * Without a token the abandoned call's `finally` cleared `busy` and announced
+   * idle *under the live turn* — the original complaint, reintroduced by the
+   * very fix meant to prevent it.
+   */
+  private turnId = 0
   /**
    * Set by `handleMessage` when a result message says the turn was cut short
    * rather than finished. `runTurn` reads it and resumes instead of ending.
@@ -179,16 +190,30 @@ export class AgentSession {
   /** Send a user turn. Resolves when the result message arrives. */
   async send(prompt: string, images: { path: string; mediaType: string }[] = []): Promise<void> {
     /*
-     * `busy` alone is not the whole story: `interrupt()` clears it the moment
-     * the user presses Stop, while the run it interrupted is still unwinding
-     * and `current` is still set. A message accepted in that window was pushed
-     * onto a queue nobody would ever read again — the turn ended, the pill said
-     * idle, and the user's follow-up silently never ran.
+     * `busy` is the right gate, and it must be the *only* gate.
+     *
+     * An earlier attempt also refused when `current` was set. That looks safer
+     * and is much worse: `current` is cleared by the run's own `finally`, and a
+     * run that never unwinds — a wedged SDK call, an interrupt that does not
+     * take — leaves it set forever. Every subsequent message was then refused
+     * with "the agent is already running", permanently, and the only symptom
+     * the user saw was nothing happening at all. A guard that can only be
+     * cleared by the very thing it is blocking is a deadlock, not a safeguard.
      */
-    if (this.busy || this.current) throw new Error('The agent is already running. Interrupt it first.')
+    if (this.busy) throw new Error('The agent is already running. Interrupt it first.')
     this.busy = true
     this.turnStartedAt = Date.now()
+    const turn = ++this.turnId
     this.stopped = false
+    /*
+     * Each turn gets its own queue.
+     *
+     * A run abandoned by a stop may still be unwinding, and it holds the queue
+     * it was created with. Giving this turn a fresh one means the old run
+     * cannot consume the new message, and the new message cannot be starved by
+     * a queue whose reader is gone — which is what used to happen, silently.
+     */
+    this.queue = new AsyncQueue<unknown>()
     // Per-turn, not per-session: a new request starts with a clean scoreboard.
     this.lastBuildOk = null
     this.updateResumes = 0
@@ -227,13 +252,20 @@ export class AgentSession {
       throw e
     } finally {
       /*
-       * The turn's one and only exit.
+       * The turn's one and only exit — and only if it still owns the flag.
        *
-       * `runTurn` deliberately does not announce idle — it can start another
-       * run the instant it returns — so this is the only place that knows the
-       * work is over. `turnStartedAt` is cleared with it: a stale start time
-       * would make the next turn's clock begin hours ago.
+       * `runTurn` deliberately does not announce idle: it can start another run
+       * the instant it returns, so this is the only place that knows the work
+       * is over. `turnStartedAt` goes with it, or the next turn's clock begins
+       * hours ago.
+       *
+       * The token check is what stops an abandoned turn from ending a live one.
+       * After a stop this call may return while its run is still unwinding, and
+       * a newer turn may have started meanwhile; clearing here unconditionally
+       * reported an idle agent under live work and dropped the Stop button with
+       * it.
        */
+      if (this.turnId !== turn) return
       this.busy = false
       this.turnStartedAt = null
       if (!this.stopped) this.events.onStatus('idle')
@@ -323,7 +355,15 @@ export class AgentSession {
       } catch (e) {
         failure = e
       } finally {
-        this.current = null
+        /*
+         * Only if this run still owns the slot.
+         *
+         * After a stop, a newer turn may already have started its own run and
+         * installed its own `current`. Clearing unconditionally would wipe the
+         * live run's handle, so a later interrupt would reach nothing and the
+         * abandoned run would be the one still visible.
+         */
+        if (this.current === q) this.current = null
       }
 
       /**
@@ -470,6 +510,17 @@ export class AgentSession {
     }
     for (const [, p] of this.pending) p.resolve(false, false)
     this.pending.clear()
+    /*
+     * Abandon the run. `interrupt()` is best-effort — it can return while the
+     * generator is still unwinding, or without the generator ever noticing —
+     * and the next message must not wait for a process that may never report
+     * back. The old run's `finally` checks ownership before clearing, so this
+     * cannot be undone by the abandoned run waking up later.
+     */
+    this.current = null
+    // Taking the token is what makes the abandoned turn's `finally` a no-op: it
+    // is no longer the owner, so it cannot clear the flag or announce idle.
+    this.turnId++
     this.busy = false
     this.turnStartedAt = null
     this.events.onStatus('idle')

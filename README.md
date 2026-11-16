@@ -152,6 +152,12 @@ Settings or from GitHub's settings at any time.
 > **v0.4.9** adds the **Evolve** tab: the agent rewrites its own prompt and tool descriptions under four
 > weighted rules (quality, speed, size, RAM), proves each generation by compiling real NeoForge code, and
 > promotes only what wins. The lineage is kept and every step is reversible.
+> **v0.5.12** fixes **v0.5.11 making it worse**: after a stop, the engine refused every later message with
+> "The agent is already running" — forever, and the only thing you saw was that nothing happened. That
+> guard was mine and it was wrong: it waited on the run's handle, which only clears when the run unwinds,
+> so a run that never unwound locked the agent out permanently. The gate is the turn's own flag again. A
+> stop now abandons its run, each turn gets its own queue, and a per-turn token stops an abandoned turn
+> from clearing the flag *under* the turn that replaced it (which re-created "idle while it is working").
 > **v0.5.11** fixes the pill **still** saying idle while the agent works. v0.5.9 stopped main announcing
 > idle in the middle of a turn, which was real, and it was not the whole story. Three things were left:
 > the window cleared "busy" on every *run* result, and a turn can be several runs (automode resuming
