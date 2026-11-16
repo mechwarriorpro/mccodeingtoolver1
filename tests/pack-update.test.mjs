@@ -1027,5 +1027,42 @@ await check('the renderer and main agree on what a plan entry looks like', () =>
   }
 })
 
+await check('planPackPortTargets resolves pack dependencies alongside selected mods', async () => {
+  const { planPackPortTargets } = await import('../out-test/main/mod/packupdate.js')
+  const AdmZip = (await import('adm-zip')).default
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pack-port-deps-'))
+  try {
+    const modsDir = path.join(tmp, 'mods')
+    fs.mkdirSync(modsDir, { recursive: true })
+
+    const libJar = path.join(modsDir, 'corelib-1.7.10.jar')
+    const libZip = new AdmZip()
+    libZip.addFile('mcmod.info', Buffer.from(JSON.stringify([{ modid: 'corelib', name: 'CoreLib', version: '1.0' }])))
+    libZip.writeZip(libJar)
+
+    const modJar = path.join(modsDir, 'mymod-1.7.10.jar')
+    const modZip = new AdmZip()
+    modZip.addFile(
+      'mcmod.info',
+      Buffer.from(JSON.stringify([{ modid: 'mymod', name: 'MyMod', version: '1.0', requiredMods: ['required-after:corelib@1.0', 'Forge'] }]))
+    )
+    modZip.writeZip(modJar)
+
+    const targets = planPackPortTargets({
+      modsDir,
+      selectedJarPaths: [modJar],
+      includeDependencies: true
+    })
+    assert.equal(targets.length, 2)
+    assert.equal(targets[0].jarPath, modJar)
+    assert.equal(targets[0].isDependency, false)
+    assert.equal(targets[1].jarPath, libJar)
+    assert.equal(targets[1].isDependency, true)
+    assert.deepEqual(targets[1].requiredBy, ['mymod'])
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true })
+  }
+})
+
 console.log(`\n${failures.length ? `${failures.length} check(s) failed` : `all ${passed} pack-update and project checks passed`}`)
 if (failures.length) process.exit(1)

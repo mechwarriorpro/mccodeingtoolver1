@@ -1078,8 +1078,21 @@ export interface McfApi {
       updated?: number
       removed?: number
       results?: { file: string; ok: boolean; error?: string; replaced?: string; removed?: boolean }[]
-      loaderFiles?: { rel: string; ok: boolean; error?: string }[]
+      loaderFiles?: { rel: string; ok: string; error?: string }[]
       failed?: { file: string; error?: string }[]
+    }>
+    /** Decompile missing mods and their pack dependencies into port workspaces. */
+    portMissing: (opts: {
+      dir: string
+      jarPaths: string[]
+      targetMc: string
+      targetLoader: 'neoforge' | 'forge' | 'fabric'
+      includeDependencies?: boolean
+    }) => Promise<{
+      ok: boolean
+      ported: Array<{ jarPath: string; modId?: string; forkDir: string; isDependency: boolean; requiredBy: string[] }>
+      skipped: Array<{ jarPath: string; modId?: string; forkDir: string; reason: string }>
+      failed: Array<{ jarPath: string; error: string }>
     }>
     scan: (dir: string) => Promise<{
       ok: boolean

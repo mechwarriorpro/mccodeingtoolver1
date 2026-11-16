@@ -159,6 +159,7 @@ import {
   backUp,
   currentPackVersion,
   inspectLoaderJar,
+  planPackPortTargets,
   planPackUpdate,
   replaceJar,
   surveyPack,
@@ -2146,6 +2147,84 @@ export function registerIpc(): void {
    * and readable. The loader files go last so a pack that cannot fetch a mod
    * still points at the version it currently runs.
    */
+  ipcMain.handle(
+    'pack:portMissing',
+    async (
+      _e,
+      opts: {
+        dir: string
+        jarPaths: string[]
+        targetMc: string
+        targetLoader: Loader
+        includeDependencies?: boolean
+      }
+    ) => {
+      const modsDir = resolveModsDir(opts.dir) ?? path.join(opts.dir, 'mods')
+      const targets = planPackPortTargets({
+        modsDir,
+        selectedJarPaths: opts.jarPaths,
+        includeDependencies: opts.includeDependencies !== false
+      })
+      const cfg = loadConfig()
+      const existingForks = loadForks().forks
+      const ported: Array<{ jarPath: string; modId?: string; forkDir: string; isDependency: boolean; requiredBy: string[] }> = []
+      const skipped: Array<{ jarPath: string; modId?: string; forkDir: string; reason: string }> = []
+      const failed: Array<{ jarPath: string; error: string }> = []
+
+      for (const target of targets) {
+        if (target.isDependency) {
+          const depKey = (target.modId ?? path.basename(target.jarPath, '.jar')).toLowerCase()
+          const alreadyPorted = existingForks.find(
+            (f) =>
+              f.mcVersion === opts.targetMc &&
+              f.loader === opts.targetLoader &&
+              fs.existsSync(f.dir) &&
+              (f.slug.toLowerCase() === depKey || f.title.toLowerCase() === depKey)
+          )
+          if (alreadyPorted) {
+            skipped.push({
+              jarPath: target.jarPath,
+              modId: target.modId,
+              forkDir: alreadyPorted.dir,
+              reason: 'already decompiled and ported for a previous mod'
+            })
+            continue
+          }
+        }
+        try {
+          const refRes = await addFromFile({
+            jarPath: target.jarPath,
+            decompilerJar: cfg.decompilerJar || undefined
+          })
+          if (!refRes.ok || !refRes.mod?.decompiled) {
+            failed.push({ jarPath: target.jarPath, error: refRes.error ?? refRes.mod?.error ?? 'decompile failed' })
+            continue
+          }
+          const forkRes = createFork({
+            referenceId: refRes.mod.id,
+            mcVersion: opts.targetMc,
+            loader: opts.targetLoader
+          })
+          if (!forkRes.ok || !forkRes.fork) {
+            failed.push({ jarPath: target.jarPath, error: forkRes.error ?? 'failed to create port workspace' })
+            continue
+          }
+          ported.push({
+            jarPath: target.jarPath,
+            modId: target.modId,
+            forkDir: forkRes.fork.dir,
+            isDependency: target.isDependency,
+            requiredBy: target.requiredBy
+          })
+        } catch (err) {
+          failed.push({ jarPath: target.jarPath, error: err instanceof Error ? err.message : String(err) })
+        }
+      }
+
+      return { ok: true, ported, skipped, failed }
+    }
+  )
+
   ipcMain.handle(
     'pack:applyWhole',
     async (_e, opts: { plan: ReturnType<typeof planPackUpdate>; selected: string[]; alsoRemove?: string[] }) => {

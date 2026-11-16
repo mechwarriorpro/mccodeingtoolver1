@@ -203,6 +203,7 @@ const api = {
     version: (dir: string) => ipcRenderer.invoke('pack:version', dir),
     wholePlan: (opts: unknown) => ipcRenderer.invoke('pack:wholePlan', opts),
     applyWhole: (opts: unknown) => ipcRenderer.invoke('pack:applyWhole', opts),
+    portMissing: (opts: unknown) => ipcRenderer.invoke('pack:portMissing', opts),
     /** Compare two packs and plan bringing the source's mods into the target. */
     compare: (opts: { from: string; to: string }) => ipcRenderer.invoke('pack:compare', opts),
     /** Copy the chosen jars from the source pack into the target. */

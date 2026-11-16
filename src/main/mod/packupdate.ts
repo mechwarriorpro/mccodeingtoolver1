@@ -843,3 +843,160 @@ export function currentPackVersion(root: string): { mcVersion?: string; family: 
   const mc = minecraftVersionFromAssets(root)
   return mc ? { mcVersion: mc, family: 'unknown' } : { family: 'unknown' }
 }
+
+export interface PackPortTarget {
+  jarPath: string
+  modId?: string
+  isDependency: boolean
+  requiredBy: string[]
+}
+
+const BUILTIN_MOD_IDS = new Set([
+  'minecraft',
+  'forge',
+  'neoforge',
+  'fml',
+  'mcp',
+  'java',
+  'fabricloader',
+  'fabric',
+  'fabric-api',
+  'quilt_loader',
+  'quilted_fabric_api'
+])
+
+/**
+ * Read declared dependency modIds from a mod jar's metadata
+ * (`neoforge.mods.toml`, `mods.toml`, `mcmod.info`, or `fabric.mod.json`).
+ */
+export function extractJarDependencies(jarPath: string): { modId?: string; dependencies: string[] } {
+  const deps = new Set<string>()
+  let modId: string | undefined
+  let zip: AdmZip
+  try {
+    zip = new AdmZip(jarPath)
+  } catch {
+    return { dependencies: [] }
+  }
+
+  const tomlEntry = zip.getEntry('META-INF/neoforge.mods.toml') ?? zip.getEntry('META-INF/mods.toml')
+  if (tomlEntry) {
+    const text = tomlEntry.getData().toString('utf8')
+    const idMatch = text.match(/^\s*modId\s*=\s*"([^"]+)"/m)
+    if (idMatch) modId = idMatch[1]
+    const depBlocks = text.matchAll(/\[\[dependencies\.[^\]]+\]\]([\s\S]*?)(?=\[\[|$)/g)
+    for (const block of depBlocks) {
+      const depId = block[1].match(/^\s*modId\s*=\s*"([^"]+)"/m)?.[1]
+      if (depId && !BUILTIN_MOD_IDS.has(depId.toLowerCase())) {
+        deps.add(depId)
+      }
+    }
+    return { modId, dependencies: [...deps] }
+  }
+
+  const mcmodEntry = zip.getEntry('mcmod.info')
+  if (mcmodEntry) {
+    try {
+      const parsed = JSON.parse(mcmodEntry.getData().toString('utf8'))
+      const list = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.modList) ? parsed.modList : []
+      for (const entry of list) {
+        if (!modId && typeof entry?.modid === 'string') modId = entry.modid
+        for (const key of ['requiredMods', 'dependencies']) {
+          if (Array.isArray(entry?.[key])) {
+            for (const raw of entry[key]) {
+              if (typeof raw !== 'string') continue
+              const clean = raw.replace(/^(required-after|required-before|after|before):/i, '').split('@')[0].trim()
+              if (clean && !BUILTIN_MOD_IDS.has(clean.toLowerCase())) deps.add(clean)
+            }
+          }
+        }
+      }
+    } catch {
+      /* malformed mcmod.info */
+    }
+    return { modId, dependencies: [...deps] }
+  }
+
+  const fabricEntry = zip.getEntry('fabric.mod.json')
+  if (fabricEntry) {
+    try {
+      const parsed = JSON.parse(fabricEntry.getData().toString('utf8'))
+      if (typeof parsed?.id === 'string') modId = parsed.id
+      if (parsed?.depends && typeof parsed.depends === 'object') {
+        for (const depId of Object.keys(parsed.depends)) {
+          if (!BUILTIN_MOD_IDS.has(depId.toLowerCase())) deps.add(depId)
+        }
+      }
+    } catch {
+      /* malformed fabric.mod.json */
+    }
+  }
+
+  return { modId, dependencies: [...deps] }
+}
+
+/**
+ * Given a set of selected mod jars to port/decompile, also resolve any
+ * dependencies present in the pack's `mods/` folder so they can be
+ * decompiled and updated alongside the selected mods.
+ */
+export function planPackPortTargets(opts: {
+  modsDir: string
+  selectedJarPaths: string[]
+  includeDependencies?: boolean
+}): PackPortTarget[] {
+  const includeDeps = opts.includeDependencies !== false
+  const byModId = new Map<string, string>()
+  const metaByPath = new Map<string, { modId?: string; dependencies: string[] }>()
+
+  if (fs.existsSync(opts.modsDir)) {
+    for (const file of fs.readdirSync(opts.modsDir)) {
+      if (!file.endsWith('.jar')) continue
+      const full = path.join(opts.modsDir, file)
+      const meta = extractJarDependencies(full)
+      metaByPath.set(full, meta)
+      if (meta.modId) byModId.set(meta.modId.toLowerCase(), full)
+    }
+  }
+
+  const selectedSet = new Set(opts.selectedJarPaths)
+  const result = new Map<string, PackPortTarget>()
+  const queue: Array<{ jarPath: string; isDependency: boolean; requiredBy?: string }> = opts.selectedJarPaths.map((jarPath) => ({
+    jarPath,
+    isDependency: false
+  }))
+
+  while (queue.length > 0) {
+    const item = queue.shift()!
+    const existing = result.get(item.jarPath)
+    if (existing) {
+      if (item.requiredBy && !existing.requiredBy.includes(item.requiredBy)) {
+        existing.requiredBy.push(item.requiredBy)
+      }
+      continue
+    }
+
+    const meta = metaByPath.get(item.jarPath) ?? extractJarDependencies(item.jarPath)
+    result.set(item.jarPath, {
+      jarPath: item.jarPath,
+      modId: meta.modId,
+      isDependency: item.isDependency && !selectedSet.has(item.jarPath),
+      requiredBy: item.requiredBy ? [item.requiredBy] : []
+    })
+
+    if (includeDeps) {
+      for (const depId of meta.dependencies) {
+        const depJar = byModId.get(depId.toLowerCase())
+        if (depJar && !result.has(depJar)) {
+          queue.push({
+            jarPath: depJar,
+            isDependency: true,
+            requiredBy: meta.modId ?? path.basename(item.jarPath)
+          })
+        }
+      }
+    }
+  }
+
+  return [...result.values()]
+}

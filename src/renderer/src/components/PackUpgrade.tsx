@@ -60,6 +60,7 @@ export default function PackUpgrade({ dir, onToast }: Props): JSX.Element {
   const [removing, setRemoving] = useState<Set<string>>(new Set())
   const [busy, setBusy] = useState(false)
   const [applying, setApplying] = useState(false)
+  const [porting, setPorting] = useState(false)
   const [error, setError] = useState('')
   const [done, setDone] = useState<{ backup?: string; updated: number; removed: number; failed: { file: string; error?: string }[] } | null>(null)
 
@@ -252,6 +253,38 @@ export default function PackUpgrade({ dir, onToast }: Props): JSX.Element {
             <div className="upgrade-group warn">
               <div className="upgrade-group-head">
                 <strong>{missing.length} mod{missing.length === 1 ? '' : 's'} with no {plan.target.mcVersion} build</strong>
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  disabled={porting || !dir}
+                  onClick={async () => {
+                    if (!dir || !plan) return
+                    setPorting(true)
+                    try {
+                      const targetLoader = plan.target.family === 'fabric' ? 'fabric' : plan.target.family === 'forge' ? 'forge' : 'neoforge'
+                      const res = await window.api.pack.portMissing({
+                        dir,
+                        jarPaths: missing.map((m) => m.file),
+                        targetMc: plan.target.mcVersion,
+                        targetLoader,
+                        includeDependencies: true
+                      })
+                      const depCount = res.ported.filter((p) => p.isDependency).length
+                      onToast(
+                        `Decompiled & created ${res.ported.length} port workspace(s)` +
+                          (depCount ? ` (including ${depCount} pack dependency/ies)` : '') +
+                          (res.skipped?.length ? `; ${res.skipped.length} already-ported dependency/ies skipped` : '') +
+                          (res.failed.length ? `; ${res.failed.length} failed` : '')
+                      )
+                    } catch (err) {
+                      onToast(err instanceof Error ? err.message : String(err))
+                    } finally {
+                      setPorting(false)
+                    }
+                  }}
+                >
+                  {porting ? 'Decompiling…' : 'Decompile & Port (+ dependencies)'}
+                </button>
               </div>
               <div className="upgrade-note">
                 Leaving these on disk keeps your pack complete but they will not load on {plan.target.mcVersion}. Tick one to
